@@ -1,8 +1,10 @@
 package server
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProjectionFields(t *testing.T) {
@@ -15,6 +17,60 @@ func TestProjectionFields(t *testing.T) {
 	}
 	if _, err = projectionFields("id,password.hash"); err == nil {
 		t.Fatal("expected an invalid field error")
+	}
+}
+
+func TestConfigurationBundleRejectsSensitiveAndSystemSettings(t *testing.T) {
+	for _, setting := range []bundleSetting{
+		{Namespace: "oidc", Key: "client_secret", Value: "leak", ValueType: "string"},
+		{Namespace: "database", Key: "dsn", Value: "postgres://leak", ValueType: "string"},
+	} {
+		bundle := configurationBundle{Format: "relio-config/v1", Product: "Relio", Settings: []bundleSetting{setting}}
+		if err := validateConfigurationBundle(bundle); err == nil {
+			t.Fatalf("expected %s.%s to be rejected", setting.Namespace, setting.Key)
+		}
+	}
+	bundle := configurationBundle{Format: "relio-config/v1", Product: "Relio", Roles: []bundleRole{{Code: "SYSTEM_ADMIN", Name: "System", DataScope: "COMPANY"}}}
+	if err := validateConfigurationBundle(bundle); err == nil {
+		t.Fatal("expected SYSTEM_ADMIN import to be rejected")
+	}
+}
+
+func TestConfigurationBundleDiffIsNonDestructive(t *testing.T) {
+	current := configurationBundle{
+		Format: "relio-config/v1", Product: "Relio",
+		Settings: []bundleSetting{{Namespace: "system", Key: "locale", Value: "ko-KR", ValueType: "string"}, {Namespace: "system", Key: "timezone", Value: "Asia/Seoul", ValueType: "string"}},
+	}
+	incoming := configurationBundle{
+		Format: "relio-config/v1", Product: "Relio", SourceVersion: "1.4.0", GeneratedAt: time.Now(),
+		Settings: []bundleSetting{{Namespace: "system", Key: "locale", Value: "en-US", ValueType: "string"}, {Namespace: "api", Key: "enabled", Value: true, ValueType: "boolean"}},
+	}
+	preview, err := diffConfigurationBundles(current, incoming)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Summary["update"] != 1 || preview.Summary["create"] != 1 || preview.Summary["total"] != 2 {
+		t.Fatalf("unexpected summary: %#v", preview.Summary)
+	}
+	for _, change := range preview.Changes {
+		if change.Key == "system.timezone" {
+			t.Fatal("missing incoming values must not be interpreted as deletions")
+		}
+	}
+}
+
+func TestConfigurationBundleJSONRoundTrip(t *testing.T) {
+	original := configurationBundle{Format: "relio-config/v1", Product: "Relio", SourceVersion: "1.4.0", Settings: []bundleSetting{}, Roles: []bundleRole{}, Pipelines: []bundlePipeline{}}
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded configurationBundle
+	if err = json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateConfigurationBundle(decoded); err != nil {
+		t.Fatal(err)
 	}
 }
 

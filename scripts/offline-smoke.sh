@@ -11,7 +11,8 @@ relio_admin="$2"
 relio_initial_password="$3"
 relio_cookie_file="$(mktemp)"
 relio_support_file="$(mktemp)"
-trap 'rm -f "$relio_cookie_file" "$relio_support_file"' EXIT
+relio_config_file="$(mktemp)"
+trap 'rm -f "$relio_cookie_file" "$relio_support_file" "$relio_config_file"' EXIT
 
 for attempt in $(seq 1 60); do
   if curl --fail --silent "$relio_url/health/ready" >/dev/null; then break; fi
@@ -69,6 +70,32 @@ printf '%s' "$operations_body" | jq -e '
   (.features.api == true) and (.features.mcp == true) and
   (.counts.activeUsers >= 1)' >/dev/null
 
+quality_body="$(curl --fail --silent --show-error -b "$relio_cookie_file" "$relio_url/api/v1/admin/data-quality")"
+printf '%s' "$quality_body" | jq -e '
+  .score >= 0 and .score <= 100 and .totalIssues >= 3 and
+  (.categories | length) == 8 and
+  (.categories | map(.key) | index("customer-registration") != null) and
+  (.categories | map(.key) | index("opportunity-next-action") != null) and
+  (.categories | map(select(.count > 0)) | length) >= 3' >/dev/null
+
+curl --fail --silent --show-error -b "$relio_cookie_file" \
+  "$relio_url/api/v1/admin/configuration/export" > "$relio_config_file"
+jq -e '.format == "relio-config/v1" and .product == "Relio" and (.pipelines | length) >= 1 and (.settings | type) == "array"' "$relio_config_file" >/dev/null
+if grep -Fq "$relio_initial_password" "$relio_config_file" || grep -Fq "$personal_key" "$relio_config_file" || jq -e '.. | objects | select(has("clientSecret") or has("password") or has("dsn"))' "$relio_config_file" >/dev/null; then
+  echo "Secret leaked into configuration bundle" >&2
+  exit 1
+fi
+
+curl --fail --silent --show-error -b "$relio_cookie_file" -H "X-CSRF-Token: $csrf_token" \
+  -H 'Content-Type: application/json' --data-binary "@$relio_config_file" \
+  "$relio_url/api/v1/admin/configuration/preview" \
+  | jq -e '.safeToApply == true and .summary.total > 0 and .summary.create == 0 and .summary.update == 0' >/dev/null
+
+jq -n --slurpfile bundle "$relio_config_file" '{confirmation:"APPLY",bundle:$bundle[0]}' \
+  | curl --fail --silent --show-error -b "$relio_cookie_file" -H "X-CSRF-Token: $csrf_token" \
+      -H 'Content-Type: application/json' --data-binary @- "$relio_url/api/v1/admin/configuration/apply" \
+  | jq -e '.applied == true and .preview.safeToApply == true' >/dev/null
+
 curl --fail --silent --show-error -b "$relio_cookie_file" \
   "$relio_url/api/v1/admin/operations/support-bundle" > "$relio_support_file"
 jq -e '.product == "Relio" and .operations.application.version != null and (.operations.diagnostics | length) >= 10' "$relio_support_file" >/dev/null
@@ -80,9 +107,12 @@ fi
 curl --fail --silent --show-error -b "$relio_cookie_file" \
   "$relio_url/api/v1/admin/audit?channel=ADMIN&q=SUPPORT_BUNDLE&limit=10" \
   | jq -e '.items | map(.action) | index("SUPPORT_BUNDLE_EXPORT") != null' >/dev/null
+curl --fail --silent --show-error -b "$relio_cookie_file" \
+  "$relio_url/api/v1/admin/audit?channel=ADMIN&q=CONFIGURATION_BUNDLE&limit=10" \
+  | jq -e '(.items | map(.action) | index("CONFIGURATION_BUNDLE_EXPORT") != null) and (.items | map(.action) | index("CONFIGURATION_BUNDLE_APPLY") != null)' >/dev/null
 
 curl --fail --silent --show-error "$relio_url/api/openapi.json" \
-  | jq -e '.paths["/admin/operations/support-bundle"].get != null' >/dev/null
+  | jq -e '.paths["/admin/operations/support-bundle"].get != null and .paths["/admin/data-quality"].get != null and .paths["/admin/configuration/apply"].post != null' >/dev/null
 
 if curl --fail --silent "$relio_url/app/dashboard" | grep -Eiq "<(script|link|img)[^>]+(src|href)=['\"]https?://"; then
   echo "External static asset reference detected" >&2

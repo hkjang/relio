@@ -29,7 +29,7 @@ const adminNav: NavItem[] = [
   {to:'/admin/approval',key:'approvals',label:'승인 Workflow',group:'영업 정책',keywords:'review approve reject'},
   {to:'/admin/custom-fields',key:'opportunities',label:'Custom Field',group:'영업 정책',keywords:'metadata jsonb field'},
   {to:'/admin/keys',key:'api',label:'Personal Key · API · MCP',group:'개발자',keywords:'rotation scope origin tool'},
-  {to:'/admin/data',key:'data',label:'Import · Export',group:'데이터',keywords:'csv excel migration'},
+  {to:'/admin/data',key:'data',label:'Data Quality · Config',group:'데이터',keywords:'quality data configuration bundle export import diff'},
 ]
 
 export default function Layout({ area, path, user, version, approvalEnabled, onLogout, children, title, subtitle, actions }: LayoutProps) {

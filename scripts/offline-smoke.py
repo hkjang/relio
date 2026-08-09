@@ -475,6 +475,52 @@ html = request("/app/dashboard", expect_json=False)
 assert not re.search(r"<(script|link|img)[^>]+(src|href)=['\"]https?://", html, re.IGNORECASE)
 build = request("/api/v1/system/version")
 assert build["name"] == "Relio"
+operations = request("/api/v1/admin/operations")
+assert 0 <= operations["readinessScore"] <= 100
+diagnostic_keys = {item["key"] for item in operations["diagnostics"]}
+assert {"postgresql", "schema", "master-key", "storage"}.issubset(diagnostic_keys)
+assert operations["features"]["api"] is True and operations["features"]["mcp"] is True
+support_bundle = request("/api/v1/admin/operations/support-bundle")
+assert support_bundle["product"] == "Relio"
+assert len(support_bundle["operations"]["diagnostics"]) >= 10
+support_raw = json.dumps(support_bundle)
+assert initial_password not in support_raw and key["secret"] not in support_raw
+
+quality = request("/api/v1/admin/data-quality")
+assert 0 <= quality["score"] <= 100 and quality["totalIssues"] >= 3
+assert len(quality["categories"]) == 8
+quality_by_key = {item["key"]: item for item in quality["categories"]}
+assert quality_by_key["customer-registration"]["count"] >= 1
+assert quality_by_key["contact-channel"]["count"] >= 3
+assert quality_by_key["opportunity-next-action"]["count"] >= 1
+
+configuration = request("/api/v1/admin/configuration/export")
+assert configuration["format"] == "relio-config/v1" and configuration["product"] == "Relio"
+assert len(configuration["pipelines"]) >= 1 and isinstance(configuration["settings"], list)
+configuration_raw = json.dumps(configuration).lower()
+assert initial_password.lower() not in configuration_raw
+assert key["secret"].lower() not in configuration_raw
+for forbidden in ('"clientsecret"', '"password"', '"dsn"'):
+    assert forbidden not in configuration_raw
+preview = request("/api/v1/admin/configuration/preview", "POST", configuration, csrf_header)
+assert preview["safeToApply"] is True and preview["summary"]["total"] > 0
+assert preview["summary"]["create"] == 0 and preview["summary"]["update"] == 0
+applied = request(
+    "/api/v1/admin/configuration/apply",
+    "POST",
+    {"confirmation": "APPLY", "bundle": configuration},
+    csrf_header,
+)
+assert applied["applied"] is True and applied["preview"]["safeToApply"] is True
+
+support_audit = request("/api/v1/admin/audit?channel=ADMIN&q=SUPPORT_BUNDLE&limit=10")
+assert "SUPPORT_BUNDLE_EXPORT" in {item["action"] for item in support_audit["items"]}
+configuration_audit = request("/api/v1/admin/audit?channel=ADMIN&q=CONFIGURATION_BUNDLE&limit=10")
+configuration_actions = {item["action"] for item in configuration_audit["items"]}
+assert {"CONFIGURATION_BUNDLE_EXPORT", "CONFIGURATION_BUNDLE_APPLY"}.issubset(configuration_actions)
+openapi = request("/api/openapi.json")
+assert "get" in openapi["paths"]["/admin/data-quality"]
+assert "post" in openapi["paths"]["/admin/configuration/apply"]
 # Disabling ordinary local login must never lock out the Bootstrap break-glass administrator.
 request(
     "/api/v1/admin/settings/auth/local_login_enabled",

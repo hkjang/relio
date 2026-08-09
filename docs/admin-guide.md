@@ -32,6 +32,24 @@ Keycloak 장애는 `/health/ready`를 실패시키지 않습니다. Bootstrap Ad
 
 Actor, Action, Resource, Resource ID와 Request ID를 한 번에 검색하고 Channel로 필터링할 수 있습니다. 행의 `상세`를 열면 요청 Metadata와 변경 전·후 JSON을 비교할 수 있습니다. Support Bundle 다운로드는 `SUPPORT_BUNDLE_EXPORT` Action으로 남습니다.
 
+## Data Quality Center
+
+`관리자 → Data Quality · Config`에서 고객, 담당자, 진행 Opportunity를 8개 규칙으로 점검합니다. 사업자번호 누락, 담당자 없는 고객, 90일 이상 미접촉 고객, 중복 가능 고객, 연락수단 없는 담당자, Next Action 없는 Deal, Decision Maker 미확인, 30일 이상 정체 Deal을 전체 대상 대비 비율과 가중치로 계산해 0~100 Score로 표시합니다.
+
+각 Rule Card를 열면 최대 8개의 문제 표본과 권장 조치를 확인하고 해당 Customer 360, Opportunity 또는 Deal Intelligence로 이동할 수 있습니다. 데이터가 없는 영역은 감점하지 않습니다. Score만 목표로 삼기보다 영업 영향이 큰 `CRITICAL` 항목과 반복 추세를 먼저 관리합니다.
+
+## Configuration Bundle
+
+같은 화면의 `Configuration Bundle` 탭에서 개발·검증·운영 환경 사이에 관리자 정책을 이동할 수 있습니다.
+
+1. `현재 설정 JSON 저장`으로 Source 환경의 Bundle을 내려받습니다.
+2. Target 환경에서 JSON을 선택합니다.
+3. Format, 2MB 크기 제한, 중복 논리 Key, 금지된 Secret과 참조를 검증합니다.
+4. Section별 `CREATE`, `UPDATE`, `SAME` 수와 항목별 변경 전·후 JSON을 확인합니다.
+5. 확인 Checkbox를 선택한 뒤 트랜잭션으로 적용합니다.
+
+Bundle에는 비밀값이 아닌 System Setting, Custom Role/Permission, Pipeline/Stage, Custom Field, Deal Health Rule, 승인 정책, Sales Playbook과 Exit Criteria가 포함됩니다. OIDC Client Secret, Password, Token, PostgreSQL DSN, 사용자·조직 Identity, 고객과 영업 업무 데이터는 포함되지 않습니다. Import는 항목을 삭제하지 않으며 논리 Key 기준의 생성·갱신만 수행하고 시스템 관리자 Role을 변경할 수 없습니다. Export와 Apply는 각각 `CONFIGURATION_BUNDLE_EXPORT`, `CONFIGURATION_BUNDLE_APPLY` Audit으로 기록됩니다.
+
 ## Approval
 
 정책이 없을 때가 기본 상태입니다. 이때 사용자는 승인 관련 메뉴와 Status를 볼 수 없습니다. 정책을 추가할 때 Entity, 조건 Field/Operator/Value와 승인자를 지정합니다. 정책 조건은 요청 시점 Entity Snapshot에 평가됩니다.
