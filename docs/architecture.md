@@ -58,6 +58,12 @@ Web, REST와 MCP는 동일한 `internal/intelligence` Application Service를 사
 
 Scheduler는 PostgreSQL에 Owner별 일별 Forecast Snapshot과 Opportunity 항목을 저장합니다. Forecast Waterfall은 두 Snapshot을 비교해 New Pipeline, Won/Lost, Amount Change, Slippage를 설명합니다. Manager Override는 담당자 Forecast를 덮어쓰지 않고 별도 이력과 사유로 유지합니다.
 
+## Relationship Intelligence
+
+`internal/relationship` Application Service는 Web, REST, MCP가 공유하는 고객 관계·Account Plan·Opportunity Team 업무 규칙을 제공합니다. `contact_relationships`는 동일 고객의 Contact 사이 방향성 관계와 강도를 저장하고, Customer 360 Relationship Graph는 Contact의 Decision Maker/Champion/Influence/Sentiment 지표와 결합해 설명 가능한 Relationship Score를 계산합니다.
+
+`account_plans`는 고객·연도별 전략, 목표, 경쟁사, 위험, 목표/잠재 매출과 White Space를 보관합니다. `NOT_OFFERED` 또는 `DISCOVERY` White Space만 Cross-sell 후보로 제공하므로 Web과 AI Agent가 동일한 기준을 사용합니다. `opportunity_members`의 Presales/Consultant/Manager/Legal 역할은 협업 Metadata이며 Data Scope 판정에는 포함하지 않습니다. 모든 조회는 먼저 CRM Domain의 Customer/Opportunity 접근 검사를 통과합니다.
+
 ## PostgreSQL-only Operations
 
 - Job/Scheduler: `jobs`, `job_executions`

@@ -28,6 +28,7 @@ import (
 	"github.com/hkjang/relio/internal/oidc"
 	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/hkjang/relio/internal/platform/ids"
+	"github.com/hkjang/relio/internal/relationship"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -44,6 +45,7 @@ type Server struct {
 	OIDC      *oidc.Service
 	MCP       *mcp.Server
 	Intel     *intelligence.Service
+	Relations *relationship.Service
 	started   time.Time
 	limiter   *loginLimiter
 	requests  *requestLimiter
@@ -115,8 +117,8 @@ func (l *requestLimiter) allow(key string, limit int) bool {
 	return true
 }
 
-func New(db *pgxpool.Pool, log *slog.Logger, authService *auth.Service, auditService *audit.Service, crmService *crm.Service, settings *admin.SettingsService, keys *apikey.Service, approvals *approval.Service, oidcService *oidc.Service, mcpServer *mcp.Server, intel *intelligence.Service) *Server {
-	return &Server{DB: db, Log: log, Auth: authService, Audit: auditService, CRM: crmService, Settings: settings, Keys: keys, Approvals: approvals, OIDC: oidcService, MCP: mcpServer, Intel: intel, started: time.Now(), limiter: newLoginLimiter(), requests: newRequestLimiter()}
+func New(db *pgxpool.Pool, log *slog.Logger, authService *auth.Service, auditService *audit.Service, crmService *crm.Service, settings *admin.SettingsService, keys *apikey.Service, approvals *approval.Service, oidcService *oidc.Service, mcpServer *mcp.Server, intel *intelligence.Service, relations *relationship.Service) *Server {
+	return &Server{DB: db, Log: log, Auth: authService, Audit: auditService, CRM: crmService, Settings: settings, Keys: keys, Approvals: approvals, OIDC: oidcService, MCP: mcpServer, Intel: intel, Relations: relations, started: time.Now(), limiter: newLoginLimiter(), requests: newRequestLimiter()}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -143,6 +145,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/customers/{id}", s.requireAuth(http.HandlerFunc(s.getCustomer), false))
 	mux.Handle("PUT /api/v1/customers/{id}", s.requireAuth(http.HandlerFunc(s.updateCustomer), false))
 	mux.Handle("GET /api/v1/customers/{id}/360", s.requireAuth(http.HandlerFunc(s.customer360), false))
+	mux.Handle("GET /api/v1/customers/{id}/relationships", s.requireAuth(http.HandlerFunc(s.customerRelationships), false))
+	mux.Handle("POST /api/v1/customers/{id}/relationships", s.requireAuth(http.HandlerFunc(s.saveCustomerRelationship), false))
+	mux.Handle("PUT /api/v1/customers/{id}/relationships/{relationshipId}", s.requireAuth(http.HandlerFunc(s.saveCustomerRelationship), false))
+	mux.Handle("DELETE /api/v1/customers/{id}/relationships/{relationshipId}", s.requireAuth(http.HandlerFunc(s.deleteCustomerRelationship), false))
+	mux.Handle("GET /api/v1/customers/{id}/account-plan", s.requireAuth(http.HandlerFunc(s.accountPlan), false))
+	mux.Handle("PUT /api/v1/customers/{id}/account-plan", s.requireAuth(http.HandlerFunc(s.saveAccountPlan), false))
+	mux.Handle("GET /api/v1/customers/{id}/cross-sell", s.requireAuth(http.HandlerFunc(s.crossSell), false))
 	mux.Handle("GET /api/v1/customers/{id}/duplicates", s.requireAuth(http.HandlerFunc(s.customerDuplicates), false))
 	mux.Handle("POST /api/v1/customers/{id}/merge", s.requireAuth(http.HandlerFunc(s.mergeCustomers), false))
 	mux.Handle("GET /api/v1/contacts", s.requireAuth(http.HandlerFunc(s.listContacts), false))
@@ -159,6 +168,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/opportunities/{id}/playbook", s.requireAuth(http.HandlerFunc(s.opportunityPlaybook), false))
 	mux.Handle("PUT /api/v1/opportunities/{id}/playbook/{itemId}", s.requireAuth(http.HandlerFunc(s.updatePlaybookProgress), false))
 	mux.Handle("GET /api/v1/opportunities/{id}/stage-readiness", s.requireAuth(http.HandlerFunc(s.stageReadiness), false))
+	mux.Handle("GET /api/v1/opportunities/{id}/team", s.requireAuth(http.HandlerFunc(s.opportunityTeam), false))
+	mux.Handle("PUT /api/v1/opportunities/{id}/team/{userId}", s.requireAuth(http.HandlerFunc(s.saveOpportunityMember), false))
+	mux.Handle("DELETE /api/v1/opportunities/{id}/team/{userId}", s.requireAuth(http.HandlerFunc(s.deleteOpportunityMember), false))
+	mux.Handle("GET /api/v1/collaborators", s.requireAuth(http.HandlerFunc(s.collaborators), false))
 	mux.Handle("GET /api/v1/deal-intelligence/at-risk", s.requireAuth(http.HandlerFunc(s.dealsAtRisk), false))
 	mux.Handle("GET /api/v1/deal-intelligence/coaching", s.requireAuth(http.HandlerFunc(s.coachingDashboard), false))
 	mux.Handle("GET /api/v1/pipeline", s.requireAuth(http.HandlerFunc(s.pipelines), false))

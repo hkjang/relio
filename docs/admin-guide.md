@@ -40,6 +40,12 @@ Forecast Override는 담당자의 Forecast와 팀장의 판단을 분리합니�
 
 일반 Local Login을 비활성화해도 Bootstrap Admin 로그인은 차단되지 않습니다. 이는 SSO 장애 시 복구 경로를 보장하기 위한 의도된 Break Glass 예외입니다.
 
+## Relationship Intelligence
+
+`관리자 → Relationship Intelligence`에서 Customer 360 Graph 최대 Node 수(10~200), 기본 Account Plan 연도와 Opportunity Team 허용 Role을 설정합니다. 기본 연도를 `0`으로 두면 서버의 현재 연도를 자동 사용합니다. Role 정책과 Graph 제한은 저장 즉시 적용됩니다.
+
+Opportunity Team 구성은 협업 역할만 추가합니다. 구성원이라는 이유로 해당 Opportunity 또는 고객에 대한 USER/TEAM/DEPARTMENT/DIVISION/COMPANY Data Scope가 확대되지 않습니다.
+
 ## Backup and Upgrade
 
 - PostgreSQL과 `relio-data` Volume을 함께 Backup합니다.

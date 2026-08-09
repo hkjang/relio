@@ -11,6 +11,9 @@ relio_upgrade_old="relio-upgrade-old-$relio_upgrade_suffix"
 relio_upgrade_new="relio-upgrade-new-$relio_upgrade_suffix"
 relio_upgrade_volume="relio-upgrade-data-$relio_upgrade_suffix"
 
+relio_expected_new_schema="$(find migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -n 1)"
+if [ -z "$relio_expected_new_schema" ]; then echo "no migration found" >&2; exit 2; fi
+
 cleanup() {
   docker rm -f "$relio_upgrade_old" "$relio_upgrade_new" "$relio_upgrade_postgres" >/dev/null 2>&1 || true
   docker network rm "$relio_upgrade_network" >/dev/null 2>&1 || true
@@ -50,15 +53,22 @@ common_args=(
 
 docker run -d --name "$relio_upgrade_old" "${common_args[@]}" "$relio_old_image" >/dev/null
 wait_for_app "$relio_upgrade_old"
-test "$(docker exec "$relio_upgrade_postgres" psql -U relio -d relio -Atc "SELECT max(version) FROM schema_migrations")" = "001_initial.sql"
+relio_old_schema="$(docker exec "$relio_upgrade_postgres" psql -U relio -d relio -Atc "SELECT max(version) FROM schema_migrations")"
+test -n "$relio_old_schema"
 test "$(docker exec "$relio_upgrade_postgres" psql -U relio -d relio -Atc "SELECT count(*) FROM users WHERE is_bootstrap=true")" = "1"
 docker rm -f "$relio_upgrade_old" >/dev/null
 
 docker run -d --name "$relio_upgrade_new" "${common_args[@]}" "$relio_new_image" >/dev/null
 wait_for_app "$relio_upgrade_new"
-test "$(docker exec "$relio_upgrade_postgres" psql -U relio -d relio -Atc "SELECT max(version) FROM schema_migrations")" = "002_sales_intelligence.sql"
+relio_new_schema="$(docker exec "$relio_upgrade_postgres" psql -U relio -d relio -Atc "SELECT max(version) FROM schema_migrations")"
+test "$relio_new_schema" = "$relio_expected_new_schema"
 test "$(docker exec "$relio_upgrade_postgres" psql -U relio -d relio -Atc "SELECT count(*) FROM users WHERE is_bootstrap=true")" = "1"
 test "$(docker exec "$relio_upgrade_postgres" psql -U relio -d relio -Atc "SELECT count(*) FROM deal_health_rules WHERE active=true")" -ge 9
 test "$(docker exec "$relio_upgrade_postgres" psql -U relio -d relio -Atc "SELECT count(*) FROM information_schema.columns WHERE table_name='contacts' AND column_name='relationship_role'")" = "1"
 
-echo "Relio v1.0 to v1.1 upgrade test passed"
+if [ "$relio_expected_new_schema" = "003_relationship_intelligence.sql" ]; then
+  test "$(docker exec "$relio_upgrade_postgres" psql -U relio -d relio -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('contact_relationships','account_plans','opportunity_members')")" = "3"
+  test "$(docker exec "$relio_upgrade_postgres" psql -U relio -d relio -Atc "SELECT count(*) FROM system_settings WHERE namespace='relationship_intelligence'")" = "3"
+fi
+
+echo "Relio upgrade test passed: $relio_old_schema -> $relio_new_schema"

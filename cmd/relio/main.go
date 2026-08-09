@@ -25,6 +25,7 @@ import (
 	"github.com/hkjang/relio/internal/platform/database"
 	"github.com/hkjang/relio/internal/platform/secrets"
 	"github.com/hkjang/relio/internal/platform/version"
+	"github.com/hkjang/relio/internal/relationship"
 	"github.com/hkjang/relio/internal/server"
 )
 
@@ -64,14 +65,15 @@ func main() {
 	}
 	crmService := &crm.Service{DB: db, Audit: auditService}
 	intelligenceService := &intelligence.Service{DB: db, CRM: crmService, Audit: auditService}
+	relationshipService := &relationship.Service{DB: db, CRM: crmService, Audit: auditService}
 	crmService.StageGuard = intelligenceService
 	settingsService := &admin.SettingsService{DB: db, Secrets: secretManager, Audit: auditService}
 	keyService := &apikey.Service{DB: db, Secrets: secretManager, Audit: auditService}
 	approvalService := &approval.Service{DB: db, Audit: auditService}
 	oidcService := &oidc.Service{DB: db, Secrets: secretManager, Auth: authService, Audit: auditService}
 	authService.OIDCValidator = oidcService.ValidateAccessToken
-	mcpServer := &mcp.Server{DB: db, CRM: crmService, Approvals: approvalService, Intelligence: intelligenceService}
-	app := server.New(db, logger, authService, auditService, crmService, settingsService, keyService, approvalService, oidcService, mcpServer, intelligenceService)
+	mcpServer := &mcp.Server{DB: db, CRM: crmService, Approvals: approvalService, Intelligence: intelligenceService, Relationships: relationshipService}
+	app := server.New(db, logger, authService, auditService, crmService, settingsService, keyService, approvalService, oidcService, mcpServer, intelligenceService, relationshipService)
 	runner := job.New(db, logger)
 	runner.Snapshot = intelligenceService.CaptureForecastSnapshots
 	go runner.Run(ctx)

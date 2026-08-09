@@ -17,6 +17,7 @@ import (
 	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/hkjang/relio/internal/platform/ids"
 	"github.com/hkjang/relio/internal/platform/version"
+	"github.com/hkjang/relio/internal/relationship"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,10 +26,11 @@ const ProtocolVersion = "2025-11-25"
 var supportedVersions = map[string]bool{"2025-11-25": true, "2025-06-18": true, "2025-03-26": true}
 
 type Server struct {
-	DB           *pgxpool.Pool
-	CRM          *crm.Service
-	Approvals    *approval.Service
-	Intelligence *intelligence.Service
+	DB            *pgxpool.Pool
+	CRM           *crm.Service
+	Approvals     *approval.Service
+	Intelligence  *intelligence.Service
+	Relationships *relationship.Service
 }
 type request struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -248,7 +250,14 @@ func (s *Server) toolAllowed(ctx context.Context, name string) bool {
 func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	out := []tool{}
 	add := func(permission, name, title, description string, input map[string]any, readOnly, dangerous bool) {
-		if p.Has(permission) && s.toolAllowed(ctx, name) {
+		permitted := true
+		for _, required := range strings.Fields(permission) {
+			if !p.Has(required) {
+				permitted = false
+				break
+			}
+		}
+		if permitted && s.toolAllowed(ctx, name) {
 			riskLevel := "READ"
 			if !readOnly {
 				riskLevel = "WRITE"
@@ -288,7 +297,13 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	add("contract:read", "get_expiring_contracts", "만료 계약 조회", "지정 기간 안에 만료되는 계약을 조회합니다.", schema(nil, map[string]any{"days": integer("만료까지의 일수"), "limit": integer("최대 결과 수")}), true, false)
 	add("contract:read", "get_renewal_pipeline", "갱신 영업 조회", "자동 갱신 또는 갱신 대상 계약을 조회합니다.", schema(nil, map[string]any{"days": integer("만료까지의 일수"), "limit": integer("최대 결과 수")}), true, false)
 	add("forecast:read", "get_win_loss_analysis", "성공·실패 분석", "기간별 Win/Loss 건수, 금액, 승률을 조회합니다.", schema(nil, map[string]any{"months": integer("분석 개월 수")}), true, false)
-	add("customer:read", "get_account_brief", "고객 종합 브리핑", "Customer 360 정보를 미팅 준비용 Account Brief로 제공합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
+	add("customer:read contact:read opportunity:read activity:read", "get_account_brief", "고객 종합 브리핑", "Customer 360, 관계망, 전략 Account Plan을 미팅 준비용 브리핑으로 제공합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID"), "year": integer("Account Plan 연도")}), true, false)
+	add("customer:read contact:read", "get_account_relationships", "고객 관계망", "고객 담당자의 의사결정 역할, 영향력과 연결 관계를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
+	add("customer:read", "get_account_plan", "Account Plan", "전략 고객의 목표, 전략, 경쟁사, 위험과 White Space를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID"), "year": integer("계획 연도")}), true, false)
+	add("customer:read", "find_cross_sell_opportunities", "Cross-sell 기회", "Account Plan의 미제안 또는 탐색 중 White Space를 찾습니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID"), "year": integer("계획 연도")}), true, false)
+	add("customer:write", "build_account_plan", "Account Plan 저장", "전략 고객 목표, 영업 전략과 White Space 계획을 생성하거나 갱신합니다.", schema([]string{"id", "planYear", "status", "version"}, map[string]any{"id": str("고객 ID"), "planYear": integer("계획 연도"), "status": str("DRAFT, ACTIVE, ARCHIVED"), "strategy": str("영업 전략"), "customerGoals": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "strategicInitiatives": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "ourObjectives": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "whiteSpaces": map[string]any{"type": "array", "items": map[string]any{"type": "object"}}, "competitors": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "risks": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "targetRevenue": number("목표 매출"), "potentialRevenue": number("잠재 매출"), "version": integer("낙관적 잠금 버전")}), false, false)
+	add("opportunity:read", "get_opportunity_team", "Opportunity Team", "Owner 이외의 Presales, Manager, Legal 등 협업 구성원을 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("Opportunity ID")}), true, false)
+	add("opportunity:write", "add_opportunity_member", "Opportunity Team 구성", "관리자 정책에 허용된 역할로 협업 구성원을 추가하거나 갱신합니다.", schema([]string{"id", "userId", "role", "version"}, map[string]any{"id": str("Opportunity ID"), "userId": str("사용자 ID"), "role": str("협업 역할"), "responsibility": str("담당 책임"), "version": integer("낙관적 잠금 버전")}), false, false)
 	add("opportunity:read", "find_deals_at_risk", "위험 Deal 탐지", "설명 가능한 규칙으로 위험 점수 이상의 영업건을 찾습니다.", schema(nil, map[string]any{"minimum": integer("최소 위험 점수"), "limit": integer("최대 결과 수")}), true, false)
 	add("opportunity:read", "explain_deal_risk", "Deal 위험 설명", "위험 점수, 근거, 권장 행동과 최근 변화를 설명합니다.", schema([]string{"id"}, map[string]any{"id": str("Opportunity ID"), "days": integer("변화 분석 기간")}), true, false)
 	add("opportunity:read", "recommend_next_actions", "다음 행동 추천", "Deal Health와 Stage Playbook을 결합해 다음 행동을 추천합니다.", schema([]string{"id"}, map[string]any{"id": str("Opportunity ID")}), true, false)
@@ -386,7 +401,27 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 	case "get_win_loss_analysis":
 		v, err = s.CRM.WinLossAnalysis(ctx, p, intArg(a, "months", 12))
 	case "get_account_brief":
-		v, err = s.CRM.Customer360(ctx, p, strArg(a, "id"))
+		v, err = s.Relationships.AccountBrief(ctx, p, strArg(a, "id"), intArg(a, "year", 0))
+	case "get_account_relationships":
+		v, err = s.Relationships.Graph(ctx, p, strArg(a, "id"))
+	case "get_account_plan":
+		v, err = s.Relationships.GetAccountPlan(ctx, p, strArg(a, "id"), intArg(a, "year", 0))
+	case "find_cross_sell_opportunities":
+		v, err = s.Relationships.CrossSellOpportunities(ctx, p, strArg(a, "id"), intArg(a, "year", 0))
+	case "build_account_plan":
+		var in relationship.AccountPlanInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.Relationships.SaveAccountPlan(ctx, p, strArg(a, "id"), in, meta)
+		}
+	case "get_opportunity_team":
+		v, err = s.Relationships.OpportunityTeam(ctx, p, strArg(a, "id"))
+	case "add_opportunity_member":
+		var in relationship.OpportunityMemberInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.Relationships.SaveOpportunityMember(ctx, p, strArg(a, "id"), strArg(a, "userId"), in, meta)
+		}
 	case "find_deals_at_risk", "get_manager_review_queue":
 		v, err = s.Intelligence.DealsAtRisk(ctx, p, intArg(a, "minimum", 40), intArg(a, "limit", 25))
 	case "explain_deal_risk":
@@ -455,6 +490,8 @@ func (s *Server) templates(p *auth.Principal) []map[string]any {
 	}
 	add("customer:read", "relio://customers/{id}", "고객", "고객 상세")
 	add("customer:read", "relio://customers/{id}/360", "Customer 360", "고객 통합 정보")
+	add("customer:read", "relio://customers/{id}/relationships", "고객 관계망", "고객 의사결정 관계와 영향력")
+	add("customer:read", "relio://customers/{id}/account-plan", "Account Plan", "전략 고객 계획과 White Space")
 	add("contact:read", "relio://contacts/{id}", "담당자", "고객 담당자")
 	add("opportunity:read", "relio://opportunities/{id}", "영업기회", "영업기회 상세")
 	add("contract:read", "relio://contracts/{id}", "계약", "계약 상세")
@@ -488,6 +525,14 @@ func (s *Server) readResource(ctx context.Context, p *auth.Principal, uri string
 		case "customers":
 			if len(parts) == 3 && parts[2] == "360" {
 				v, e := s.CRM.Customer360(ctx, p, parts[1])
+				return resourceResult(uri, v), e
+			}
+			if len(parts) == 3 && parts[2] == "relationships" {
+				v, e := s.Relationships.Graph(ctx, p, parts[1])
+				return resourceResult(uri, v), e
+			}
+			if len(parts) == 3 && parts[2] == "account-plan" {
+				v, e := s.Relationships.GetAccountPlan(ctx, p, parts[1], 0)
 				return resourceResult(uri, v), e
 			}
 			v, e := s.CRM.GetCustomer(ctx, p, parts[1])

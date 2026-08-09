@@ -18,6 +18,16 @@ Sales Intelligence API:
 - `GET /forecasts/intelligence`: Snapshot 기반 Forecast Waterfall
 - `PUT /forecasts/overrides/{id}`: Manager Forecast 판단과 사유 저장
 
+Relationship Intelligence API:
+
+- `GET|POST /customers/{id}/relationships`: 고객 담당자 Relationship Graph 조회·연결
+- `PUT|DELETE /customers/{id}/relationships/{relationshipId}`: 관계 수정·삭제와 Optimistic Version 검사
+- `GET|PUT /customers/{id}/account-plan`: 고객·연도별 Strategic Account Plan
+- `GET /customers/{id}/cross-sell`: 미제안·탐색 중 White Space 후보
+- `GET /opportunities/{id}/team`: Opportunity Team 조회
+- `PUT|DELETE /opportunities/{id}/team/{userId}`: 관리자 허용 Role로 구성원 저장·제외
+- `GET /collaborators`: 현재 Data Scope에서 선택할 수 있는 활성 사용자
+
 오류 형식:
 
 ```json
@@ -57,4 +67,4 @@ curl -X POST http://relio.example/mcp \
 
 승인 Tool은 활성 승인 정책이 하나 이상 있을 때만 `tools/list`에 나타납니다. 모든 Tool Result는 사용자 Permission과 Data Scope로 제한됩니다.
 
-Sales Intelligence Tool은 `get_account_brief`, `find_deals_at_risk`, `explain_deal_risk`, `recommend_next_actions`, `get_stage_readiness`, `explain_forecast_change`, `get_sales_coaching_insights`, `get_manager_review_queue`입니다. Tool Annotation의 `relio/riskLevel`은 조회·분석·수정·승인 작업을 구분하며 관리자 Allowlist와 Personal Key Scope 검사를 대체하지 않고 함께 적용됩니다.
+Sales Intelligence Tool은 `find_deals_at_risk`, `explain_deal_risk`, `recommend_next_actions`, `get_stage_readiness`, `explain_forecast_change`, `get_sales_coaching_insights`, `get_manager_review_queue`입니다. Relationship Intelligence Tool은 `get_account_brief`, `get_account_relationships`, `get_account_plan`, `find_cross_sell_opportunities`, `build_account_plan`, `get_opportunity_team`, `add_opportunity_member`입니다. `get_account_brief`는 Customer 360, 관계망과 Account Plan을 하나의 구조화된 결과로 제공합니다. Tool Annotation의 `relio/riskLevel`은 조회·분석·수정·승인 작업을 구분하며 관리자 Allowlist와 Personal Key Scope 검사를 대체하지 않고 함께 적용됩니다.

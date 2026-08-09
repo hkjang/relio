@@ -5,6 +5,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from datetime import date
 
 
 if len(sys.argv) != 4:
@@ -80,6 +81,66 @@ request(
     {"sourceIds": [duplicate_customer["id"]]},
     csrf_header,
 )
+decision_maker = request(
+    "/api/v1/contacts",
+    "POST",
+    {"customerId": customer["id"], "name": "Park Executive", "title": "CIO", "decisionMaker": True, "relationshipRole": "DECISION_MAKER", "influence": "HIGH", "sentiment": "NEUTRAL", "relationshipStrength": 55, "decisionPower": 95},
+    csrf_header,
+)
+champion = request(
+    "/api/v1/contacts",
+    "POST",
+    {"customerId": customer["id"], "name": "Kim Champion", "title": "Director", "primaryContact": True, "relationshipRole": "CHAMPION", "influence": "HIGH", "sentiment": "SUPPORT", "relationshipStrength": 85, "decisionPower": 70},
+    csrf_header,
+)
+influencer = request(
+    "/api/v1/contacts",
+    "POST",
+    {"customerId": customer["id"], "name": "Lee Architect", "title": "Team Lead", "relationshipRole": "INFLUENCER", "influence": "MEDIUM", "sentiment": "SUPPORT", "relationshipStrength": 70, "decisionPower": 55},
+    csrf_header,
+)
+relationship = request(
+    f"/api/v1/customers/{customer['id']}/relationships",
+    "POST",
+    {"sourceContactId": champion["id"], "targetContactId": decision_maker["id"], "relationshipType": "INFLUENCES", "strength": 90, "description": "Internal champion influences the economic buyer", "active": True, "version": 0},
+    csrf_header,
+)
+assert relationship["version"] == 1 and relationship["sourceName"] == champion["name"]
+relationship = request(
+    f"/api/v1/customers/{customer['id']}/relationships/{relationship['id']}",
+    "PUT",
+    {"sourceContactId": champion["id"], "targetContactId": decision_maker["id"], "relationshipType": "INFLUENCES", "strength": 92, "description": "Verified influence path", "active": True, "version": relationship["version"]},
+    csrf_header,
+)
+assert relationship["version"] == 2 and relationship["strength"] == 92
+expect_http_error(
+    f"/api/v1/customers/{customer['id']}/relationships/{relationship['id']}",
+    "PUT",
+    {"sourceContactId": champion["id"], "targetContactId": decision_maker["id"], "relationshipType": "INFLUENCES", "strength": 40, "description": "stale", "active": True, "version": 1},
+    csrf_header,
+    "changed by another user",
+)
+request(
+    f"/api/v1/customers/{customer['id']}/relationships",
+    "POST",
+    {"sourceContactId": influencer["id"], "targetContactId": champion["id"], "relationshipType": "TRUSTS", "strength": 75, "description": "Technical trust", "active": True, "version": 0},
+    csrf_header,
+)
+graph = request(f"/api/v1/customers/{customer['id']}/relationships")
+assert graph["metrics"]["decisionMakers"] == 1 and graph["metrics"]["champions"] == 1
+assert graph["metrics"]["relationshipScore"] >= 80 and len(graph["edges"]) == 2
+plan_year = date.today().year
+account_plan = request(
+    f"/api/v1/customers/{customer['id']}/account-plan",
+    "PUT",
+    {"planYear": plan_year, "status": "ACTIVE", "strategy": "Expand from CRM into revenue intelligence", "customerGoals": ["Improve forecast accuracy"], "strategicInitiatives": ["Enterprise CRM modernization"], "ourObjectives": ["Establish Relio as system of action"], "whiteSpaces": [{"productName": "Revenue Intelligence", "status": "NOT_OFFERED", "potentialAmount": 250000000, "notes": "Validate in Q4"}, {"productName": "CRM Core", "status": "CUSTOMER", "potentialAmount": 0}], "competitors": ["Legacy CRM"], "risks": ["Budget timing"], "targetRevenue": 500000000, "potentialRevenue": 750000000, "version": 0},
+    csrf_header,
+)
+assert account_plan["version"] == 1 and account_plan["status"] == "ACTIVE"
+cross_sell = request(f"/api/v1/customers/{customer['id']}/cross-sell?year={plan_year}")
+assert cross_sell["count"] == 1 and cross_sell["items"][0]["productName"] == "Revenue Intelligence"
+relationship_settings = request("/api/v1/admin/settings?namespace=relationship_intelligence")["items"]
+assert {item["key"] for item in relationship_settings} == {"graph_max_nodes", "default_plan_year", "allowed_opportunity_roles"}
 pipeline = request("/api/v1/pipeline")
 stages = pipeline["items"][0]["stages"]
 assert len(stages) >= 2
@@ -91,9 +152,42 @@ opportunity = request(
     {"name": "Offline Verification Deal", "customerId": customer["id"], "stageId": stage_id, "expectedAmount": 100000000, "customFields": {}},
     csrf_header,
 )
+collaborator = request(
+    "/api/v1/admin/users",
+    "POST",
+    {"username": "offline-presales", "displayName": "Offline Presales", "email": "presales@offline.example", "password": "Offline-Presales-2026", "title": "Presales Architect", "roleIds": []},
+    csrf_header,
+)
+collaborators = request("/api/v1/collaborators?limit=200")["items"]
+assert collaborator["id"] in {item["id"] for item in collaborators}
+team_member = request(
+    f"/api/v1/opportunities/{opportunity['id']}/team/{collaborator['id']}",
+    "PUT",
+    {"role": "PRESALES", "responsibility": "Own technical validation", "version": 0},
+    csrf_header,
+)
+assert team_member["version"] == 1 and team_member["role"] == "PRESALES"
+team_member = request(
+    f"/api/v1/opportunities/{opportunity['id']}/team/{collaborator['id']}",
+    "PUT",
+    {"role": "CONSULTANT", "responsibility": "Lead discovery workshop", "version": team_member["version"]},
+    csrf_header,
+)
+assert team_member["version"] == 2 and team_member["role"] == "CONSULTANT"
+expect_http_error(
+    f"/api/v1/opportunities/{opportunity['id']}/team/{collaborator['id']}",
+    "PUT",
+    {"role": "LEGAL", "responsibility": "stale", "version": 1},
+    csrf_header,
+    "changed by another user",
+)
+team = request(f"/api/v1/opportunities/{opportunity['id']}/team")
+assert len(team["items"]) == 1 and team["items"][0]["userId"] == collaborator["id"]
 health = request(f"/api/v1/opportunities/{opportunity['id']}/health")
 assert health["riskScore"] >= 40
-assert {factor["code"] for factor in health["factors"]}.issuperset({"NO_NEXT_ACTION", "NO_DECISION_MAKER", "NO_CHAMPION"})
+health_codes = {factor["code"] for factor in health["factors"]}
+assert "NO_NEXT_ACTION" in health_codes
+assert "NO_DECISION_MAKER" not in health_codes and "NO_CHAMPION" not in health_codes
 health_rules = request("/api/v1/admin/deal-health-rules")["items"]
 next_action_rule = next(rule for rule in health_rules if rule["code"] == "NO_NEXT_ACTION")
 updated_rule = request(
@@ -241,7 +335,7 @@ key = request(
     "POST",
     {
         "name": "Offline MCP Verification",
-        "scopes": ["mcp:use", "customer:read", "opportunity:read", "forecast:read", "approval:request", "approval:approve"],
+        "scopes": ["mcp:use", "customer:read", "contact:read", "opportunity:read", "activity:read", "forecast:read", "approval:request", "approval:approve"],
         "channels": ["REST", "MCP"],
     },
     csrf_header,
@@ -275,6 +369,7 @@ tool_list = request(
 tool_names = {tool["name"] for tool in tool_list["result"]["tools"]}
 assert "submit_approval" not in tool_names
 assert {"find_deals_at_risk", "explain_deal_risk", "explain_forecast_change", "get_sales_coaching_insights"}.issubset(tool_names)
+assert {"get_account_brief", "get_account_relationships", "get_account_plan", "find_cross_sell_opportunities", "get_opportunity_team"}.issubset(tool_names)
 tool_result = request(
     "/mcp",
     "POST",
@@ -289,6 +384,23 @@ deal_risk_result = request(
     {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
 )
 assert deal_risk_result["result"]["isError"] is False
+account_brief_result = request(
+    "/mcp",
+    "POST",
+    {"jsonrpc": "2.0", "id": 32, "method": "tools/call", "params": {"name": "get_account_brief", "arguments": {"id": customer["id"], "year": plan_year}}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert "result" in account_brief_result, account_brief_result
+assert account_brief_result["result"]["structuredContent"]["accountPlan"]["status"] == "ACTIVE"
+assert account_brief_result["result"]["structuredContent"]["relationships"]["metrics"]["champions"] == 1
+opportunity_team_result = request(
+    "/mcp",
+    "POST",
+    {"jsonrpc": "2.0", "id": 33, "method": "tools/call", "params": {"name": "get_opportunity_team", "arguments": {"id": opportunity["id"]}}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert "result" in opportunity_team_result, opportunity_team_result
+assert opportunity_team_result["result"]["structuredContent"][0]["role"] == "CONSULTANT"
 request(
     "/api/v1/admin/approval-policies",
     "POST",
