@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="relio-edge-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="50%" stop-color="#8b5cf6" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+    <filter id="edge-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3.5" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Transparent Background, Sharp Edge Monogram R + CRM Pipeline Wave -->
+  <g filter="url(#edge-glow)">
+    <!-- Main Neon R Path -->
+    <path d="M 24 96 L 24 24 L 64 24 C 84 24, 84 56, 64 56 L 24 56 M 52 56 L 96 96" 
+          fill="none" 
+          stroke="url(#relio-edge-grad)" 
+          stroke-width="11" 
+          stroke-linecap="round" 
+          stroke-linejoin="round" />
+    
+    <!-- Accent CRM Pipeline Node Dots -->
+    <circle cx="96" cy="96" r="7" fill="#06b6d4" />
+    <circle cx="64" cy="24" r="5" fill="#3b82f6" />
+    <circle cx="64" cy="56" r="5" fill="#8b5cf6" />
+  </g>
+</svg>

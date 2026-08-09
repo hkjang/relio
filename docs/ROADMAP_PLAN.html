@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Relio 엔터프라이즈 중장기 로드맵 (Roadmap Plan)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #3b82f6;
+            --primary-dark: #1d4ed8;
+            --text-dark: #0f172a;
+            --text-muted: #475569;
+            --bg-light: #f8fafc;
+            --border-color: #e2e8f0;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Inter', -apple-system, sans-serif; color: var(--text-dark); background: var(--bg-light); line-height: 1.65; padding: 48px 24px; }
+        .doc-card { max-width: 1040px; margin: 0 auto; background: #ffffff; border: 1px solid var(--border-color); border-radius: 20px; padding: 56px; box-shadow: 0 12px 30px rgba(0,0,0,0.06); }
+        .header-meta { border-bottom: 3px solid var(--primary); padding-bottom: 28px; margin-bottom: 36px; }
+        .header-meta h1 { font-family: 'Plus Jakarta Sans', sans-serif; font-size: 2.2rem; color: #0f172a; margin-bottom: 16px; letter-spacing: -0.02em; }
+        .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; font-size: 0.9rem; color: var(--text-muted); }
+        .meta-item { background: #f1f5f9; padding: 8px 14px; border-radius: 8px; border: 1px solid #e2e8f0; }
+        h2 { font-family: 'Plus Jakarta Sans', sans-serif; font-size: 1.45rem; color: var(--primary-dark); margin: 40px 0 20px; border-bottom: 2px solid #f1f5f9; padding-bottom: 10px; }
+        p { margin-bottom: 18px; font-size: 1rem; color: #334155; }
+        ul { margin-bottom: 20px; padding-left: 24px; }
+        li { margin-bottom: 8px; }
+        .phase-box { background: rgba(59, 130, 246, 0.04); border: 1px solid rgba(59, 130, 246, 0.2); padding: 24px; border-radius: 14px; margin-bottom: 24px; }
+        .phase-title { font-weight: 700; font-size: 1.15rem; color: var(--primary-dark); margin-bottom: 12px; }
+        .print-btn { display: inline-block; background: var(--primary); color: #ffffff; padding: 12px 24px; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 0.92rem; float: right; }
+        .print-btn:hover { background: var(--primary-dark); }
+        @media print { .print-btn { display: none; } body { background: #ffffff; padding: 0; } .doc-card { border: none; box-shadow: none; padding: 0; } }
+    </style>
+</head>
+<body>
+    <div class="doc-card">
+        <a href="javascript:window.print()" class="print-btn">🖨️ PDF / 인쇄하기</a>
+        <div class="header-meta">
+            <h1>Relio 엔터프라이즈 중장기 로드맵 (Roadmap Plan)</h1>
+            <div class="meta-grid">
+                <div class="meta-item"><strong>문서 버전:</strong> v1.0.0 ~ v2.0-VISION</div>
+                <div class="meta-item"><strong>작성일자:</strong> 2026년 8월 9일</div>
+                <div class="meta-item"><strong>대상:</strong> 경영진, CTO, 시스템 관리자</div>
+                <div class="meta-item"><strong>분류:</strong> 공식 기술 비전 문서</div>
+            </div>
+        </div>
+
+        <h2>1. 비전 및 발전 마일스톤 개요</h2>
+        <p>Relio 플랫폼은 에어갭 B2B CRM 수집 및 파이프라인 관리를 시작으로, 사내 AI 데이터 에이전트와 대화형으로 영업 지표를 제어·분석하는 차세대 Autonomous Sales Platform으로 진화합니다.</p>
+
+        <div class="phase-box">
+            <div class="phase-title">Phase 1: v1.0.0 오프라인 CRM 및 MCP 엔진 구축 (완료)</div>
+            <ul>
+                <li><strong>Customer 360 & Deal Health:</strong> 고객사 통합 뷰, 중복 탐지·병합, Deal Health 점수 계산</li>
+                <li><strong>3개 구역 분리:</strong> /app, /me, /admin 분리 및 Break Glass 비상 계정</li>
+                <li><strong>Keycloak OIDC & HMAC Key Digest:</strong> PKCE SSO, HMAC Digest 저장 및 7일 유예기간 회전</li>
+                <li><strong>Streamable HTTP MCP:</strong> Tool Allowlist 및 Scope 교집합 검사 기반 AI 연동</li>
+            </ul>
+        </div>
+
+        <div class="phase-box">
+            <div class="phase-title">Phase 2: v1.5.0 계약 파이프라인 & 다중 통화 Forecast (2026 Q3)</div>
+            <ul>
+                <li><strong>다중 통화(Multi-Currency) 환율 적용:</strong> 글로벌 B2B 영업을 위한 실시간/고정 환율 파이프라인</li>
+                <li><strong>계약 및 매출 이행 자동화:</strong> 계약 승인 시 자동 매출 일정 파싱 및 이행 상태 트래킹</li>
+            </ul>
+        </div>
+
+        <div class="phase-box">
+            <div class="phase-title">Phase 3: v2.0.0 AI 자율 영업 코파일럿 (2026 Q4)</div>
+            <ul>
+                <li><strong>NL-to-CRM Action (MCP 2.0):</strong> AI 에이전트에 영업 활동 기록 및 Opportunity 스테이지 변경 자동화</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

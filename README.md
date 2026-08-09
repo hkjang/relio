@@ -1,6 +1,18 @@
-# Relio
+<p align="center">
+  <img src="docs/favicon.svg" alt="Relio Logo" width="90"><br><br>
+  <h1 align="center">Relio</h1>
+</p>
 
-**Relationship + IO — 사람을 위한 CRM, 시스템을 위한 API, AI Agent를 위한 MCP**
+<p align="center">
+  <strong>사람을 위한 CRM, 시스템을 위한 API, AI Agent를 위한 MCP</strong><br>
+  단일 Docker 컨테이너 기반 사내 에어갭 B2B CRM 및 영업관리 플랫폼.
+</p>
+
+<p align="center">
+  <a href="https://hkjang.github.io/relio/">🇰🇷 홍보 페이지</a> · <a href="https://hkjang.github.io/relio/index_en.html">🇺🇸 English Page</a> · <a href="https://github.com/sponsors/hkjang">💖 Sponsor</a>
+</p>
+
+---
 
 Relio는 인터넷이 차단된 기업 환경에서 단일 Docker Image로 운영하는 B2B CRM 및 영업관리 플랫폼입니다. React 화면, Go API, MCP Server, DB Migration, OpenAPI 문서와 정적 자산을 한 이미지에 포함하며 PostgreSQL 외에 Redis나 별도 런타임을 요구하지 않습니다.
 
