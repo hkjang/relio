@@ -6,6 +6,18 @@ REST Prefix는 `/api/v1`입니다. JSON, Cursor Token, Filter, Optimistic Versio
 
 고객과 Opportunity 목록은 `cursor`, `limit`, `q`, Resource별 Filter와 `sort`를 지원합니다. 내림차순은 `-expectedAmount`처럼 `-`를 붙입니다. GET 응답의 `fields=id,name,updatedAt`은 목록의 각 항목 또는 단일 Resource를 지정한 필드로 투영합니다. 변경 요청은 8~200자의 `Idempotency-Key`를 보내면 24시간 동안 같은 결과를 안전하게 재사용합니다.
 
+Sales Intelligence API:
+
+- `GET /opportunities/{id}/health`: 규칙별 위험 점수, 근거와 권장 행동
+- `GET /opportunities/{id}/inspection`: 기간 내 주요 Field 변화와 Deal Health
+- `GET /opportunities/{id}/playbook`: 현재 Stage의 실행 Playbook
+- `PUT /opportunities/{id}/playbook/{itemId}`: Checklist 완료 상태 기록
+- `GET /opportunities/{id}/stage-readiness`: Exit Criteria의 Block/Warning 판정
+- `GET /deal-intelligence/at-risk`: 접근 가능한 위험 Deal 우선순위
+- `GET /deal-intelligence/coaching`: 담당자별 팀장 Coaching 지표
+- `GET /forecasts/intelligence`: Snapshot 기반 Forecast Waterfall
+- `PUT /forecasts/overrides/{id}`: Manager Forecast 판단과 사유 저장
+
 오류 형식:
 
 ```json
@@ -44,3 +56,5 @@ curl -X POST http://relio.example/mcp \
 ```
 
 승인 Tool은 활성 승인 정책이 하나 이상 있을 때만 `tools/list`에 나타납니다. 모든 Tool Result는 사용자 Permission과 Data Scope로 제한됩니다.
+
+Sales Intelligence Tool은 `get_account_brief`, `find_deals_at_risk`, `explain_deal_risk`, `recommend_next_actions`, `get_stage_readiness`, `explain_forecast_change`, `get_sales_coaching_insights`, `get_manager_review_queue`입니다. Tool Annotation의 `relio/riskLevel`은 조회·분석·수정·승인 작업을 구분하며 관리자 Allowlist와 Personal Key Scope 검사를 대체하지 않고 함께 적용됩니다.

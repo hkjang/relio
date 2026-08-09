@@ -52,6 +52,12 @@ Migration이 실패하면 HTTP Server를 시작하지 않습니다. `schema_migr
 
 `approval_policies`에 활성 정책이 없으면 API의 Workflow Status가 false이고 Web/MCP가 관련 기능을 노출하지 않습니다. 정책은 Entity Snapshot에 대해 평가하고 Request/Step/History를 별도 테이블에 Append합니다. 현재 UI는 팀장 1단계이며 데이터 모델은 다단계를 수용합니다.
 
+## Sales Intelligence
+
+Web, REST와 MCP는 동일한 `internal/intelligence` Application Service를 사용합니다. Deal Health Engine은 PostgreSQL의 활성 Rule을 평가해 점수·Evidence·Recommended Action을 만들며 계산 결과를 제한적으로 Snapshot합니다. Stage 변경은 CRM Service가 Sales Execution Guard를 호출하므로 Adapter를 우회해도 `BLOCK` Exit Criteria를 건너뛸 수 없습니다.
+
+Scheduler는 PostgreSQL에 Owner별 일별 Forecast Snapshot과 Opportunity 항목을 저장합니다. Forecast Waterfall은 두 Snapshot을 비교해 New Pipeline, Won/Lost, Amount Change, Slippage를 설명합니다. Manager Override는 담당자 Forecast를 덮어쓰지 않고 별도 이력과 사유로 유지합니다.
+
 ## PostgreSQL-only Operations
 
 - Job/Scheduler: `jobs`, `job_executions`

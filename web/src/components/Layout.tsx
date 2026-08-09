@@ -4,7 +4,7 @@ import { User, Version } from '../types'
 export function navigate(path: string) { history.pushState({}, '', path); window.dispatchEvent(new PopStateEvent('popstate')) }
 export function Link({ to, children, className = '' }: { to: string; children: ReactNode; className?: string }) { return <a href={to} className={className} onClick={e => { e.preventDefault(); navigate(to) }}>{children}</a> }
 
-const icon: Record<string,string> = { dashboard:'⌂', customers:'◫', opportunities:'◆', pipeline:'▦', activities:'◷', forecast:'↗', contracts:'▤', approvals:'✓', admin:'⚙', me:'◎', search:'⌕' }
+const icon: Record<string,string> = { dashboard:'⌂', customers:'◫', opportunities:'◆', pipeline:'▦', intelligence:'◇', activities:'◷', forecast:'↗', contracts:'▤', approvals:'✓', admin:'⚙', me:'◎', search:'⌕' }
 
 type LayoutProps = { area: 'app'|'me'|'admin'; path: string; user: User; version: Version; approvalEnabled: boolean; onLogout: () => void; children: ReactNode; title: string; subtitle?: string; actions?: ReactNode }
 
@@ -15,11 +15,11 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
   useEffect(() => { const close = (e: MouseEvent) => { if (!profileRef.current?.contains(e.target as Node)) setProfileOpen(false) }; document.addEventListener('mousedown', close); return () => document.removeEventListener('mousedown', close) }, [])
   const canAdmin = user.isBootstrap || user.permissions.includes('admin:*') || user.permissions.includes('admin:read')
   const appNav = [
-    ['/app/dashboard','dashboard','Dashboard'], ['/app/customers','customers','고객'], ['/app/opportunities','opportunities','Opportunity'], ['/app/pipeline','pipeline','Pipeline'], ['/app/activities','activities','영업활동'], ['/app/forecast','forecast','Forecast'], ['/app/contracts','contracts','계약'],
+    ['/app/dashboard','dashboard','Dashboard'], ['/app/customers','customers','고객'], ['/app/opportunities','opportunities','Opportunity'], ['/app/pipeline','pipeline','Pipeline'], ['/app/intelligence','intelligence','Deal Intelligence'], ['/app/activities','activities','영업활동'], ['/app/forecast','forecast','Forecast'], ['/app/contracts','contracts','계약'],
     ...(approvalEnabled ? [['/app/approvals','approvals','검토 · 승인']] : []),
   ]
   const meNav = [['/me/profile','me','내 프로필'],['/me/dashboard','dashboard','내 Dashboard'],['/me/targets','forecast','내 영업목표'],['/me/calendar','activities','내 일정'],['/me/notifications','approvals','내 알림'],['/me/saved','search','저장된 검색'],['/me/favorites','customers','즐겨찾기'],['/me/keys','pipeline','API / MCP Key'],['/me/sessions','me','로그인 세션'],['/me/activity','activities','활동 기록'],['/me/about','admin','Relio 정보']]
-  const adminNav = [['/admin/overview','dashboard','운영 현황'],['/admin/system','admin','시스템 설정'],['/admin/oidc','me','Keycloak OIDC'],['/admin/users','customers','사용자 · 조직'],['/admin/roles','approvals','권한 · 데이터 범위'],['/admin/pipeline','pipeline','CRM · Pipeline'],['/admin/approval','approvals','승인 Workflow'],['/admin/keys','me','개인키 · API · MCP'],['/admin/custom-fields','opportunities','Custom Field'],['/admin/security','admin','보안 · 파일 · 알림'],['/admin/audit','activities','Audit'],['/admin/data','contracts','Import · Export']]
+  const adminNav = [['/admin/overview','dashboard','운영 현황'],['/admin/system','admin','시스템 설정'],['/admin/oidc','me','Keycloak OIDC'],['/admin/users','customers','사용자 · 조직'],['/admin/roles','approvals','권한 · 데이터 범위'],['/admin/pipeline','pipeline','CRM · Pipeline'],['/admin/sales-execution','intelligence','Sales Execution'],['/admin/approval','approvals','승인 Workflow'],['/admin/keys','me','개인키 · API · MCP'],['/admin/custom-fields','opportunities','Custom Field'],['/admin/security','admin','보안 · 파일 · 알림'],['/admin/audit','activities','Audit'],['/admin/data','contracts','Import · Export']]
   const nav = area === 'app' ? appNav : area === 'me' ? meNav : adminNav
   return <div className={`shell shell-${area}`}>
     <aside className="sidebar">

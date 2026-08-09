@@ -23,6 +23,7 @@ import (
 	"github.com/hkjang/relio/internal/audit"
 	"github.com/hkjang/relio/internal/auth"
 	"github.com/hkjang/relio/internal/crm"
+	"github.com/hkjang/relio/internal/intelligence"
 	"github.com/hkjang/relio/internal/mcp"
 	"github.com/hkjang/relio/internal/oidc"
 	"github.com/hkjang/relio/internal/platform/httpx"
@@ -42,6 +43,7 @@ type Server struct {
 	Approvals *approval.Service
 	OIDC      *oidc.Service
 	MCP       *mcp.Server
+	Intel     *intelligence.Service
 	started   time.Time
 	limiter   *loginLimiter
 	requests  *requestLimiter
@@ -113,8 +115,8 @@ func (l *requestLimiter) allow(key string, limit int) bool {
 	return true
 }
 
-func New(db *pgxpool.Pool, log *slog.Logger, authService *auth.Service, auditService *audit.Service, crmService *crm.Service, settings *admin.SettingsService, keys *apikey.Service, approvals *approval.Service, oidcService *oidc.Service, mcpServer *mcp.Server) *Server {
-	return &Server{DB: db, Log: log, Auth: authService, Audit: auditService, CRM: crmService, Settings: settings, Keys: keys, Approvals: approvals, OIDC: oidcService, MCP: mcpServer, started: time.Now(), limiter: newLoginLimiter(), requests: newRequestLimiter()}
+func New(db *pgxpool.Pool, log *slog.Logger, authService *auth.Service, auditService *audit.Service, crmService *crm.Service, settings *admin.SettingsService, keys *apikey.Service, approvals *approval.Service, oidcService *oidc.Service, mcpServer *mcp.Server, intel *intelligence.Service) *Server {
+	return &Server{DB: db, Log: log, Auth: authService, Audit: auditService, CRM: crmService, Settings: settings, Keys: keys, Approvals: approvals, OIDC: oidcService, MCP: mcpServer, Intel: intel, started: time.Now(), limiter: newLoginLimiter(), requests: newRequestLimiter()}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -152,12 +154,21 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/opportunities/{id}", s.requireAuth(http.HandlerFunc(s.getOpportunity), false))
 	mux.Handle("PUT /api/v1/opportunities/{id}", s.requireAuth(http.HandlerFunc(s.updateOpportunity), false))
 	mux.Handle("POST /api/v1/opportunities/{id}/stage", s.requireAuth(http.HandlerFunc(s.changeStage), false))
+	mux.Handle("GET /api/v1/opportunities/{id}/health", s.requireAuth(http.HandlerFunc(s.dealHealth), false))
+	mux.Handle("GET /api/v1/opportunities/{id}/inspection", s.requireAuth(http.HandlerFunc(s.dealInspection), false))
+	mux.Handle("GET /api/v1/opportunities/{id}/playbook", s.requireAuth(http.HandlerFunc(s.opportunityPlaybook), false))
+	mux.Handle("PUT /api/v1/opportunities/{id}/playbook/{itemId}", s.requireAuth(http.HandlerFunc(s.updatePlaybookProgress), false))
+	mux.Handle("GET /api/v1/opportunities/{id}/stage-readiness", s.requireAuth(http.HandlerFunc(s.stageReadiness), false))
+	mux.Handle("GET /api/v1/deal-intelligence/at-risk", s.requireAuth(http.HandlerFunc(s.dealsAtRisk), false))
+	mux.Handle("GET /api/v1/deal-intelligence/coaching", s.requireAuth(http.HandlerFunc(s.coachingDashboard), false))
 	mux.Handle("GET /api/v1/pipeline", s.requireAuth(http.HandlerFunc(s.pipelines), false))
 	mux.Handle("GET /api/v1/products", s.requireAuth(http.HandlerFunc(s.listProducts), false))
 	mux.Handle("POST /api/v1/products", s.requireAuth(http.HandlerFunc(s.createProduct), false))
 	mux.Handle("GET /api/v1/activities", s.requireAuth(http.HandlerFunc(s.listActivities), false))
 	mux.Handle("POST /api/v1/activities", s.requireAuth(http.HandlerFunc(s.addActivity), false))
 	mux.Handle("GET /api/v1/forecasts", s.requireAuth(http.HandlerFunc(s.forecast), false))
+	mux.Handle("GET /api/v1/forecasts/intelligence", s.requireAuth(http.HandlerFunc(s.forecastIntelligence), false))
+	mux.Handle("PUT /api/v1/forecasts/overrides/{id}", s.requireAuth(http.HandlerFunc(s.forecastOverride), false))
 	mux.Handle("GET /api/v1/sales/kpi", s.requireAuth(http.HandlerFunc(s.salesKPI), false))
 	mux.Handle("GET /api/v1/tasks/due", s.requireAuth(http.HandlerFunc(s.dueActions), false))
 	mux.Handle("GET /api/v1/quotations", s.requireAuth(http.HandlerFunc(s.listQuotations), false))
@@ -210,6 +221,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/custom-fields", s.requireAuth(http.HandlerFunc(s.createCustomField), false))
 	mux.Handle("GET /api/v1/admin/pipelines", s.requireAuth(http.HandlerFunc(s.adminPipelines), false))
 	mux.Handle("POST /api/v1/admin/pipelines/{id}/stages", s.requireAuth(http.HandlerFunc(s.createStage), false))
+	mux.Handle("GET /api/v1/admin/sales-execution", s.requireAuth(http.HandlerFunc(s.adminSalesExecution), false))
+	mux.Handle("PUT /api/v1/admin/stages/{id}/sales-execution", s.requireAuth(http.HandlerFunc(s.saveSalesExecution), false))
+	mux.Handle("GET /api/v1/admin/deal-health-rules", s.requireAuth(http.HandlerFunc(s.adminDealHealthRules), false))
+	mux.Handle("PUT /api/v1/admin/deal-health-rules/{id}", s.requireAuth(http.HandlerFunc(s.saveDealHealthRule), false))
 	mux.Handle("GET /api/v1/admin/personal-keys", s.requireAuth(http.HandlerFunc(s.adminPersonalKeys), false))
 	mux.Handle("DELETE /api/v1/admin/personal-keys/{id}", s.requireAuth(http.HandlerFunc(s.adminRevokeKey), false))
 	mux.Handle("POST /api/v1/admin/users/{id}/keys/revoke-all", s.requireAuth(http.HandlerFunc(s.adminRevokeAllKeys), false))

@@ -18,6 +18,7 @@ import (
 	"github.com/hkjang/relio/internal/auth"
 	"github.com/hkjang/relio/internal/config"
 	"github.com/hkjang/relio/internal/crm"
+	"github.com/hkjang/relio/internal/intelligence"
 	"github.com/hkjang/relio/internal/job"
 	"github.com/hkjang/relio/internal/mcp"
 	"github.com/hkjang/relio/internal/oidc"
@@ -62,14 +63,17 @@ func main() {
 		os.Exit(1)
 	}
 	crmService := &crm.Service{DB: db, Audit: auditService}
+	intelligenceService := &intelligence.Service{DB: db, CRM: crmService, Audit: auditService}
+	crmService.StageGuard = intelligenceService
 	settingsService := &admin.SettingsService{DB: db, Secrets: secretManager, Audit: auditService}
 	keyService := &apikey.Service{DB: db, Secrets: secretManager, Audit: auditService}
 	approvalService := &approval.Service{DB: db, Audit: auditService}
 	oidcService := &oidc.Service{DB: db, Secrets: secretManager, Auth: authService, Audit: auditService}
 	authService.OIDCValidator = oidcService.ValidateAccessToken
-	mcpServer := &mcp.Server{DB: db, CRM: crmService, Approvals: approvalService}
-	app := server.New(db, logger, authService, auditService, crmService, settingsService, keyService, approvalService, oidcService, mcpServer)
+	mcpServer := &mcp.Server{DB: db, CRM: crmService, Approvals: approvalService, Intelligence: intelligenceService}
+	app := server.New(db, logger, authService, auditService, crmService, settingsService, keyService, approvalService, oidcService, mcpServer, intelligenceService)
 	runner := job.New(db, logger)
+	runner.Snapshot = intelligenceService.CaptureForecastSnapshots
 	go runner.Run(ctx)
 	httpServer := &http.Server{Addr: config.ListenAddress, Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
 	go func() {

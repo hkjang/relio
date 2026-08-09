@@ -40,6 +40,12 @@ docker run -d --name "$relio_app" --network "$relio_network" \
   -v "$relio_volume:/var/lib/relio" \
   "$relio_image" >/dev/null
 
+for attempt in $(seq 1 60); do
+  if docker exec "$relio_app" /usr/local/bin/relio healthcheck >/dev/null 2>&1; then break; fi
+  if [ "$attempt" -eq 60 ]; then docker logs "$relio_app"; exit 1; fi
+  sleep 1
+done
+
 if ! docker run --rm --network "$relio_network" \
   --mount "type=bind,src=$relio_workspace/scripts/offline-smoke.py,dst=/offline-smoke.py,readonly" \
   python:3.13-slim python /offline-smoke.py "http://$relio_app:8080" admin ChangeMe-Relio-2026; then

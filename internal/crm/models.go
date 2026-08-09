@@ -43,18 +43,24 @@ type CustomerInput struct {
 }
 
 type Contact struct {
-	ID             string    `json:"id"`
-	CustomerID     string    `json:"customerId"`
-	Name           string    `json:"name"`
-	Title          string    `json:"title,omitempty"`
-	Department     string    `json:"department,omitempty"`
-	Email          string    `json:"email,omitempty"`
-	Phone          string    `json:"phone,omitempty"`
-	Mobile         string    `json:"mobile,omitempty"`
-	DecisionMaker  bool      `json:"decisionMaker"`
-	PrimaryContact bool      `json:"primaryContact"`
-	OwnerID        string    `json:"ownerId"`
-	CreatedAt      time.Time `json:"createdAt"`
+	ID                   string     `json:"id"`
+	CustomerID           string     `json:"customerId"`
+	Name                 string     `json:"name"`
+	Title                string     `json:"title,omitempty"`
+	Department           string     `json:"department,omitempty"`
+	Email                string     `json:"email,omitempty"`
+	Phone                string     `json:"phone,omitempty"`
+	Mobile               string     `json:"mobile,omitempty"`
+	DecisionMaker        bool       `json:"decisionMaker"`
+	PrimaryContact       bool       `json:"primaryContact"`
+	RelationshipRole     string     `json:"relationshipRole"`
+	Influence            string     `json:"influence"`
+	Sentiment            string     `json:"sentiment"`
+	RelationshipStrength int        `json:"relationshipStrength"`
+	DecisionPower        int        `json:"decisionPower"`
+	LastContactAt        *time.Time `json:"lastContactAt,omitempty"`
+	OwnerID              string     `json:"ownerId"`
+	CreatedAt            time.Time  `json:"createdAt"`
 }
 
 type Stage struct {
@@ -128,6 +134,19 @@ type OpportunityInput struct {
 	WinReason         string         `json:"winReason"`
 	CustomFields      map[string]any `json:"customFields"`
 	Version           int            `json:"version"`
+}
+
+type StageGateIssue struct {
+	CriterionID string `json:"criterionId"`
+	Name        string `json:"name"`
+	Enforcement string `json:"enforcement"`
+	Message     string `json:"message"`
+}
+
+type StageGateResult struct {
+	Allowed  bool             `json:"allowed"`
+	Blocked  []StageGateIssue `json:"blocked"`
+	Warnings []StageGateIssue `json:"warnings"`
 }
 
 type Activity struct {

@@ -13,6 +13,7 @@ type Runner struct {
 	DB         *pgxpool.Pool
 	Log        *slog.Logger
 	InstanceID string
+	Snapshot   func(context.Context) error
 }
 
 func New(db *pgxpool.Pool, log *slog.Logger) *Runner {
@@ -48,4 +49,9 @@ func (r *Runner) maintenance(ctx context.Context) {
 	_, _ = r.DB.Exec(ctx, `DELETE FROM sessions WHERE expires_at<now()-interval '1 day'`)
 	_, _ = r.DB.Exec(ctx, `DELETE FROM oidc_login_states WHERE expires_at<now()`)
 	_, _ = r.DB.Exec(ctx, `DELETE FROM idempotency_keys WHERE expires_at<now()`)
+	if r.Snapshot != nil {
+		if err := r.Snapshot(ctx); err != nil {
+			r.Log.Error("capture forecast snapshot", "error", err)
+		}
+	}
 }

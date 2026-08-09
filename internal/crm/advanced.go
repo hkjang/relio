@@ -18,7 +18,7 @@ func (s *Service) SearchContacts(ctx context.Context, p *auth.Principal, q, cust
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.DB.Query(ctx, `SELECT ct.id,ct.customer_id,ct.name,COALESCE(ct.title,''),COALESCE(ct.department,''),COALESCE(ct.email,''),COALESCE(ct.phone,''),COALESCE(ct.mobile,''),ct.decision_maker,ct.primary_contact,ct.owner_id,ct.created_at FROM contacts ct JOIN customers c ON c.id=ct.customer_id WHERE `+scopeSQL("c")+` AND ($4='' OR ct.customer_id::text=$4) AND ($5='' OR lower(ct.name) LIKE '%'||lower($5)||'%' OR lower(COALESCE(ct.email,'')) LIKE '%'||lower($5)||'%') ORDER BY ct.primary_contact DESC,ct.name LIMIT $6`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, strings.TrimSpace(q), limit)
+	rows, err := s.DB.Query(ctx, `SELECT ct.id,ct.customer_id,ct.name,COALESCE(ct.title,''),COALESCE(ct.department,''),COALESCE(ct.email,''),COALESCE(ct.phone,''),COALESCE(ct.mobile,''),ct.decision_maker,ct.primary_contact,ct.relationship_role,ct.influence,ct.sentiment,ct.relationship_strength,ct.decision_power,ct.last_contact_at,ct.owner_id,ct.created_at FROM contacts ct JOIN customers c ON c.id=ct.customer_id WHERE `+scopeSQL("c")+` AND ($4='' OR ct.customer_id::text=$4) AND ($5='' OR lower(ct.name) LIKE '%'||lower($5)||'%' OR lower(COALESCE(ct.email,'')) LIKE '%'||lower($5)||'%') ORDER BY ct.decision_maker DESC,(ct.relationship_role='CHAMPION') DESC,ct.primary_contact DESC,ct.name LIMIT $6`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, strings.TrimSpace(q), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +26,7 @@ func (s *Service) SearchContacts(ctx context.Context, p *auth.Principal, q, cust
 	out := []Contact{}
 	for rows.Next() {
 		var x Contact
-		if err = rows.Scan(&x.ID, &x.CustomerID, &x.Name, &x.Title, &x.Department, &x.Email, &x.Phone, &x.Mobile, &x.DecisionMaker, &x.PrimaryContact, &x.OwnerID, &x.CreatedAt); err != nil {
+		if err = rows.Scan(&x.ID, &x.CustomerID, &x.Name, &x.Title, &x.Department, &x.Email, &x.Phone, &x.Mobile, &x.DecisionMaker, &x.PrimaryContact, &x.RelationshipRole, &x.Influence, &x.Sentiment, &x.RelationshipStrength, &x.DecisionPower, &x.LastContactAt, &x.OwnerID, &x.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, x)
@@ -35,15 +35,20 @@ func (s *Service) SearchContacts(ctx context.Context, p *auth.Principal, q, cust
 }
 
 type ContactInput struct {
-	CustomerID     string `json:"customerId"`
-	Name           string `json:"name"`
-	Title          string `json:"title"`
-	Department     string `json:"department"`
-	Email          string `json:"email"`
-	Phone          string `json:"phone"`
-	Mobile         string `json:"mobile"`
-	DecisionMaker  bool   `json:"decisionMaker"`
-	PrimaryContact bool   `json:"primaryContact"`
+	CustomerID           string `json:"customerId"`
+	Name                 string `json:"name"`
+	Title                string `json:"title"`
+	Department           string `json:"department"`
+	Email                string `json:"email"`
+	Phone                string `json:"phone"`
+	Mobile               string `json:"mobile"`
+	DecisionMaker        bool   `json:"decisionMaker"`
+	PrimaryContact       bool   `json:"primaryContact"`
+	RelationshipRole     string `json:"relationshipRole"`
+	Influence            string `json:"influence"`
+	Sentiment            string `json:"sentiment"`
+	RelationshipStrength *int   `json:"relationshipStrength"`
+	DecisionPower        *int   `json:"decisionPower"`
 }
 
 func (s *Service) CreateContact(ctx context.Context, p *auth.Principal, in ContactInput, m RequestMeta) (Contact, error) {
@@ -57,7 +62,42 @@ func (s *Service) CreateContact(ctx context.Context, p *auth.Principal, in Conta
 		return Contact{}, errors.New("customer not found or inaccessible")
 	}
 	id := ids.New()
-	_, err := s.DB.Exec(ctx, `INSERT INTO contacts(id,customer_id,name,title,department,email,phone,mobile,decision_maker,primary_contact,owner_id,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$11)`, id, in.CustomerID, strings.TrimSpace(in.Name), nullable(in.Title), nullable(in.Department), nullable(in.Email), nullable(in.Phone), nullable(in.Mobile), in.DecisionMaker, in.PrimaryContact, p.UserID)
+	role := strings.ToUpper(strings.TrimSpace(in.RelationshipRole))
+	if role == "" {
+		role = "USER"
+	}
+	if role != "DECISION_MAKER" && role != "CHAMPION" && role != "INFLUENCER" && role != "USER" && role != "PROCUREMENT" {
+		return Contact{}, errors.New("invalid relationshipRole")
+	}
+	influence := strings.ToUpper(strings.TrimSpace(in.Influence))
+	if influence == "" {
+		influence = "MEDIUM"
+	}
+	if influence != "HIGH" && influence != "MEDIUM" && influence != "LOW" {
+		return Contact{}, errors.New("invalid influence")
+	}
+	sentiment := strings.ToUpper(strings.TrimSpace(in.Sentiment))
+	if sentiment == "" {
+		sentiment = "NEUTRAL"
+	}
+	if sentiment != "SUPPORT" && sentiment != "NEUTRAL" && sentiment != "OPPOSE" {
+		return Contact{}, errors.New("invalid sentiment")
+	}
+	if in.RelationshipStrength != nil && (*in.RelationshipStrength < 0 || *in.RelationshipStrength > 100) {
+		return Contact{}, errors.New("relationshipStrength must be between 0 and 100")
+	}
+	if in.DecisionPower != nil && (*in.DecisionPower < 0 || *in.DecisionPower > 100) {
+		return Contact{}, errors.New("decisionPower must be between 0 and 100")
+	}
+	relationshipStrength := 50
+	if in.RelationshipStrength != nil {
+		relationshipStrength = *in.RelationshipStrength
+	}
+	decisionPower := 50
+	if in.DecisionPower != nil {
+		decisionPower = *in.DecisionPower
+	}
+	_, err := s.DB.Exec(ctx, `INSERT INTO contacts(id,customer_id,name,title,department,email,phone,mobile,decision_maker,primary_contact,relationship_role,influence,sentiment,relationship_strength,decision_power,owner_id,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16,$16)`, id, in.CustomerID, strings.TrimSpace(in.Name), nullable(in.Title), nullable(in.Department), nullable(in.Email), nullable(in.Phone), nullable(in.Mobile), in.DecisionMaker, in.PrimaryContact, role, influence, sentiment, relationshipStrength, decisionPower, p.UserID)
 	if err != nil {
 		return Contact{}, err
 	}

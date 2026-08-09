@@ -18,8 +18,13 @@ import (
 )
 
 type Service struct {
-	DB    *pgxpool.Pool
-	Audit *audit.Service
+	DB         *pgxpool.Pool
+	Audit      *audit.Service
+	StageGuard StageTransitionGuard
+}
+
+type StageTransitionGuard interface {
+	ValidateStageTransition(context.Context, *auth.Principal, string, string) (StageGateResult, error)
 }
 
 type RequestMeta struct{ Channel, IP, RequestID, UserAgent string }
@@ -97,6 +102,10 @@ func scopeSQL(alias string) string {
 			SELECT 1 FROM scope_tree WHERE id=%s.organization_id
 		)))`, alias, alias, alias)
 }
+
+// ScopeSQL exposes the canonical data-scope predicate to application services
+// that operate on the same CRM entities as the web, REST, and MCP adapters.
+func ScopeSQL(alias string) string { return scopeSQL(alias) }
 
 func (s *Service) ListCustomers(ctx context.Context, p *auth.Principal, q, cursor, sortBy string, limit int) (Page[Customer], error) {
 	if err := auth.Require(p, "customer:read"); err != nil {
@@ -329,13 +338,13 @@ func (s *Service) Customer360(ctx context.Context, p *auth.Principal, id string)
 		return Customer360{}, err
 	}
 	out := Customer360{Customer: c, Contacts: []Contact{}, Opportunities: []Opportunity{}, Activities: []Activity{}, Contracts: []map[string]any{}, Metrics: map[string]any{}}
-	rows, err := s.DB.Query(ctx, `SELECT id,customer_id,name,COALESCE(title,''),COALESCE(department,''),COALESCE(email,''),COALESCE(phone,''),COALESCE(mobile,''),decision_maker,primary_contact,owner_id,created_at FROM contacts WHERE customer_id=$1 ORDER BY primary_contact DESC,decision_maker DESC,name LIMIT 100`, id)
+	rows, err := s.DB.Query(ctx, `SELECT id,customer_id,name,COALESCE(title,''),COALESCE(department,''),COALESCE(email,''),COALESCE(phone,''),COALESCE(mobile,''),decision_maker,primary_contact,relationship_role,influence,sentiment,relationship_strength,decision_power,last_contact_at,owner_id,created_at FROM contacts WHERE customer_id=$1 ORDER BY decision_maker DESC,(relationship_role='CHAMPION') DESC,primary_contact DESC,name LIMIT 100`, id)
 	if err != nil {
 		return out, err
 	}
 	for rows.Next() {
 		var x Contact
-		if err = rows.Scan(&x.ID, &x.CustomerID, &x.Name, &x.Title, &x.Department, &x.Email, &x.Phone, &x.Mobile, &x.DecisionMaker, &x.PrimaryContact, &x.OwnerID, &x.CreatedAt); err != nil {
+		if err = rows.Scan(&x.ID, &x.CustomerID, &x.Name, &x.Title, &x.Department, &x.Email, &x.Phone, &x.Mobile, &x.DecisionMaker, &x.PrimaryContact, &x.RelationshipRole, &x.Influence, &x.Sentiment, &x.RelationshipStrength, &x.DecisionPower, &x.LastContactAt, &x.OwnerID, &x.CreatedAt); err != nil {
 			rows.Close()
 			return out, err
 		}
@@ -584,6 +593,19 @@ func (s *Service) UpdateOpportunity(ctx context.Context, p *auth.Principal, id s
 	var won, lost bool
 	if err = s.DB.QueryRow(ctx, `SELECT pipeline_id,probability,forecast_category,is_won,is_lost FROM pipeline_stages WHERE id=$1`, stageID).Scan(&pipeID, &probability, &category, &won, &lost); err != nil {
 		return Opportunity{}, errors.New("invalid stageId")
+	}
+	if stageID != before.StageID && s.StageGuard != nil {
+		gate, guardErr := s.StageGuard.ValidateStageTransition(ctx, p, id, stageID)
+		if guardErr != nil {
+			return Opportunity{}, guardErr
+		}
+		if !gate.Allowed {
+			messages := make([]string, 0, len(gate.Blocked))
+			for _, issue := range gate.Blocked {
+				messages = append(messages, issue.Message)
+			}
+			return Opportunity{}, fmt.Errorf("stage exit criteria blocked: %s", strings.Join(messages, "; "))
+		}
 	}
 	if in.Probability != nil {
 		probability = *in.Probability

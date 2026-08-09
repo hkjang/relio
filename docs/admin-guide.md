@@ -24,6 +24,14 @@ Keycloak 장애는 `/health/ready`를 실패시키지 않습니다. Bootstrap Ad
 
 정책이 없을 때가 기본 상태입니다. 이때 사용자는 승인 관련 메뉴와 Status를 볼 수 없습니다. 정책을 추가할 때 Entity, 조건 Field/Operator/Value와 승인자를 지정합니다. 정책 조건은 요청 시점 Entity Snapshot에 평가됩니다.
 
+## Sales Execution
+
+Admin → Sales Execution에서 Pipeline Stage별 Playbook과 Exit Criteria를 설정합니다. Playbook은 Guidance, Checklist/Action/Field 항목과 필수 여부로 구성합니다. Exit Criteria는 Field 입력, Decision Maker, 최근 Activity, 필수 Playbook 완료, Custom Field를 검사하며 `OFF`, `WARNING`, `BLOCK` 중 강제 수준을 선택합니다.
+
+`BLOCK` 조건이 충족되지 않으면 Web, REST API, MCP 어느 채널에서도 Stage를 변경할 수 없습니다. `WARNING`은 준비도 응답과 화면에 표시하지만 저장을 차단하지 않습니다. 설정과 사용자 완료 이력은 Audit에 기록됩니다.
+
+Forecast Override는 담당자의 Forecast와 팀장의 판단을 분리합니다. 변경 사유가 필수이며 최신 Manager 판단은 Forecast Intelligence의 Manager Commit에 반영됩니다.
+
 ## Personal Key
 
 관리자는 최대 Key 수, 기본/최대 만료일, Rotation Grace, REST/MCP 채널 허용 여부를 구성합니다. 관리자는 Key ID, Scope, 만료, 최근 IP 같은 Metadata만 확인할 수 있고 Secret은 볼 수 없습니다.

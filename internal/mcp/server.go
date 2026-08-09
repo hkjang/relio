@@ -13,6 +13,7 @@ import (
 	"github.com/hkjang/relio/internal/approval"
 	"github.com/hkjang/relio/internal/auth"
 	"github.com/hkjang/relio/internal/crm"
+	"github.com/hkjang/relio/internal/intelligence"
 	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/hkjang/relio/internal/platform/ids"
 	"github.com/hkjang/relio/internal/platform/version"
@@ -24,9 +25,10 @@ const ProtocolVersion = "2025-11-25"
 var supportedVersions = map[string]bool{"2025-11-25": true, "2025-06-18": true, "2025-03-26": true}
 
 type Server struct {
-	DB        *pgxpool.Pool
-	CRM       *crm.Service
-	Approvals *approval.Service
+	DB           *pgxpool.Pool
+	CRM          *crm.Service
+	Approvals    *approval.Service
+	Intelligence *intelligence.Service
 }
 type request struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -247,7 +249,17 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	out := []tool{}
 	add := func(permission, name, title, description string, input map[string]any, readOnly, dangerous bool) {
 		if p.Has(permission) && s.toolAllowed(ctx, name) {
-			out = append(out, tool{Name: name, Title: title, Description: description, InputSchema: input, Annotations: map[string]any{"readOnlyHint": readOnly, "destructiveHint": dangerous, "idempotentHint": readOnly}})
+			riskLevel := "READ"
+			if !readOnly {
+				riskLevel = "WRITE"
+			}
+			if strings.HasPrefix(name, "find_") || strings.HasPrefix(name, "explain_") || strings.HasPrefix(name, "recommend_") || name == "get_sales_coaching_insights" || name == "get_manager_review_queue" {
+				riskLevel = "ANALYZE"
+			}
+			if name == "approve_request" || name == "reject_request" {
+				riskLevel = "APPROVAL"
+			}
+			out = append(out, tool{Name: name, Title: title, Description: description, InputSchema: input, Annotations: map[string]any{"readOnlyHint": readOnly, "destructiveHint": dangerous, "idempotentHint": readOnly, "relio/riskLevel": riskLevel}})
 		}
 	}
 	qprops := map[string]any{"query": str("검색어"), "limit": integer("최대 결과 수")}
@@ -276,6 +288,14 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	add("contract:read", "get_expiring_contracts", "만료 계약 조회", "지정 기간 안에 만료되는 계약을 조회합니다.", schema(nil, map[string]any{"days": integer("만료까지의 일수"), "limit": integer("최대 결과 수")}), true, false)
 	add("contract:read", "get_renewal_pipeline", "갱신 영업 조회", "자동 갱신 또는 갱신 대상 계약을 조회합니다.", schema(nil, map[string]any{"days": integer("만료까지의 일수"), "limit": integer("최대 결과 수")}), true, false)
 	add("forecast:read", "get_win_loss_analysis", "성공·실패 분석", "기간별 Win/Loss 건수, 금액, 승률을 조회합니다.", schema(nil, map[string]any{"months": integer("분석 개월 수")}), true, false)
+	add("customer:read", "get_account_brief", "고객 종합 브리핑", "Customer 360 정보를 미팅 준비용 Account Brief로 제공합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
+	add("opportunity:read", "find_deals_at_risk", "위험 Deal 탐지", "설명 가능한 규칙으로 위험 점수 이상의 영업건을 찾습니다.", schema(nil, map[string]any{"minimum": integer("최소 위험 점수"), "limit": integer("최대 결과 수")}), true, false)
+	add("opportunity:read", "explain_deal_risk", "Deal 위험 설명", "위험 점수, 근거, 권장 행동과 최근 변화를 설명합니다.", schema([]string{"id"}, map[string]any{"id": str("Opportunity ID"), "days": integer("변화 분석 기간")}), true, false)
+	add("opportunity:read", "recommend_next_actions", "다음 행동 추천", "Deal Health와 Stage Playbook을 결합해 다음 행동을 추천합니다.", schema([]string{"id"}, map[string]any{"id": str("Opportunity ID")}), true, false)
+	add("opportunity:read", "get_stage_readiness", "Stage 전환 준비도", "현재 Stage의 Exit Criteria 충족 여부를 확인합니다.", schema([]string{"id", "stageId"}, map[string]any{"id": str("Opportunity ID"), "stageId": str("이동 대상 Stage ID")}), true, false)
+	add("forecast:read", "explain_forecast_change", "Forecast 변화 설명", "Snapshot을 비교해 신규, Lost, 금액 증감과 Slippage를 설명합니다.", schema(nil, map[string]any{"days": integer("비교 기간")}), true, false)
+	add("opportunity:read", "get_sales_coaching_insights", "영업 Coaching", "담당자별 위험 Deal과 실행 공백을 팀장 Coaching 관점으로 제공합니다.", schema(nil, map[string]any{}), true, false)
+	add("opportunity:read", "get_manager_review_queue", "팀장 검토 Queue", "위험도가 높은 영업건을 우선순위 순으로 제공합니다.", schema(nil, map[string]any{"minimum": integer("최소 위험 점수"), "limit": integer("최대 결과 수")}), true, false)
 	add("quotation:write", "create_quotation", "견적 생성", "고객 또는 영업기회에 견적 초안을 생성합니다.", schema([]string{"customerId", "title", "amount"}, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "title": str("견적 제목"), "amount": number("견적 금액"), "discountPercent": number("할인율"), "validUntil": str("YYYY-MM-DD")}), false, false)
 	if s.approvalsEnabled(ctx) {
 		add("approval:request", "submit_approval", "승인 요청", "적용되는 정책에 따라 팀장 승인을 요청합니다.", schema([]string{"entityType", "entityId"}, map[string]any{"entityType": str("OPPORTUNITY, QUOTATION, CONTRACT, CUSTOMER"), "entityId": str("대상 ID"), "reason": str("요청 사유")}), false, false)
@@ -365,6 +385,30 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 		v, err = s.CRM.Contracts(ctx, p, "", intArg(a, "days", 180), true, intArg(a, "limit", 50))
 	case "get_win_loss_analysis":
 		v, err = s.CRM.WinLossAnalysis(ctx, p, intArg(a, "months", 12))
+	case "get_account_brief":
+		v, err = s.CRM.Customer360(ctx, p, strArg(a, "id"))
+	case "find_deals_at_risk", "get_manager_review_queue":
+		v, err = s.Intelligence.DealsAtRisk(ctx, p, intArg(a, "minimum", 40), intArg(a, "limit", 25))
+	case "explain_deal_risk":
+		v, err = s.Intelligence.DealInspection(ctx, p, strArg(a, "id"), intArg(a, "days", 7))
+	case "recommend_next_actions":
+		health, healthErr := s.Intelligence.DealHealth(ctx, p, strArg(a, "id"))
+		if healthErr != nil {
+			err = healthErr
+			break
+		}
+		playbook, playbookErr := s.Intelligence.Playbook(ctx, p, strArg(a, "id"))
+		if playbookErr != nil {
+			err = playbookErr
+			break
+		}
+		v = map[string]any{"health": health, "playbook": playbook, "recommendations": health.Recommendations}
+	case "get_stage_readiness":
+		v, err = s.Intelligence.ValidateStageTransition(ctx, p, strArg(a, "id"), strArg(a, "stageId"))
+	case "explain_forecast_change":
+		v, err = s.Intelligence.ForecastIntelligence(ctx, p, intArg(a, "days", 7))
+	case "get_sales_coaching_insights":
+		v, err = s.Intelligence.Coaching(ctx, p)
 	case "create_quotation":
 		var in crm.QuotationInput
 		err = decodeArgs(a, &in)
