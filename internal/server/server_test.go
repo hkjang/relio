@@ -1,6 +1,9 @@
 package server
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestProjectionFields(t *testing.T) {
 	fields, err := projectionFields("id, name,id")
@@ -22,5 +25,29 @@ func TestProjectObject(t *testing.T) {
 	}
 	if _, ok := projected["secret"]; ok {
 		t.Fatal("unselected field leaked into projection")
+	}
+}
+
+func TestDiagnosticReadinessOnlyCountsRequiredChecks(t *testing.T) {
+	checks := []adminDiagnosticCheck{
+		{Status: "HEALTHY", Required: true},
+		{Status: "WARNING", Required: true},
+		{Status: "DISABLED", Required: false},
+	}
+	if got := diagnosticReadiness(checks); got != 50 {
+		t.Fatalf("readiness = %d, want 50", got)
+	}
+	if got := diagnosticReadiness(nil); got != 100 {
+		t.Fatalf("empty readiness = %d, want 100", got)
+	}
+}
+
+func TestRedactDiagnostic(t *testing.T) {
+	value := "connect postgres://relio:secret@postgres:5432/relio password=hidden token:abc"
+	redacted := redactDiagnostic(value)
+	for _, secret := range []string{"secret", "hidden", "abc"} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("secret %q leaked in %q", secret, redacted)
+		}
 	}
 }

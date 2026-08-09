@@ -20,6 +20,18 @@
 
 Keycloak 장애는 `/health/ready`를 실패시키지 않습니다. Bootstrap Admin은 SSO 활성화 후에도 유지합니다.
 
+## 운영 Command Center와 Diagnostics
+
+`관리자 → 운영 Command Center`는 필수 운영 항목을 0~100 준비도로 계산하고 즉시 조치할 항목을 우선순위로 표시합니다. PostgreSQL, Schema Migration, Instance Master Key, Persistent Volume, Service URL, 사용자·조직, RBAC, Pipeline, Background Job은 필수 항목입니다. OIDC와 승인 Workflow는 선택 기능이므로 관리자가 의도적으로 비활성화한 상태를 장애로 계산하지 않습니다.
+
+`관리자 → Diagnostics · Job`에서 각 항목의 근거, Application/Database Version, Offline Runtime Contract와 최근 Background Job을 확인합니다. 운영 지원 자료가 필요하면 `Support Bundle`을 내려받습니다. Bundle에는 Password, Token, Personal Key, PostgreSQL DSN, OIDC Client Secret이 포함되지 않으며 다운로드 자체가 Audit에 기록됩니다.
+
+관리자 메뉴 검색은 상단 검색창 또는 `Ctrl/Command + K`로 시작할 수 있습니다. 모바일에서는 상단 `관리 메뉴` 버튼을 눌러 모든 설정에 접근합니다.
+
+## Audit Log
+
+Actor, Action, Resource, Resource ID와 Request ID를 한 번에 검색하고 Channel로 필터링할 수 있습니다. 행의 `상세`를 열면 요청 Metadata와 변경 전·후 JSON을 비교할 수 있습니다. Support Bundle 다운로드는 `SUPPORT_BUNDLE_EXPORT` Action으로 남습니다.
+
 ## Approval
 
 정책이 없을 때가 기본 상태입니다. 이때 사용자는 승인 관련 메뉴와 Status를 볼 수 없습니다. 정책을 추가할 때 Entity, 조건 Field/Operator/Value와 승인자를 지정합니다. 정책 조건은 요청 시점 Entity Snapshot에 평가됩니다.
@@ -50,5 +62,5 @@ Opportunity Team 구성은 협업 역할만 추가합니다. 구성원이라는 
 
 - PostgreSQL과 `relio-data` Volume을 함께 Backup합니다.
 - 새 Image를 `docker load`하고 기존 Volume과 같은 세 환경변수로 Container만 교체합니다.
-- `/admin/overview`에서 Application Version, Schema Version, Last Migration을 확인합니다.
+- `/admin/overview`에서 운영 준비도와 우선 조치를 확인하고 `/admin/operations`에서 Application Version, Schema Version, Last Migration을 확인합니다.
 - Migration 실패 시 Application은 시작하지 않으므로 기존 Image와 DB Backup으로 복구합니다.

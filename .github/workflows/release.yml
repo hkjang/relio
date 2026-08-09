@@ -77,23 +77,55 @@ jobs:
           docker image inspect "relio:$image_tag" >/dev/null
           digest="$(sha256sum "$asset" | awk '{print $1}')"
           size="$(du -h "$asset" | awk '{print $1}')"
-          cat > release-body.md <<EOF
+          notes="docs/releases/${GITHUB_REF_NAME}.md"
+          if [ -f "$notes" ]; then
+            cp "$notes" release-body.md
+          else
+            cat > release-body.md <<EOF
           ## Relio v${version}
 
-          완전 오프라인망 반입용 단일 Docker Image입니다.
+          완전 오프라인망 반입용 단일 Docker Image Release입니다.
+          EOF
+          fi
+          cat >> release-body.md <<EOF
 
-          - Asset: \`${asset}\`
-          - SHA-256: \`${digest}\`
-          - Size: ${size}
-          - Image: \`relio:${image_tag}\`
+          ## 오프라인 이미지
+
+          | 항목 | 값 |
+          | --- | --- |
+          | Asset | \`${asset}\` |
+          | Docker Image | \`relio:${image_tag}\` |
+          | SHA-256 | \`${digest}\` |
+          | 압축 크기 | ${size} |
+          | Architecture | \`linux/amd64\` |
+
+          이 Release가 직접 제공하는 Asset은 위 Docker Image \`tar.gz\` 하나뿐입니다.
 
           ### 오프라인 서버에서 로드
 
           \`\`\`bash
           gunzip -c ${asset} | docker load
+          docker image inspect relio:${image_tag}
           \`\`\`
 
-          Relio Application에 전달하는 환경변수는 \`POSTGRES_DSN\`, \`BOOTSTRAP_ADMIN\`, \`BOOTSTRAP_ADMIN_PASSWORD\` 세 개뿐입니다. \`/var/lib/relio\` Volume을 반드시 유지하세요.
+          ### 실행
+
+          \`\`\`bash
+          docker run -d \\
+            --name relio \\
+            -p 8080:8080 \\
+            -e POSTGRES_DSN="postgres://relio:password@postgres:5432/relio" \\
+            -e BOOTSTRAP_ADMIN="admin" \\
+            -e BOOTSTRAP_ADMIN_PASSWORD="ChangeMe-Immediately" \\
+            -v relio-data:/var/lib/relio \\
+            relio:${image_tag}
+          \`\`\`
+
+          Relio Application이 받는 환경변수는 \`POSTGRES_DSN\`, \`BOOTSTRAP_ADMIN\`, \`BOOTSTRAP_ADMIN_PASSWORD\` 세 개뿐입니다. Instance Master Key와 업로드 데이터를 보존하려면 \`/var/lib/relio\` Volume을 반드시 유지하세요.
+
+          ## 검증
+
+          Release 전에 Source Test, TypeScript Typecheck, Frontend Build, Go Vet, 환경변수 계약, 외부 정적 Asset 차단, 비 Root 실행, 완전 격리 Network 신규 설치 Smoke Test, 이전 Release 업그레이드 Test, Docker Save/Load 재검증을 통과합니다.
           EOF
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

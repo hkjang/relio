@@ -230,6 +230,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/organizations", s.requireAuth(http.HandlerFunc(s.createOrganization), false))
 	mux.Handle("GET /api/v1/admin/audit", s.requireAuth(http.HandlerFunc(s.adminAudit), false))
 	mux.Handle("GET /api/v1/admin/operations", s.requireAuth(http.HandlerFunc(s.adminOperations), false))
+	mux.Handle("GET /api/v1/admin/operations/support-bundle", s.requireAuth(http.HandlerFunc(s.adminSupportBundle), false))
 	mux.Handle("GET /api/v1/admin/custom-fields", s.requireAuth(http.HandlerFunc(s.customFields), false))
 	mux.Handle("POST /api/v1/admin/custom-fields", s.requireAuth(http.HandlerFunc(s.createCustomField), false))
 	mux.Handle("GET /api/v1/admin/pipelines", s.requireAuth(http.HandlerFunc(s.adminPipelines), false))

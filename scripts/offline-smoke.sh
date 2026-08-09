@@ -10,7 +10,8 @@ relio_url="${1%/}"
 relio_admin="$2"
 relio_initial_password="$3"
 relio_cookie_file="$(mktemp)"
-trap 'rm -f "$relio_cookie_file"' EXIT
+relio_support_file="$(mktemp)"
+trap 'rm -f "$relio_cookie_file" "$relio_support_file"' EXIT
 
 for attempt in $(seq 1 60); do
   if curl --fail --silent "$relio_url/health/ready" >/dev/null; then break; fi
@@ -59,6 +60,29 @@ curl --fail --silent --show-error -H "Authorization: Bearer $personal_key" \
   -H 'MCP-Protocol-Version: 2025-11-25' -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_customers","arguments":{"query":"Offline Verification"}}}' \
   "$relio_url/mcp" | jq -e '.result.isError == false' >/dev/null
+
+operations_body="$(curl --fail --silent --show-error -b "$relio_cookie_file" "$relio_url/api/v1/admin/operations")"
+printf '%s' "$operations_body" | jq -e '
+  .readinessScore >= 0 and .readinessScore <= 100 and
+  (.diagnostics | map(.key) | index("postgresql") != null) and
+  (.diagnostics | map(.key) | index("master-key") != null) and
+  (.features.api == true) and (.features.mcp == true) and
+  (.counts.activeUsers >= 1)' >/dev/null
+
+curl --fail --silent --show-error -b "$relio_cookie_file" \
+  "$relio_url/api/v1/admin/operations/support-bundle" > "$relio_support_file"
+jq -e '.product == "Relio" and .operations.application.version != null and (.operations.diagnostics | length) >= 10' "$relio_support_file" >/dev/null
+if grep -Fq "$relio_initial_password" "$relio_support_file"; then
+  echo "Bootstrap password leaked into support bundle" >&2
+  exit 1
+fi
+
+curl --fail --silent --show-error -b "$relio_cookie_file" \
+  "$relio_url/api/v1/admin/audit?channel=ADMIN&q=SUPPORT_BUNDLE&limit=10" \
+  | jq -e '.items | map(.action) | index("SUPPORT_BUNDLE_EXPORT") != null' >/dev/null
+
+curl --fail --silent --show-error "$relio_url/api/openapi.json" \
+  | jq -e '.paths["/admin/operations/support-bundle"].get != null' >/dev/null
 
 if curl --fail --silent "$relio_url/app/dashboard" | grep -Eiq "<(script|link|img)[^>]+(src|href)=['\"]https?://"; then
   echo "External static asset reference detected" >&2
