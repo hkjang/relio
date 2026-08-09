@@ -1,0 +1,479 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/hkjang/relio/internal/approval"
+	"github.com/hkjang/relio/internal/auth"
+	"github.com/hkjang/relio/internal/crm"
+	"github.com/hkjang/relio/internal/platform/httpx"
+	"github.com/hkjang/relio/internal/platform/ids"
+	"github.com/hkjang/relio/internal/platform/version"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+const ProtocolVersion = "2025-11-25"
+
+var supportedVersions = map[string]bool{"2025-11-25": true, "2025-06-18": true, "2025-03-26": true}
+
+type Server struct {
+	DB        *pgxpool.Pool
+	CRM       *crm.Service
+	Approvals *approval.Service
+}
+type request struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+type response struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
+}
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
+}
+type tool struct {
+	Name        string         `json:"name"`
+	Title       string         `json:"title,omitempty"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema"`
+	Annotations map[string]any `json:"annotations,omitempty"`
+}
+type toolCall struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+func schema(required []string, properties map[string]any) map[string]any {
+	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
+}
+func str(description string) map[string]any {
+	return map[string]any{"type": "string", "description": description}
+}
+func number(description string) map[string]any {
+	return map[string]any{"type": "number", "description": description}
+}
+func integer(description string) map[string]any {
+	return map[string]any{"type": "integer", "description": description}
+}
+
+func (s *Server) allowedOrigin(ctx context.Context, r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	var raw []byte
+	allowed := []string{}
+	if s.DB.QueryRow(ctx, `SELECT value FROM system_settings WHERE namespace='mcp' AND key='allowed_origins'`).Scan(&raw) == nil {
+		_ = json.Unmarshal(raw, &allowed)
+	}
+	var serviceRaw []byte
+	var serviceURL string
+	if s.DB.QueryRow(ctx, `SELECT value FROM system_settings WHERE namespace='system' AND key='service_url'`).Scan(&serviceRaw) == nil {
+		_ = json.Unmarshal(serviceRaw, &serviceURL)
+		if u, e := url.Parse(serviceURL); e == nil && u.Scheme != "" && u.Host != "" {
+			allowed = append(allowed, u.Scheme+"://"+u.Host)
+		}
+	}
+	for _, v := range allowed {
+		if strings.EqualFold(strings.TrimRight(v, "/"), strings.TrimRight(origin, "/")) {
+			return true
+		}
+	}
+	return false
+}
+func acceptsMCP(r *http.Request) bool {
+	a := r.Header.Get("Accept")
+	return strings.Contains(a, "application/json") && strings.Contains(a, "text/event-stream")
+}
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	p := auth.FromContext(r.Context())
+	success := false
+	method, toolName := "", ""
+	defer func() {
+		var key any
+		if p != nil && p.KeyDBID != "" {
+			key = p.KeyDBID
+		}
+		var actor any
+		if p != nil {
+			actor = p.UserID
+		}
+		_, _ = s.DB.Exec(context.Background(), `INSERT INTO mcp_request_logs(id,actor_id,key_id,method,tool_name,success,duration_ms,request_id,ip) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::inet)`, ids.New(), actor, key, method, nullValue(toolName), success, int(time.Since(start).Milliseconds()), httpx.RequestID(r.Context()), httpx.ClientIP(r))
+	}()
+	if p == nil || !p.ChannelAllowed("MCP") || !p.Has("mcp:use") {
+		httpx.ErrorJSON(w, r, http.StatusForbidden, "mcp_access_denied", "MCP 채널 및 mcp:use 권한이 필요합니다.", nil)
+		return
+	}
+	if !s.allowedOrigin(r.Context(), r) {
+		httpx.ErrorJSON(w, r, http.StatusForbidden, "invalid_origin", "허용되지 않은 MCP Origin입니다.", nil)
+		return
+	}
+	if r.Method == http.MethodGet {
+		w.Header().Set("Allow", "POST")
+		httpx.ErrorJSON(w, r, http.StatusMethodNotAllowed, "sse_not_supported", "이 서버는 서버 주도 SSE 스트림을 제공하지 않습니다.", nil)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		httpx.ErrorJSON(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST를 사용하세요.", nil)
+		return
+	}
+	if !acceptsMCP(r) {
+		httpx.ErrorJSON(w, r, http.StatusNotAcceptable, "accept_required", "Accept에 application/json과 text/event-stream을 모두 포함해야 합니다.", nil)
+		return
+	}
+	var req request
+	if !httpx.DecodeJSON(w, r, &req) {
+		return
+	}
+	method = req.Method
+	if req.JSONRPC != "2.0" || method == "" {
+		s.writeError(w, req.ID, -32600, "Invalid Request", nil)
+		return
+	}
+	if method != "initialize" {
+		v := r.Header.Get("MCP-Protocol-Version")
+		if v == "" {
+			v = "2025-03-26"
+		}
+		if !supportedVersions[v] {
+			httpx.ErrorJSON(w, r, http.StatusBadRequest, "unsupported_protocol", "지원하지 않는 MCP 프로토콜 버전입니다.", map[string]any{"supported": keys(supportedVersions)})
+			return
+		}
+	}
+	if len(req.ID) == 0 || string(req.ID) == "null" {
+		w.WriteHeader(http.StatusAccepted)
+		success = true
+		return
+	}
+	var result any
+	var err error
+	switch method {
+	case "initialize":
+		result = map[string]any{"protocolVersion": ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}, "resources": map[string]any{"subscribe": false, "listChanged": false}}, "serverInfo": map[string]any{"name": "Relio", "title": "Relio CRM MCP Server", "version": version.Current().Version}, "instructions": "Relio CRM data is filtered by the authenticated user's permissions, data scope, and key scopes."}
+	case "ping":
+		result = map[string]any{}
+	case "tools/list":
+		result = map[string]any{"tools": s.tools(r.Context(), p)}
+	case "tools/call":
+		var call toolCall
+		if e := json.Unmarshal(req.Params, &call); e != nil {
+			err = e
+		} else {
+			toolName = call.Name
+			result, err = s.callTool(r.Context(), p, call, r)
+		}
+	case "resources/list":
+		result = map[string]any{"resources": s.resources(p)}
+	case "resources/templates/list":
+		result = map[string]any{"resourceTemplates": s.templates(p)}
+	case "resources/read":
+		var params struct {
+			URI string `json:"uri"`
+		}
+		if e := json.Unmarshal(req.Params, &params); e != nil {
+			err = e
+		} else {
+			result, err = s.readResource(r.Context(), p, params.URI)
+		}
+	default:
+		s.writeError(w, req.ID, -32601, "Method not found", nil)
+		return
+	}
+	if err != nil {
+		s.writeError(w, req.ID, -32000, err.Error(), nil)
+		return
+	}
+	w.Header().Set("MCP-Protocol-Version", ProtocolVersion)
+	httpx.JSON(w, http.StatusOK, response{JSONRPC: "2.0", ID: req.ID, Result: result})
+	success = true
+}
+func nullValue(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+func keys(m map[string]bool) []string {
+	out := []string{}
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+func (s *Server) writeError(w http.ResponseWriter, id json.RawMessage, code int, message string, data any) {
+	httpx.JSON(w, http.StatusOK, response{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: message, Data: data}})
+}
+
+func (s *Server) approvalsEnabled(ctx context.Context) bool {
+	var enabled bool
+	_ = s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM approval_policies WHERE active=true)`).Scan(&enabled)
+	return enabled
+}
+
+func (s *Server) toolAllowed(ctx context.Context, name string) bool {
+	var raw []byte
+	if err := s.DB.QueryRow(ctx, `SELECT value FROM system_settings WHERE namespace='mcp' AND key='tool_allowlist'`).Scan(&raw); err != nil {
+		return true
+	}
+	var allowed []string
+	if err := json.Unmarshal(raw, &allowed); err != nil || len(allowed) == 0 {
+		return true
+	}
+	for _, item := range allowed {
+		if item == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
+	out := []tool{}
+	add := func(permission, name, title, description string, input map[string]any, readOnly, dangerous bool) {
+		if p.Has(permission) && s.toolAllowed(ctx, name) {
+			out = append(out, tool{Name: name, Title: title, Description: description, InputSchema: input, Annotations: map[string]any{"readOnlyHint": readOnly, "destructiveHint": dangerous, "idempotentHint": readOnly}})
+		}
+	}
+	qprops := map[string]any{"query": str("검색어"), "limit": integer("최대 결과 수")}
+	add("customer:read", "search_customers", "고객 검색", "이름 또는 사업자번호로 접근 가능한 고객을 검색합니다.", schema(nil, qprops), true, false)
+	add("customer:read", "get_customer", "고객 상세", "고객 기본 정보를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
+	add("customer:read", "get_customer_360", "Customer 360", "담당자, 영업기회, 활동, 계약, 누적매출을 함께 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
+	add("contact:read", "search_contacts", "담당자 검색", "고객 담당자를 검색합니다.", schema(nil, map[string]any{"query": str("검색어"), "customerId": str("고객 ID"), "limit": integer("최대 결과 수")}), true, false)
+	add("opportunity:read", "list_opportunities", "영업기회 조회", "접근 가능한 영업기회를 조회합니다.", schema(nil, map[string]any{"query": str("검색어"), "customerId": str("고객 ID"), "status": str("OPEN, WON, LOST"), "limit": integer("최대 결과 수")}), true, false)
+	add("opportunity:read", "get_opportunity", "영업기회 상세", "영업기회와 자동 Health 신호를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("영업기회 ID")}), true, false)
+	oppProps := map[string]any{"name": str("영업기회명"), "customerId": str("고객 ID"), "stageId": str("Stage ID"), "expectedAmount": number("예상 금액"), "expectedCloseDate": str("YYYY-MM-DD"), "nextAction": str("다음 행동"), "nextActionDate": str("YYYY-MM-DD")}
+	add("opportunity:write", "create_opportunity", "영업기회 생성", "새 영업기회를 생성합니다.", schema([]string{"name", "customerId"}, oppProps), false, false)
+	updateProps := map[string]any{"id": str("영업기회 ID"), "version": integer("낙관적 잠금 버전")}
+	for k, v := range oppProps {
+		updateProps[k] = v
+	}
+	add("opportunity:write", "update_opportunity", "영업기회 수정", "버전 검사를 적용해 영업기회를 수정합니다.", schema([]string{"id", "version"}, updateProps), false, false)
+	add("opportunity:write", "change_opportunity_stage", "Stage 변경", "영업기회의 Stage를 변경하고 이력을 남깁니다.", schema([]string{"id", "stageId", "version"}, map[string]any{"id": str("영업기회 ID"), "stageId": str("Stage ID"), "version": integer("현재 버전")}), false, false)
+	add("activity:write", "add_activity", "영업활동 등록", "통화, 미팅, 이메일 등 활동을 등록합니다.", schema([]string{"activityType", "subject"}, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "activityType": str("활동 유형"), "subject": str("제목"), "description": str("설명"), "nextAction": str("후속 행동"), "nextActionDate": str("YYYY-MM-DD")}), false, false)
+	add("activity:read", "list_activities", "활동 이력", "고객 또는 영업기회의 최근 활동을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "limit": integer("최대 결과 수")}), true, false)
+	add("opportunity:read", "get_pipeline", "Pipeline 조회", "설정된 Pipeline과 Stage를 조회합니다.", schema(nil, map[string]any{}), true, false)
+	add("forecast:read", "get_forecast", "Forecast 조회", "Commit, Best Case, Pipeline 금액을 조회합니다.", schema(nil, map[string]any{}), true, false)
+	add("sales:read", "get_sales_kpi", "영업 KPI", "매출, 목표 달성률과 Forecast를 조회합니다.", schema(nil, map[string]any{}), true, false)
+	add("activity:read", "get_due_actions", "후속활동 조회", "기한이 다가온 후속 작업을 조회합니다.", schema(nil, map[string]any{"days": integer("조회할 일수"), "limit": integer("최대 결과 수")}), true, false)
+	add("opportunity:read", "get_stale_opportunities", "장기 미활동 조회", "30일 이상 활동이 없는 영업기회를 조회합니다.", schema(nil, map[string]any{"limit": integer("최대 결과 수")}), true, false)
+	add("contract:read", "get_contracts", "계약 조회", "접근 가능한 계약을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "limit": integer("최대 결과 수")}), true, false)
+	add("contract:read", "get_expiring_contracts", "만료 계약 조회", "지정 기간 안에 만료되는 계약을 조회합니다.", schema(nil, map[string]any{"days": integer("만료까지의 일수"), "limit": integer("최대 결과 수")}), true, false)
+	add("contract:read", "get_renewal_pipeline", "갱신 영업 조회", "자동 갱신 또는 갱신 대상 계약을 조회합니다.", schema(nil, map[string]any{"days": integer("만료까지의 일수"), "limit": integer("최대 결과 수")}), true, false)
+	add("forecast:read", "get_win_loss_analysis", "성공·실패 분석", "기간별 Win/Loss 건수, 금액, 승률을 조회합니다.", schema(nil, map[string]any{"months": integer("분석 개월 수")}), true, false)
+	add("quotation:write", "create_quotation", "견적 생성", "고객 또는 영업기회에 견적 초안을 생성합니다.", schema([]string{"customerId", "title", "amount"}, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "title": str("견적 제목"), "amount": number("견적 금액"), "discountPercent": number("할인율"), "validUntil": str("YYYY-MM-DD")}), false, false)
+	if s.approvalsEnabled(ctx) {
+		add("approval:request", "submit_approval", "승인 요청", "적용되는 정책에 따라 팀장 승인을 요청합니다.", schema([]string{"entityType", "entityId"}, map[string]any{"entityType": str("OPPORTUNITY, QUOTATION, CONTRACT, CUSTOMER"), "entityId": str("대상 ID"), "reason": str("요청 사유")}), false, false)
+		add("approval:request", "get_approval_status", "승인 상태", "승인 요청 상태를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("승인 요청 ID")}), true, false)
+		add("approval:approve", "approve_request", "승인", "고위험 권한으로 승인 요청을 승인합니다.", schema([]string{"id", "version"}, map[string]any{"id": str("승인 요청 ID"), "version": integer("현재 버전"), "comment": str("검토 의견")}), false, true)
+		add("approval:approve", "reject_request", "반려", "고위험 권한으로 승인 요청을 반려합니다.", schema([]string{"id", "version", "comment"}, map[string]any{"id": str("승인 요청 ID"), "version": integer("현재 버전"), "comment": str("반려 사유")}), false, true)
+	}
+	return out
+}
+
+func decodeArgs(args map[string]any, target any) error {
+	b, err := json.Marshal(args)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, target)
+}
+func intArg(args map[string]any, key string, fallback int) int {
+	if v, ok := args[key].(float64); ok {
+		return int(v)
+	}
+	return fallback
+}
+func strArg(args map[string]any, key string) string { v, _ := args[key].(string); return v }
+func toolResult(v any) map[string]any {
+	b, _ := json.Marshal(v)
+	return map[string]any{"content": []map[string]any{{"type": "text", "text": string(b)}}, "structuredContent": v, "isError": false}
+}
+func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall, r *http.Request) (any, error) {
+	if !s.toolAllowed(ctx, call.Name) {
+		return nil, fmt.Errorf("MCP 도구가 관리자 정책에 의해 허용되지 않았습니다: %s", call.Name)
+	}
+	a := call.Arguments
+	meta := crm.RequestMeta{Channel: "MCP", IP: httpx.ClientIP(r), RequestID: httpx.RequestID(ctx), UserAgent: r.UserAgent()}
+	var v any
+	var err error
+	switch call.Name {
+	case "search_customers":
+		v, err = s.CRM.ListCustomers(ctx, p, strArg(a, "query"), "", "", intArg(a, "limit", 50))
+	case "get_customer":
+		v, err = s.CRM.GetCustomer(ctx, p, strArg(a, "id"))
+	case "get_customer_360":
+		v, err = s.CRM.Customer360(ctx, p, strArg(a, "id"))
+	case "search_contacts":
+		v, err = s.CRM.SearchContacts(ctx, p, strArg(a, "query"), strArg(a, "customerId"), intArg(a, "limit", 50))
+	case "list_opportunities":
+		v, err = s.CRM.ListOpportunities(ctx, p, crm.OpportunityFilter{Query: strArg(a, "query"), CustomerID: strArg(a, "customerId"), Status: strArg(a, "status"), Limit: intArg(a, "limit", 50)})
+	case "get_opportunity":
+		v, err = s.CRM.GetOpportunity(ctx, p, strArg(a, "id"))
+	case "create_opportunity":
+		var in crm.OpportunityInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.CreateOpportunity(ctx, p, in, meta)
+		}
+	case "update_opportunity":
+		var in crm.OpportunityInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.UpdateOpportunity(ctx, p, strArg(a, "id"), in, meta)
+		}
+	case "change_opportunity_stage":
+		v, err = s.CRM.ChangeOpportunityStage(ctx, p, strArg(a, "id"), strArg(a, "stageId"), intArg(a, "version", 0), meta)
+	case "add_activity":
+		var in crm.ActivityInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.AddActivity(ctx, p, in, meta)
+		}
+	case "list_activities":
+		v, err = s.CRM.ListActivities(ctx, p, strArg(a, "customerId"), strArg(a, "opportunityId"), intArg(a, "limit", 50))
+	case "get_pipeline":
+		v, err = s.CRM.Pipelines(ctx, p)
+	case "get_forecast":
+		v, err = s.CRM.Forecast(ctx, p)
+	case "get_sales_kpi":
+		v, err = s.CRM.SalesKPI(ctx, p)
+	case "get_due_actions":
+		v, err = s.CRM.DueActions(ctx, p, intArg(a, "days", 7), intArg(a, "limit", 50))
+	case "get_stale_opportunities":
+		v, err = s.CRM.ListOpportunities(ctx, p, crm.OpportunityFilter{StaleOnly: true, Limit: intArg(a, "limit", 50)})
+	case "get_contracts":
+		v, err = s.CRM.Contracts(ctx, p, strArg(a, "customerId"), 0, false, intArg(a, "limit", 50))
+	case "get_expiring_contracts":
+		v, err = s.CRM.Contracts(ctx, p, "", intArg(a, "days", 90), false, intArg(a, "limit", 50))
+	case "get_renewal_pipeline":
+		v, err = s.CRM.Contracts(ctx, p, "", intArg(a, "days", 180), true, intArg(a, "limit", 50))
+	case "get_win_loss_analysis":
+		v, err = s.CRM.WinLossAnalysis(ctx, p, intArg(a, "months", 12))
+	case "create_quotation":
+		var in crm.QuotationInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.CreateQuotation(ctx, p, in, meta)
+		}
+	case "submit_approval":
+		v, err = s.Approvals.Submit(ctx, p, strArg(a, "entityType"), strArg(a, "entityId"), strArg(a, "reason"), meta.IP, meta.RequestID, meta.UserAgent)
+	case "get_approval_status":
+		v, err = s.Approvals.Get(ctx, p, strArg(a, "id"))
+	case "approve_request":
+		v, err = s.Approvals.Decide(ctx, p, strArg(a, "id"), "APPROVE", strArg(a, "comment"), intArg(a, "version", 0), meta.IP, meta.RequestID, meta.UserAgent)
+	case "reject_request":
+		v, err = s.Approvals.Decide(ctx, p, strArg(a, "id"), "REJECT", strArg(a, "comment"), intArg(a, "version", 0), meta.IP, meta.RequestID, meta.UserAgent)
+	default:
+		return nil, errors.New("unknown or disallowed tool")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return toolResult(v), nil
+}
+
+func (s *Server) resources(p *auth.Principal) []map[string]any {
+	out := []map[string]any{}
+	add := func(permission, uri, name, description string) {
+		if p.Has(permission) {
+			out = append(out, map[string]any{"uri": uri, "name": name, "description": description, "mimeType": "application/json"})
+		}
+	}
+	add("opportunity:read", "relio://pipeline/me", "내 Pipeline", "내 데이터 범위의 Pipeline")
+	add("forecast:read", "relio://forecast/me", "내 Forecast", "내 데이터 범위의 Forecast")
+	add("activity:read", "relio://activities/today", "오늘 활동", "오늘의 영업활동")
+	add("activity:read", "relio://actions/due", "기한 도래 작업", "7일 내 후속 작업")
+	add("contract:read", "relio://contracts/expiring", "만료 계약", "90일 내 만료 계약")
+	return out
+}
+func (s *Server) templates(p *auth.Principal) []map[string]any {
+	out := []map[string]any{}
+	add := func(permission, uri, name, description string) {
+		if p.Has(permission) {
+			out = append(out, map[string]any{"uriTemplate": uri, "name": name, "description": description, "mimeType": "application/json"})
+		}
+	}
+	add("customer:read", "relio://customers/{id}", "고객", "고객 상세")
+	add("customer:read", "relio://customers/{id}/360", "Customer 360", "고객 통합 정보")
+	add("contact:read", "relio://contacts/{id}", "담당자", "고객 담당자")
+	add("opportunity:read", "relio://opportunities/{id}", "영업기회", "영업기회 상세")
+	add("contract:read", "relio://contracts/{id}", "계약", "계약 상세")
+	return out
+}
+func resourceResult(uri string, v any) map[string]any {
+	b, _ := json.Marshal(v)
+	return map[string]any{"contents": []map[string]any{{"uri": uri, "mimeType": "application/json", "text": string(b)}}}
+}
+func (s *Server) readResource(ctx context.Context, p *auth.Principal, uri string) (any, error) {
+	switch uri {
+	case "relio://pipeline/me", "relio://pipeline/team":
+		v, e := s.CRM.Pipelines(ctx, p)
+		return resourceResult(uri, v), e
+	case "relio://forecast/me", "relio://forecast/team":
+		v, e := s.CRM.Forecast(ctx, p)
+		return resourceResult(uri, v), e
+	case "relio://activities/today":
+		v, e := s.CRM.ListActivities(ctx, p, "", "", 100)
+		return resourceResult(uri, v), e
+	case "relio://actions/due":
+		v, e := s.CRM.DueActions(ctx, p, 7, 100)
+		return resourceResult(uri, v), e
+	case "relio://contracts/expiring":
+		v, e := s.CRM.Contracts(ctx, p, "", 90, false, 100)
+		return resourceResult(uri, v), e
+	}
+	parts := strings.Split(strings.TrimPrefix(uri, "relio://"), "/")
+	if len(parts) >= 2 {
+		switch parts[0] {
+		case "customers":
+			if len(parts) == 3 && parts[2] == "360" {
+				v, e := s.CRM.Customer360(ctx, p, parts[1])
+				return resourceResult(uri, v), e
+			}
+			v, e := s.CRM.GetCustomer(ctx, p, parts[1])
+			return resourceResult(uri, v), e
+		case "opportunities":
+			v, e := s.CRM.GetOpportunity(ctx, p, parts[1])
+			return resourceResult(uri, v), e
+		case "contracts":
+			items, e := s.CRM.Contracts(ctx, p, "", 0, false, 200)
+			if e != nil {
+				return nil, e
+			}
+			for _, v := range items {
+				if fmt.Sprint(v["id"]) == parts[1] {
+					return resourceResult(uri, v), nil
+				}
+			}
+			return nil, errors.New("contract not found")
+		case "contacts":
+			items, e := s.CRM.SearchContacts(ctx, p, "", "", 200)
+			if e != nil {
+				return nil, e
+			}
+			for _, v := range items {
+				if v.ID == parts[1] {
+					return resourceResult(uri, v), nil
+				}
+			}
+			return nil, errors.New("contact not found")
+		}
+	}
+	return nil, errors.New("resource not found")
+}

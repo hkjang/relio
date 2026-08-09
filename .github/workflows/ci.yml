@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Backend tests
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Backend static analysis
+        run: go vet ./...
+      - name: Frontend install
+        working-directory: web
+        run: npm ci
+      - name: Frontend security audit
+        working-directory: web
+        run: npm audit --audit-level=high
+      - name: Frontend typecheck and build
+        working-directory: web
+        run: npm run typecheck && npm run build
+      - name: Enforce three application environment variables
+        run: ./scripts/check-env-contract.sh
+      - name: Verify no external runtime asset
+        run: ./scripts/check-static-assets.sh
+
+  offline-image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build single runtime image
+        run: docker build --build-arg VERSION=ci --build-arg GIT_COMMIT="${GITHUB_SHA::8}" --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" -t relio:ci .
+      - name: Verify non-root and embedded healthcheck
+        run: |
+          test "$(docker image inspect relio:ci --format '{{.Config.User}}')" = "10001:10001"
+          docker image inspect relio:ci --format '{{json .Config.Healthcheck.Test}}' | grep -q healthcheck
+      - name: Offline runtime smoke test
+        run: ./scripts/run-offline-container-test.sh relio:ci

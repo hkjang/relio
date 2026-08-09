@@ -1,0 +1,14 @@
+.DS_Store
+.idea/
+.vscode/
+*.log
+__pycache__/
+*.pyc
+coverage.out
+relio
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+dist/
+.env
+*.tar.gz
