@@ -22,10 +22,6 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Backend tests
-        run: go test -race -coverprofile=coverage.out ./...
-      - name: Backend static analysis
-        run: go vet ./...
       - name: Frontend install
         working-directory: web
         run: npm ci
@@ -35,6 +31,10 @@ jobs:
       - name: Frontend typecheck and build
         working-directory: web
         run: npm run typecheck && npm run build
+      - name: Backend tests
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Backend static analysis
+        run: go vet ./...
       - name: Enforce three application environment variables
         run: ./scripts/check-env-contract.sh
       - name: Verify no external runtime asset
