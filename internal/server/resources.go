@@ -58,7 +58,68 @@ func (s *Server) createContract(w http.ResponseWriter, r *http.Request) {
 		s.serviceError(w, r, err)
 		return
 	}
+	w.Header().Set("Location", "/api/v1/contracts/"+v.ID)
 	httpx.JSON(w, 201, v)
+}
+func (s *Server) getContract(w http.ResponseWriter, r *http.Request) {
+	v, err := s.CRM.GetContract(r.Context(), principal(r), r.PathValue("id"))
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	httpx.JSON(w, 200, v)
+}
+func (s *Server) activateContract(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Version int `json:"version"`
+	}
+	if !httpx.DecodeJSON(w, r, &in) {
+		return
+	}
+	v, err := s.CRM.ActivateContract(r.Context(), principal(r), r.PathValue("id"), in.Version, s.meta(r))
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	httpx.JSON(w, 200, v)
+}
+func (s *Server) revenueSchedule(w http.ResponseWriter, r *http.Request) {
+	v, err := s.CRM.ListRevenueSchedules(r.Context(), principal(r), r.PathValue("id"))
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	httpx.JSON(w, 200, map[string]any{"items": v})
+}
+func (s *Server) recognizeRevenue(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		RecognizedDate string `json:"recognizedDate"`
+	}
+	if !httpx.DecodeJSON(w, r, &in) {
+		return
+	}
+	v, err := s.CRM.RecognizeRevenueSchedule(r.Context(), principal(r), r.PathValue("id"), in.RecognizedDate, s.meta(r))
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	httpx.JSON(w, 200, v)
+}
+func (s *Server) updateContractRenewal(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Status  string `json:"renewalStatus"`
+		Action  string `json:"renewalAction"`
+		Version int    `json:"version"`
+	}
+	if !httpx.DecodeJSON(w, r, &in) {
+		return
+	}
+	v, err := s.CRM.UpdateContractRenewal(r.Context(), principal(r), r.PathValue("id"), in.Status, in.Action, in.Version, s.meta(r))
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	httpx.JSON(w, 200, v)
 }
 func (s *Server) listSales(w http.ResponseWriter, r *http.Request) {
 	v, err := s.CRM.ListSales(r.Context(), principal(r), httpx.IntQuery(r, "limit", 100, 1, 500))

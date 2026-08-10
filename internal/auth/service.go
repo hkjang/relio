@@ -263,8 +263,15 @@ func (s *Service) authenticateKey(ctx context.Context, raw, ip string) (*Princip
 	return p, nil
 }
 
+func newPrincipal(userID string) *Principal {
+	return &Principal{UserID: userID, perm: map[string]bool{}, Permissions: []string{}, DataScope: "USER"}
+}
+
 func (s *Service) loadPrincipal(ctx context.Context, userID string) (*Principal, error) {
-	p := &Principal{UserID: userID, perm: map[string]bool{}, DataScope: "USER"}
+	// Keep collection fields non-nil. OIDC users can legitimately be provisioned
+	// before a default/mapped role is assigned; JSON null would make clients that
+	// apply permission checks with Array.includes fail during initial render.
+	p := newPrincipal(userID)
 	var email, org, manager *string
 	err := s.DB.QueryRow(ctx, `SELECT username,display_name,email,organization_id,manager_id,is_bootstrap,must_change_password FROM users WHERE id=$1 AND active=true`, userID).Scan(&p.Username, &p.DisplayName, &email, &org, &manager, &p.IsBootstrap, &p.MustChangePassword)
 	if err != nil {

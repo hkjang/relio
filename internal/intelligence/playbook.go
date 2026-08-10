@@ -103,7 +103,7 @@ func opportunityField(opp crm.Opportunity, key string) any {
 	case "customerId", "customer_id":
 		return opp.CustomerID
 	case "expectedAmount", "expected_amount":
-		return opp.ExpectedAmount
+		return opp.BaseExpectedAmount
 	case "expectedCloseDate", "expected_close_date":
 		return opp.ExpectedCloseDate
 	case "nextAction", "next_action":

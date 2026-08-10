@@ -149,9 +149,40 @@ next_stage_id = stages[1]["id"]
 opportunity = request(
     "/api/v1/opportunities",
     "POST",
-    {"name": "Offline Verification Deal", "customerId": customer["id"], "stageId": stage_id, "expectedAmount": 100000000, "customFields": {}},
+    {"name": "Offline Verification Deal", "customerId": customer["id"], "stageId": stage_id, "expectedAmount": 100000, "currencyCode": "USD", "exchangeRate": 1000, "customFields": {}},
     csrf_header,
 )
+assert opportunity["currencyCode"] == "USD" and opportunity["baseExpectedAmount"] == 100000000
+forecast = request("/api/v1/forecasts")
+usd = next(item for item in forecast["currencies"] if item["currencyCode"] == "USD")
+assert usd["nativeAmount"] >= 100000 and usd["baseAmount"] >= 100000000
+contract = request(
+    "/api/v1/contracts",
+    "POST",
+    {"customerId": customer["id"], "opportunityId": opportunity["id"], "title": "Offline Multi-Currency Subscription", "amount": 1200, "currencyCode": "USD", "exchangeRate": 1000, "startDate": f"{plan_year}-01-31", "endDate": f"{plan_year}-04-30", "status": "DRAFT", "autoRenew": True, "revenueScheduleType": "MONTHLY", "renewalNoticeDays": 90, "renewalAction": "Run renewal QBR", "customFields": {}},
+    csrf_header,
+)
+assert contract["status"] == "DRAFT" and contract["baseAmount"] == 1200000
+contract = request(
+    f"/api/v1/contracts/{contract['id']}/activate",
+    "POST",
+    {"version": contract["version"]},
+    csrf_header,
+)
+assert contract["status"] == "ACTIVE" and contract["activatedAt"]
+revenue_schedule = request(f"/api/v1/contracts/{contract['id']}/revenue-schedule")["items"]
+assert len(revenue_schedule) == 4
+assert round(sum(item["amount"] for item in revenue_schedule), 2) == 1200
+recognized = request(
+    f"/api/v1/revenue-schedules/{revenue_schedule[0]['id']}/recognize",
+    "POST",
+    {"recognizedDate": f"{plan_year}-01-31"},
+    csrf_header,
+)
+assert recognized["status"] == "RECOGNIZED" and recognized["recognizedSaleId"]
+contracts = request("/api/v1/contracts?limit=100")["items"]
+created_contract = next(item for item in contracts if item["id"] == contract["id"])
+assert created_contract["scheduleCount"] == 4 and created_contract["recognizedCount"] == 1
 collaborator = request(
     "/api/v1/admin/users",
     "POST",

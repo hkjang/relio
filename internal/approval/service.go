@@ -147,7 +147,7 @@ func (s *Service) snapshot(ctx context.Context, entity, id string) (map[string]a
 	var raw []byte
 	switch entity {
 	case "OPPORTUNITY":
-		err := s.DB.QueryRow(ctx, `SELECT jsonb_build_object('id',id,'name',name,'expected_amount',expected_amount,'status',status,'stage_id',stage_id,'owner_id',owner_id,'customer_id',customer_id) FROM opportunities WHERE id=$1`, id).Scan(&raw)
+		err := s.DB.QueryRow(ctx, `SELECT jsonb_build_object('id',id,'name',name,'expected_amount',base_expected_amount,'transaction_amount',expected_amount,'currency_code',currency_code,'exchange_rate',exchange_rate,'status',status,'stage_id',stage_id,'owner_id',owner_id,'customer_id',customer_id) FROM opportunities WHERE id=$1`, id).Scan(&raw)
 		if err != nil {
 			return nil, err
 		}

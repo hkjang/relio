@@ -86,35 +86,39 @@ type Pipeline struct {
 }
 
 type Opportunity struct {
-	ID                string         `json:"id"`
-	Name              string         `json:"name"`
-	CustomerID        string         `json:"customerId"`
-	CustomerName      string         `json:"customerName"`
-	OwnerID           string         `json:"ownerId"`
-	OwnerName         string         `json:"ownerName"`
-	OrganizationID    string         `json:"organizationId,omitempty"`
-	PipelineID        string         `json:"pipelineId"`
-	StageID           string         `json:"stageId"`
-	StageName         string         `json:"stageName"`
-	StageColor        string         `json:"stageColor"`
-	ExpectedAmount    float64        `json:"expectedAmount"`
-	Probability       float64        `json:"probability"`
-	WeightedAmount    float64        `json:"weightedAmount"`
-	ExpectedCloseDate *time.Time     `json:"expectedCloseDate,omitempty"`
-	ForecastCategory  string         `json:"forecastCategory"`
-	Competitor        string         `json:"competitor,omitempty"`
-	NextAction        string         `json:"nextAction,omitempty"`
-	NextActionDate    *time.Time     `json:"nextActionDate,omitempty"`
-	Status            string         `json:"status"`
-	LostReason        string         `json:"lostReason,omitempty"`
-	WinReason         string         `json:"winReason,omitempty"`
-	StageEnteredAt    time.Time      `json:"stageEnteredAt"`
-	LastActivityAt    *time.Time     `json:"lastActivityAt,omitempty"`
-	Health            []string       `json:"health"`
-	CustomFields      map[string]any `json:"customFields"`
-	Version           int            `json:"version"`
-	CreatedAt         time.Time      `json:"createdAt"`
-	UpdatedAt         time.Time      `json:"updatedAt"`
+	ID                 string         `json:"id"`
+	Name               string         `json:"name"`
+	CustomerID         string         `json:"customerId"`
+	CustomerName       string         `json:"customerName"`
+	OwnerID            string         `json:"ownerId"`
+	OwnerName          string         `json:"ownerName"`
+	OrganizationID     string         `json:"organizationId,omitempty"`
+	PipelineID         string         `json:"pipelineId"`
+	StageID            string         `json:"stageId"`
+	StageName          string         `json:"stageName"`
+	StageColor         string         `json:"stageColor"`
+	ExpectedAmount     float64        `json:"expectedAmount"`
+	CurrencyCode       string         `json:"currencyCode"`
+	ExchangeRate       float64        `json:"exchangeRate"`
+	BaseExpectedAmount float64        `json:"baseExpectedAmount"`
+	Probability        float64        `json:"probability"`
+	WeightedAmount     float64        `json:"weightedAmount"`
+	BaseWeightedAmount float64        `json:"baseWeightedAmount"`
+	ExpectedCloseDate  *time.Time     `json:"expectedCloseDate,omitempty"`
+	ForecastCategory   string         `json:"forecastCategory"`
+	Competitor         string         `json:"competitor,omitempty"`
+	NextAction         string         `json:"nextAction,omitempty"`
+	NextActionDate     *time.Time     `json:"nextActionDate,omitempty"`
+	Status             string         `json:"status"`
+	LostReason         string         `json:"lostReason,omitempty"`
+	WinReason          string         `json:"winReason,omitempty"`
+	StageEnteredAt     time.Time      `json:"stageEnteredAt"`
+	LastActivityAt     *time.Time     `json:"lastActivityAt,omitempty"`
+	Health             []string       `json:"health"`
+	CustomFields       map[string]any `json:"customFields"`
+	Version            int            `json:"version"`
+	CreatedAt          time.Time      `json:"createdAt"`
+	UpdatedAt          time.Time      `json:"updatedAt"`
 }
 type OpportunityInput struct {
 	Name              string         `json:"name"`
@@ -123,6 +127,8 @@ type OpportunityInput struct {
 	PipelineID        string         `json:"pipelineId"`
 	StageID           string         `json:"stageId"`
 	ExpectedAmount    float64        `json:"expectedAmount"`
+	CurrencyCode      string         `json:"currencyCode"`
+	ExchangeRate      *float64       `json:"exchangeRate"`
 	Probability       *float64       `json:"probability"`
 	ExpectedCloseDate *string        `json:"expectedCloseDate"`
 	ForecastCategory  string         `json:"forecastCategory"`

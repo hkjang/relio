@@ -118,59 +118,14 @@ func (s *Service) CreateProduct(ctx context.Context, p *auth.Principal, in Produ
 	return out, nil
 }
 
-type ContractInput struct {
-	ContractNo    string         `json:"contractNo"`
-	CustomerID    string         `json:"customerId"`
-	OpportunityID string         `json:"opportunityId"`
-	Title         string         `json:"title"`
-	Amount        float64        `json:"amount"`
-	StartDate     *string        `json:"startDate"`
-	EndDate       *string        `json:"endDate"`
-	Status        string         `json:"status"`
-	AutoRenew     bool           `json:"autoRenew"`
-	CustomFields  map[string]any `json:"customFields"`
-}
-
-func (s *Service) CreateContract(ctx context.Context, p *auth.Principal, in ContractInput, m RequestMeta) (map[string]any, error) {
-	if err := auth.Require(p, "contract:write"); err != nil {
-		return nil, err
-	}
-	if in.CustomerID == "" || in.Title == "" || in.Amount < 0 {
-		return nil, errors.New("customerId, title and valid amount are required")
-	}
-	if _, err := s.GetCustomer(ctx, p, in.CustomerID); err != nil {
-		return nil, errors.New("customer not found or inaccessible")
-	}
-	start, err := dateValue(in.StartDate)
-	if err != nil {
-		return nil, err
-	}
-	end, err := dateValue(in.EndDate)
-	if err != nil {
-		return nil, err
-	}
-	if in.ContractNo == "" {
-		in.ContractNo = "C-" + time.Now().Format("20060102") + "-" + strings.ToUpper(ids.HexToken(3))
-	}
-	if in.Status == "" {
-		in.Status = "DRAFT"
-	}
-	id := ids.New()
-	_, err = s.DB.Exec(ctx, `INSERT INTO contracts(id,contract_no,customer_id,opportunity_id,owner_id,organization_id,title,amount,start_date,end_date,status,auto_renew,custom_fields,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$5,$5)`, id, in.ContractNo, in.CustomerID, nullable(in.OpportunityID), p.UserID, nullable(p.OrganizationID), in.Title, in.Amount, start, end, strings.ToUpper(in.Status), in.AutoRenew, jsonValue(in.CustomFields))
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]any{"id": id, "contractNo": in.ContractNo, "customerId": in.CustomerID, "title": in.Title, "amount": in.Amount, "startDate": start, "endDate": end, "status": strings.ToUpper(in.Status), "autoRenew": in.AutoRenew, "version": 1}
-	s.audit(ctx, p, m, "CREATE", "contract", id, nil, out)
-	return out, nil
-}
-
 type SaleInput struct {
-	CustomerID     string  `json:"customerId"`
-	ContractID     string  `json:"contractId"`
-	Amount         float64 `json:"amount"`
-	RecognizedDate string  `json:"recognizedDate"`
-	Description    string  `json:"description"`
+	CustomerID     string   `json:"customerId"`
+	ContractID     string   `json:"contractId"`
+	Amount         float64  `json:"amount"`
+	CurrencyCode   string   `json:"currencyCode"`
+	ExchangeRate   *float64 `json:"exchangeRate"`
+	RecognizedDate string   `json:"recognizedDate"`
+	Description    string   `json:"description"`
 }
 
 func (s *Service) ListSales(ctx context.Context, p *auth.Principal, limit int) ([]map[string]any, error) {
@@ -180,21 +135,21 @@ func (s *Service) ListSales(ctx context.Context, p *auth.Principal, limit int) (
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.DB.Query(ctx, `SELECT s.id,s.customer_id,c.name,s.contract_id,s.amount,s.recognized_date,COALESCE(s.description,''),s.owner_id,s.created_at FROM sales s JOIN customers c ON c.id=s.customer_id WHERE `+scopeSQL("s")+` ORDER BY s.recognized_date DESC LIMIT $4`, p.DataScope, p.UserID, nullable(p.OrganizationID), limit)
+	rows, err := s.DB.Query(ctx, `SELECT s.id,s.customer_id,c.name,s.contract_id,s.amount,s.currency_code,s.exchange_rate,s.base_amount,s.recognized_date,COALESCE(s.description,''),s.owner_id,s.created_at FROM sales s JOIN customers c ON c.id=s.customer_id WHERE `+scopeSQL("s")+` ORDER BY s.recognized_date DESC LIMIT $4`, p.DataScope, p.UserID, nullable(p.OrganizationID), limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var id, cid, cname, description, owner string
+		var id, cid, cname, currency, description, owner string
 		var contract *string
-		var amount float64
+		var amount, rate, base float64
 		var recognized, created time.Time
-		if err = rows.Scan(&id, &cid, &cname, &contract, &amount, &recognized, &description, &owner, &created); err != nil {
+		if err = rows.Scan(&id, &cid, &cname, &contract, &amount, &currency, &rate, &base, &recognized, &description, &owner, &created); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"id": id, "customerId": cid, "customerName": cname, "contractId": contract, "amount": amount, "recognizedDate": recognized, "description": description, "ownerId": owner, "createdAt": created})
+		out = append(out, map[string]any{"id": id, "customerId": cid, "customerName": cname, "contractId": contract, "amount": amount, "currencyCode": currency, "exchangeRate": rate, "baseAmount": base, "recognizedDate": recognized, "description": description, "ownerId": owner, "createdAt": created})
 	}
 	return out, rows.Err()
 }
@@ -212,12 +167,25 @@ func (s *Service) CreateSale(ctx context.Context, p *auth.Principal, in SaleInpu
 	if _, err = s.GetCustomer(ctx, p, in.CustomerID); err != nil {
 		return nil, errors.New("customer not found or inaccessible")
 	}
+	currency := strings.ToUpper(strings.TrimSpace(in.CurrencyCode))
+	if currency == "" {
+		currency = baseCurrencyCode
+	}
+	rate := 1.0
+	if in.ExchangeRate != nil {
+		rate = *in.ExchangeRate
+	} else if currency != baseCurrencyCode {
+		return nil, errors.New("exchangeRate is required for non-KRW sales")
+	}
+	if err = validateCurrency(currency, rate); err != nil {
+		return nil, err
+	}
 	id := ids.New()
-	_, err = s.DB.Exec(ctx, `INSERT INTO sales(id,customer_id,contract_id,owner_id,organization_id,amount,recognized_date,description,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$4)`, id, in.CustomerID, nullable(in.ContractID), p.UserID, nullable(p.OrganizationID), in.Amount, recognized, nullable(in.Description))
+	_, err = s.DB.Exec(ctx, `INSERT INTO sales(id,customer_id,contract_id,owner_id,organization_id,amount,currency_code,exchange_rate,recognized_date,description,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$4)`, id, in.CustomerID, nullable(in.ContractID), p.UserID, nullable(p.OrganizationID), in.Amount, currency, rate, recognized, nullable(in.Description))
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{"id": id, "customerId": in.CustomerID, "amount": in.Amount, "recognizedDate": recognized}
+	out := map[string]any{"id": id, "customerId": in.CustomerID, "amount": in.Amount, "currencyCode": currency, "exchangeRate": rate, "baseAmount": in.Amount * rate, "recognizedDate": recognized}
 	s.audit(ctx, p, m, "CREATE", "sale", id, nil, out)
 	return out, nil
 }

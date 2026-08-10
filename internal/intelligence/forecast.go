@@ -49,7 +49,7 @@ func (s *Service) CaptureForecastSnapshots(ctx context.Context) error {
 	for _, owner := range owners {
 		var pipeline, weighted, commit, bestCase float64
 		var open int
-		if err = s.DB.QueryRow(ctx, `SELECT COALESCE(sum(expected_amount) FILTER(WHERE status='OPEN'),0),COALESCE(sum(weighted_amount) FILTER(WHERE status='OPEN'),0),COALESCE(sum(expected_amount) FILTER(WHERE status='OPEN' AND forecast_category='COMMIT'),0),COALESCE(sum(expected_amount) FILTER(WHERE status='OPEN' AND forecast_category='BEST_CASE'),0),count(*) FILTER(WHERE status='OPEN') FROM opportunities WHERE owner_id=$1`, owner.id).Scan(&pipeline, &weighted, &commit, &bestCase, &open); err != nil {
+		if err = s.DB.QueryRow(ctx, `SELECT COALESCE(sum(base_expected_amount) FILTER(WHERE status='OPEN'),0),COALESCE(sum(base_weighted_amount) FILTER(WHERE status='OPEN'),0),COALESCE(sum(base_expected_amount) FILTER(WHERE status='OPEN' AND forecast_category='COMMIT'),0),COALESCE(sum(base_expected_amount) FILTER(WHERE status='OPEN' AND forecast_category='BEST_CASE'),0),count(*) FILTER(WHERE status='OPEN') FROM opportunities WHERE owner_id=$1`, owner.id).Scan(&pipeline, &weighted, &commit, &bestCase, &open); err != nil {
 			return err
 		}
 		metrics := map[string]any{"pipeline": pipeline, "weighted": weighted, "commit": commit, "bestCase": bestCase, "openDeals": open}
@@ -61,7 +61,7 @@ func (s *Service) CaptureForecastSnapshots(ctx context.Context) error {
 		if _, err = s.DB.Exec(ctx, `DELETE FROM forecast_snapshot_items WHERE snapshot_id=$1`, snapshotID); err != nil {
 			return err
 		}
-		_, err = s.DB.Exec(ctx, `INSERT INTO forecast_snapshot_items(snapshot_id,opportunity_id,owner_id,organization_id,forecast_category,status,stage_id,stage_name,expected_amount,weighted_amount,probability,expected_close_date) SELECT $1,o.id,o.owner_id,o.organization_id,o.forecast_category,o.status,o.stage_id,s.name,o.expected_amount,o.weighted_amount,o.probability,o.expected_close_date FROM opportunities o JOIN pipeline_stages s ON s.id=o.stage_id WHERE o.owner_id=$2`, snapshotID, owner.id)
+		_, err = s.DB.Exec(ctx, `INSERT INTO forecast_snapshot_items(snapshot_id,opportunity_id,owner_id,organization_id,forecast_category,status,stage_id,stage_name,expected_amount,weighted_amount,probability,expected_close_date) SELECT $1,o.id,o.owner_id,o.organization_id,o.forecast_category,o.status,o.stage_id,s.name,o.base_expected_amount,o.base_weighted_amount,o.probability,o.expected_close_date FROM opportunities o JOIN pipeline_stages s ON s.id=o.stage_id WHERE o.owner_id=$2`, snapshotID, owner.id)
 		if err != nil {
 			return err
 		}
@@ -178,7 +178,7 @@ func (s *Service) ForecastIntelligence(ctx context.Context, p *auth.Principal, d
 		}
 	}
 	out.ChangeAmount = out.CurrentAmount - out.PreviousAmount
-	query := `SELECT COALESCE(sum(CASE WHEN COALESCE(ov.forecast_category,o.forecast_category)='COMMIT' THEN COALESCE(ov.amount,o.expected_amount) ELSE 0 END),0) FROM opportunities o LEFT JOIN LATERAL (SELECT forecast_category,amount FROM forecast_overrides f WHERE f.opportunity_id=o.id AND f.active=true ORDER BY f.updated_at DESC LIMIT 1) ov ON true WHERE o.status='OPEN' AND ` + crm.ScopeSQL("o")
+	query := `SELECT COALESCE(sum(CASE WHEN COALESCE(ov.forecast_category,o.forecast_category)='COMMIT' THEN COALESCE(ov.amount,o.base_expected_amount) ELSE 0 END),0) FROM opportunities o LEFT JOIN LATERAL (SELECT forecast_category,amount FROM forecast_overrides f WHERE f.opportunity_id=o.id AND f.active=true ORDER BY f.updated_at DESC LIMIT 1) ov ON true WHERE o.status='OPEN' AND ` + crm.ScopeSQL("o")
 	if err = s.DB.QueryRow(ctx, query, p.DataScope, p.UserID, func() any {
 		if p.OrganizationID == "" {
 			return nil
@@ -271,8 +271,8 @@ func (s *Service) Coaching(ctx context.Context, p *auth.Principal) (CoachingDash
 			owners[opp.OwnerID] = a
 		}
 		a.item.OpenDeals++
-		a.item.Pipeline += opp.ExpectedAmount
-		a.item.Weighted += opp.WeightedAmount
+		a.item.Pipeline += opp.BaseExpectedAmount
+		a.item.Weighted += opp.BaseWeightedAmount
 		a.healthTotal += health.HealthScore
 		if health.RiskScore >= threshold {
 			a.item.AtRiskDeals++

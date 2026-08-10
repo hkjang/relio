@@ -366,7 +366,7 @@ func (s *Service) Customer360(ctx context.Context, p *auth.Principal, id string)
 		return out, err
 	}
 	var cumulative float64
-	_ = s.DB.QueryRow(ctx, `SELECT COALESCE(sum(amount),0) FROM sales WHERE customer_id=$1`, id).Scan(&cumulative)
+	_ = s.DB.QueryRow(ctx, `SELECT COALESCE(sum(base_amount),0) FROM sales WHERE customer_id=$1`, id).Scan(&cumulative)
 	for rows.Next() {
 		var cid, no, title, status string
 		var amount float64
@@ -382,7 +382,7 @@ func (s *Service) Customer360(ctx context.Context, p *auth.Principal, id string)
 	openAmount := 0.0
 	for _, o := range out.Opportunities {
 		if o.Status == "OPEN" {
-			openAmount += o.ExpectedAmount
+			openAmount += o.BaseExpectedAmount
 		}
 	}
 	out.Metrics = map[string]any{"cumulativeRevenue": cumulative, "openPipeline": openAmount, "opportunityCount": len(out.Opportunities), "contactCount": len(out.Contacts), "lastActivityAt": func() any {
@@ -395,9 +395,9 @@ func (s *Service) Customer360(ctx context.Context, p *auth.Principal, id string)
 }
 
 type OpportunityFilter struct {
-	Query, CustomerID, Status, StageID, Cursor, Sort string
-	Limit                                            int
-	StaleOnly                                        bool
+	Query, CustomerID, Status, StageID, ForecastCategory, Cursor, Sort string
+	Limit                                                              int
+	StaleOnly                                                          bool
 }
 
 func (s *Service) ListOpportunities(ctx context.Context, p *auth.Principal, f OpportunityFilter) (Page[Opportunity], error) {
@@ -408,13 +408,13 @@ func (s *Service) ListOpportunities(ctx context.Context, p *auth.Principal, f Op
 		f.Limit = 50
 	}
 	offset := pageOffset(f.Cursor)
-	orders := map[string]string{"name": "o.name ASC,o.id", "-name": "o.name DESC,o.id", "expectedAmount": "o.expected_amount ASC,o.id", "-expectedAmount": "o.expected_amount DESC,o.id", "probability": "o.probability ASC,o.id", "-probability": "o.probability DESC,o.id", "expectedCloseDate": "o.expected_close_date ASC NULLS LAST,o.id", "-expectedCloseDate": "o.expected_close_date DESC NULLS LAST,o.id", "updatedAt": "o.updated_at ASC,o.id", "-updatedAt": "o.updated_at DESC,o.id"}
+	orders := map[string]string{"name": "o.name ASC,o.id", "-name": "o.name DESC,o.id", "expectedAmount": "o.base_expected_amount ASC,o.id", "-expectedAmount": "o.base_expected_amount DESC,o.id", "probability": "o.probability ASC,o.id", "-probability": "o.probability DESC,o.id", "expectedCloseDate": "o.expected_close_date ASC NULLS LAST,o.id", "-expectedCloseDate": "o.expected_close_date DESC NULLS LAST,o.id", "updatedAt": "o.updated_at ASC,o.id", "-updatedAt": "o.updated_at DESC,o.id"}
 	order := orders[f.Sort]
 	if order == "" {
 		order = "o.updated_at DESC,o.id"
 	}
-	query := `SELECT o.id,o.name,o.customer_id,c.name,o.owner_id,u.display_name,COALESCE(o.organization_id::text,''),o.pipeline_id,o.stage_id,ps.name,ps.color,o.expected_amount,o.probability,o.weighted_amount,o.expected_close_date,o.forecast_category,COALESCE(o.competitor,''),COALESCE(o.next_action,''),o.next_action_date,o.status,COALESCE(o.lost_reason,''),COALESCE(o.win_reason,''),o.stage_entered_at,o.last_activity_at,o.custom_fields,o.version,o.created_at,o.updated_at FROM opportunities o JOIN customers c ON c.id=o.customer_id JOIN users u ON u.id=o.owner_id JOIN pipeline_stages ps ON ps.id=o.stage_id WHERE ` + scopeSQL("o") + ` AND ($4='' OR lower(o.name) LIKE '%'||lower($4)||'%' OR lower(c.name) LIKE '%'||lower($4)||'%') AND ($5='' OR o.customer_id::text=$5) AND ($6='' OR o.status=$6) AND ($7='' OR o.stage_id::text=$7) AND (NOT $8 OR o.last_activity_at IS NULL OR o.last_activity_at<now()-interval '30 days') ORDER BY ` + order + ` LIMIT $9 OFFSET $10`
-	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), strings.TrimSpace(f.Query), f.CustomerID, f.Status, f.StageID, f.StaleOnly, f.Limit+1, offset)
+	query := `SELECT o.id,o.name,o.customer_id,c.name,o.owner_id,u.display_name,COALESCE(o.organization_id::text,''),o.pipeline_id,o.stage_id,ps.name,ps.color,o.expected_amount,o.currency_code,o.exchange_rate,o.base_expected_amount,o.probability,o.weighted_amount,o.base_weighted_amount,o.expected_close_date,o.forecast_category,COALESCE(o.competitor,''),COALESCE(o.next_action,''),o.next_action_date,o.status,COALESCE(o.lost_reason,''),COALESCE(o.win_reason,''),o.stage_entered_at,o.last_activity_at,o.custom_fields,o.version,o.created_at,o.updated_at FROM opportunities o JOIN customers c ON c.id=o.customer_id JOIN users u ON u.id=o.owner_id JOIN pipeline_stages ps ON ps.id=o.stage_id WHERE ` + scopeSQL("o") + ` AND ($4='' OR lower(o.name) LIKE '%'||lower($4)||'%' OR lower(c.name) LIKE '%'||lower($4)||'%') AND ($5='' OR o.customer_id::text=$5) AND ($6='' OR o.status=$6) AND ($7='' OR o.stage_id::text=$7) AND ($8='' OR o.forecast_category=$8) AND (NOT $9 OR o.last_activity_at IS NULL OR o.last_activity_at<now()-interval '30 days') ORDER BY ` + order + ` LIMIT $10 OFFSET $11`
+	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), strings.TrimSpace(f.Query), f.CustomerID, f.Status, f.StageID, strings.ToUpper(f.ForecastCategory), f.StaleOnly, f.Limit+1, offset)
 	if err != nil {
 		return Page[Opportunity]{}, err
 	}
@@ -447,7 +447,7 @@ type rowScanner interface{ Scan(...any) error }
 func scanOpportunity(row rowScanner) (Opportunity, error) {
 	var x Opportunity
 	var raw []byte
-	err := row.Scan(&x.ID, &x.Name, &x.CustomerID, &x.CustomerName, &x.OwnerID, &x.OwnerName, &x.OrganizationID, &x.PipelineID, &x.StageID, &x.StageName, &x.StageColor, &x.ExpectedAmount, &x.Probability, &x.WeightedAmount, &x.ExpectedCloseDate, &x.ForecastCategory, &x.Competitor, &x.NextAction, &x.NextActionDate, &x.Status, &x.LostReason, &x.WinReason, &x.StageEnteredAt, &x.LastActivityAt, &raw, &x.Version, &x.CreatedAt, &x.UpdatedAt)
+	err := row.Scan(&x.ID, &x.Name, &x.CustomerID, &x.CustomerName, &x.OwnerID, &x.OwnerName, &x.OrganizationID, &x.PipelineID, &x.StageID, &x.StageName, &x.StageColor, &x.ExpectedAmount, &x.CurrencyCode, &x.ExchangeRate, &x.BaseExpectedAmount, &x.Probability, &x.WeightedAmount, &x.BaseWeightedAmount, &x.ExpectedCloseDate, &x.ForecastCategory, &x.Competitor, &x.NextAction, &x.NextActionDate, &x.Status, &x.LostReason, &x.WinReason, &x.StageEnteredAt, &x.LastActivityAt, &raw, &x.Version, &x.CreatedAt, &x.UpdatedAt)
 	_ = json.Unmarshal(raw, &x.CustomFields)
 	return x, err
 }
@@ -473,7 +473,7 @@ func (s *Service) GetOpportunity(ctx context.Context, p *auth.Principal, id stri
 	if err := auth.Require(p, "opportunity:read"); err != nil {
 		return Opportunity{}, err
 	}
-	row := s.DB.QueryRow(ctx, `SELECT o.id,o.name,o.customer_id,c.name,o.owner_id,u.display_name,COALESCE(o.organization_id::text,''),o.pipeline_id,o.stage_id,ps.name,ps.color,o.expected_amount,o.probability,o.weighted_amount,o.expected_close_date,o.forecast_category,COALESCE(o.competitor,''),COALESCE(o.next_action,''),o.next_action_date,o.status,COALESCE(o.lost_reason,''),COALESCE(o.win_reason,''),o.stage_entered_at,o.last_activity_at,o.custom_fields,o.version,o.created_at,o.updated_at FROM opportunities o JOIN customers c ON c.id=o.customer_id JOIN users u ON u.id=o.owner_id JOIN pipeline_stages ps ON ps.id=o.stage_id WHERE o.id=$4 AND `+scopeSQL("o"), p.DataScope, p.UserID, nullable(p.OrganizationID), id)
+	row := s.DB.QueryRow(ctx, `SELECT o.id,o.name,o.customer_id,c.name,o.owner_id,u.display_name,COALESCE(o.organization_id::text,''),o.pipeline_id,o.stage_id,ps.name,ps.color,o.expected_amount,o.currency_code,o.exchange_rate,o.base_expected_amount,o.probability,o.weighted_amount,o.base_weighted_amount,o.expected_close_date,o.forecast_category,COALESCE(o.competitor,''),COALESCE(o.next_action,''),o.next_action_date,o.status,COALESCE(o.lost_reason,''),COALESCE(o.win_reason,''),o.stage_entered_at,o.last_activity_at,o.custom_fields,o.version,o.created_at,o.updated_at FROM opportunities o JOIN customers c ON c.id=o.customer_id JOIN users u ON u.id=o.owner_id JOIN pipeline_stages ps ON ps.id=o.stage_id WHERE o.id=$4 AND `+scopeSQL("o"), p.DataScope, p.UserID, nullable(p.OrganizationID), id)
 	x, err := scanOpportunity(row)
 	x.Health = opportunityHealth(x)
 	return x, err
@@ -491,11 +491,44 @@ func validateOpportunity(in OpportunityInput) error {
 	}
 	return nil
 }
+
+const baseCurrencyCode = "KRW"
+
+func validateCurrency(code string, rate float64) error {
+	if len(code) != 3 {
+		return errors.New("currencyCode must be a 3-letter ISO currency code")
+	}
+	for _, r := range code {
+		if r < 'A' || r > 'Z' {
+			return errors.New("currencyCode must use uppercase letters")
+		}
+	}
+	if rate <= 0 {
+		return errors.New("exchangeRate must be greater than zero")
+	}
+	if code == baseCurrencyCode && rate != 1 {
+		return errors.New("KRW exchangeRate must be 1")
+	}
+	return nil
+}
 func (s *Service) CreateOpportunity(ctx context.Context, p *auth.Principal, in OpportunityInput, m RequestMeta) (Opportunity, error) {
 	if err := auth.Require(p, "opportunity:write"); err != nil {
 		return Opportunity{}, err
 	}
 	if err := validateOpportunity(in); err != nil {
+		return Opportunity{}, err
+	}
+	currency := strings.ToUpper(strings.TrimSpace(in.CurrencyCode))
+	if currency == "" {
+		currency = baseCurrencyCode
+	}
+	rate := 1.0
+	if in.ExchangeRate != nil {
+		rate = *in.ExchangeRate
+	} else if currency != baseCurrencyCode {
+		return Opportunity{}, errors.New("exchangeRate is required for non-KRW opportunities")
+	}
+	if err := validateCurrency(currency, rate); err != nil {
 		return Opportunity{}, err
 	}
 	owner := in.OwnerID
@@ -545,7 +578,7 @@ func (s *Service) CreateOpportunity(ctx context.Context, p *auth.Principal, in O
 		return Opportunity{}, err
 	}
 	id := ids.New()
-	_, err = s.DB.Exec(ctx, `INSERT INTO opportunities(id,name,customer_id,owner_id,organization_id,pipeline_id,stage_id,expected_amount,probability,expected_close_date,forecast_category,competitor,next_action,next_action_date,status,lost_reason,win_reason,custom_fields,created_by,updated_by) VALUES($1,$2,$3,$4,(SELECT organization_id FROM users WHERE id=$4),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)`, id, strings.TrimSpace(in.Name), in.CustomerID, owner, pipeID, stageID, in.ExpectedAmount, probability, closeDate, category, nullable(in.Competitor), nullable(in.NextAction), nextDate, status, nullable(in.LostReason), nullable(in.WinReason), jsonValue(in.CustomFields), p.UserID)
+	_, err = s.DB.Exec(ctx, `INSERT INTO opportunities(id,name,customer_id,owner_id,organization_id,pipeline_id,stage_id,expected_amount,currency_code,exchange_rate,probability,expected_close_date,forecast_category,competitor,next_action,next_action_date,status,lost_reason,win_reason,custom_fields,created_by,updated_by) VALUES($1,$2,$3,$4,(SELECT organization_id FROM users WHERE id=$4),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)`, id, strings.TrimSpace(in.Name), in.CustomerID, owner, pipeID, stageID, in.ExpectedAmount, currency, rate, probability, closeDate, category, nullable(in.Competitor), nullable(in.NextAction), nextDate, status, nullable(in.LostReason), nullable(in.WinReason), jsonValue(in.CustomFields), p.UserID)
 	if err != nil {
 		return Opportunity{}, err
 	}
@@ -571,6 +604,23 @@ func (s *Service) UpdateOpportunity(ctx context.Context, p *auth.Principal, id s
 		in.CustomerID = before.CustomerID
 	}
 	if err = validateOpportunity(in); err != nil {
+		return Opportunity{}, err
+	}
+	currency := strings.ToUpper(strings.TrimSpace(in.CurrencyCode))
+	if currency == "" {
+		currency = before.CurrencyCode
+	}
+	rate := before.ExchangeRate
+	if in.ExchangeRate != nil {
+		rate = *in.ExchangeRate
+	} else if currency != before.CurrencyCode {
+		if currency == baseCurrencyCode {
+			rate = 1
+		} else {
+			return Opportunity{}, errors.New("exchangeRate is required when changing currencyCode")
+		}
+	}
+	if err = validateCurrency(currency, rate); err != nil {
 		return Opportunity{}, err
 	}
 	if in.Version == 0 {
@@ -645,7 +695,7 @@ func (s *Service) UpdateOpportunity(ctx context.Context, p *auth.Principal, id s
 	if custom == nil {
 		custom = before.CustomFields
 	}
-	cmd, err := s.DB.Exec(ctx, `UPDATE opportunities SET name=$1,customer_id=$2,owner_id=$3,organization_id=(SELECT organization_id FROM users WHERE id=$3),pipeline_id=$4,stage_id=$5,expected_amount=$6,probability=$7,expected_close_date=$8,forecast_category=$9,competitor=$10,next_action=$11,next_action_date=$12,status=$13,lost_reason=$14,win_reason=$15,custom_fields=$16,stage_entered_at=CASE WHEN stage_id<>$5 THEN now() ELSE stage_entered_at END,updated_by=$17,updated_at=now(),version=version+1 WHERE id=$18 AND version=$19`, in.Name, in.CustomerID, owner, pipeID, stageID, amount, probability, closeDate, category, nullable(in.Competitor), nullable(in.NextAction), nextDate, status, nullable(in.LostReason), nullable(in.WinReason), jsonValue(custom), p.UserID, id, in.Version)
+	cmd, err := s.DB.Exec(ctx, `UPDATE opportunities SET name=$1,customer_id=$2,owner_id=$3,organization_id=(SELECT organization_id FROM users WHERE id=$3),pipeline_id=$4,stage_id=$5,expected_amount=$6,currency_code=$7,exchange_rate=$8,probability=$9,expected_close_date=$10,forecast_category=$11,competitor=$12,next_action=$13,next_action_date=$14,status=$15,lost_reason=$16,win_reason=$17,custom_fields=$18,stage_entered_at=CASE WHEN stage_id<>$5 THEN now() ELSE stage_entered_at END,updated_by=$19,updated_at=now(),version=version+1 WHERE id=$20 AND version=$21`, in.Name, in.CustomerID, owner, pipeID, stageID, amount, currency, rate, probability, closeDate, category, nullable(in.Competitor), nullable(in.NextAction), nextDate, status, nullable(in.LostReason), nullable(in.WinReason), jsonValue(custom), p.UserID, id, in.Version)
 	if err != nil {
 		return Opportunity{}, err
 	}
@@ -679,7 +729,8 @@ func (s *Service) ChangeOpportunityStage(ctx context.Context, p *auth.Principal,
 	if before.NextActionDate != nil {
 		nd = before.NextActionDate.Format("2006-01-02")
 	}
-	return s.UpdateOpportunity(ctx, p, id, OpportunityInput{Name: before.Name, CustomerID: before.CustomerID, OwnerID: before.OwnerID, StageID: stageID, ExpectedAmount: before.ExpectedAmount, ExpectedCloseDate: &d, NextAction: before.NextAction, NextActionDate: &nd, Competitor: before.Competitor, LostReason: before.LostReason, WinReason: before.WinReason, CustomFields: before.CustomFields, Version: version}, m)
+	rate := before.ExchangeRate
+	return s.UpdateOpportunity(ctx, p, id, OpportunityInput{Name: before.Name, CustomerID: before.CustomerID, OwnerID: before.OwnerID, StageID: stageID, ExpectedAmount: before.ExpectedAmount, CurrencyCode: before.CurrencyCode, ExchangeRate: &rate, ExpectedCloseDate: &d, NextAction: before.NextAction, NextActionDate: &nd, Competitor: before.Competitor, LostReason: before.LostReason, WinReason: before.WinReason, CustomFields: before.CustomFields, Version: version}, m)
 }
 
 func (s *Service) Pipelines(ctx context.Context, p *auth.Principal) ([]Pipeline, error) {
@@ -796,7 +847,7 @@ func (s *Service) Dashboard(ctx context.Context, p *auth.Principal) (map[string]
 	var pipeline, weighted, won float64
 	args := []any{p.DataScope, p.UserID, nullable(p.OrganizationID)}
 	_ = s.DB.QueryRow(ctx, `SELECT count(*) FROM customers c WHERE c.active=true AND c.merged_into_id IS NULL AND `+scopeSQL("c"), args...).Scan(&customerCount)
-	err := s.DB.QueryRow(ctx, `SELECT count(*) FILTER(WHERE status='OPEN'),COALESCE(sum(expected_amount) FILTER(WHERE status='OPEN'),0),COALESCE(sum(weighted_amount) FILTER(WHERE status='OPEN'),0),COALESCE(sum(expected_amount) FILTER(WHERE status='WON' AND updated_at>=date_trunc('month',now())),0),count(*) FILTER(WHERE status='OPEN' AND (last_activity_at IS NULL OR last_activity_at<now()-interval '30 days')) FROM opportunities o WHERE `+scopeSQL("o"), args...).Scan(&openCount, &pipeline, &weighted, &won, &staleCount)
+	err := s.DB.QueryRow(ctx, `SELECT count(*) FILTER(WHERE status='OPEN'),COALESCE(sum(base_expected_amount) FILTER(WHERE status='OPEN'),0),COALESCE(sum(base_weighted_amount) FILTER(WHERE status='OPEN'),0),COALESCE(sum(base_expected_amount) FILTER(WHERE status='WON' AND updated_at>=date_trunc('month',now())),0),count(*) FILTER(WHERE status='OPEN' AND (last_activity_at IS NULL OR last_activity_at<now()-interval '30 days')) FROM opportunities o WHERE `+scopeSQL("o"), args...).Scan(&openCount, &pipeline, &weighted, &won, &staleCount)
 	if err != nil {
 		return nil, err
 	}
@@ -809,7 +860,7 @@ func (s *Service) Forecast(ctx context.Context, p *auth.Principal) (map[string]a
 	if err := auth.Require(p, "forecast:read"); err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT forecast_category,count(*),COALESCE(sum(expected_amount),0),COALESCE(sum(weighted_amount),0) FROM opportunities o WHERE status='OPEN' AND `+scopeSQL("o")+` GROUP BY forecast_category ORDER BY forecast_category`, p.DataScope, p.UserID, nullable(p.OrganizationID))
+	rows, err := s.DB.Query(ctx, `SELECT forecast_category,count(*),COALESCE(sum(base_expected_amount),0),COALESCE(sum(base_weighted_amount),0) FROM opportunities o WHERE status='OPEN' AND `+scopeSQL("o")+` GROUP BY forecast_category ORDER BY forecast_category`, p.DataScope, p.UserID, nullable(p.OrganizationID))
 	if err != nil {
 		return nil, err
 	}
@@ -827,7 +878,22 @@ func (s *Service) Forecast(ctx context.Context, p *auth.Principal) (map[string]a
 		total += amount
 		weighted += w
 	}
-	return map[string]any{"categories": cats, "pipeline": total, "weighted": weighted, "generatedAt": time.Now()}, rows.Err()
+	var currencies []map[string]any
+	currencyRows, currencyErr := s.DB.Query(ctx, `SELECT currency_code,count(*),COALESCE(sum(expected_amount),0),COALESCE(sum(base_expected_amount),0) FROM opportunities o WHERE status='OPEN' AND `+scopeSQL("o")+` GROUP BY currency_code ORDER BY currency_code`, p.DataScope, p.UserID, nullable(p.OrganizationID))
+	if currencyErr != nil {
+		return nil, currencyErr
+	}
+	defer currencyRows.Close()
+	for currencyRows.Next() {
+		var code string
+		var count int
+		var native, base float64
+		if err = currencyRows.Scan(&code, &count, &native, &base); err != nil {
+			return nil, err
+		}
+		currencies = append(currencies, map[string]any{"currencyCode": code, "count": count, "nativeAmount": native, "baseAmount": base})
+	}
+	return map[string]any{"baseCurrency": baseCurrencyCode, "categories": cats, "currencies": currencies, "pipeline": total, "weighted": weighted, "generatedAt": time.Now()}, currencyRows.Err()
 }
 
 func IsNotFound(err error) bool { return errors.Is(err, pgx.ErrNoRows) }

@@ -15,7 +15,7 @@ Relio 플랫폼은 에어갭 B2B CRM 수집 및 파이프라인 관리를 시작
                                 [Relio 단계별 마일스톤 아키텍처]
 ==================================================================================================
  [Phase 1: v1.0.0] (완료) ➔ Customer 360, Deal Health, HMAC Key Digest, Streamable MCP
- [Phase 2: v1.5.0] (진행) ➔ Multi-Currency Enterprise Forecast & Automated Contract Engine
+ [Phase 2: v1.5.0] (완료) ➔ Multi-Currency Enterprise Forecast & Automated Contract Engine
  [Phase 3: v2.0.0] (2026 Q4) ➔ Autonomous Sales Copilot (NL-to-CRM Action MCP 2.0)
  [Phase 4: v3.0.0] (2027)    ➔ Global Multi-Region Air-Gapped Sync & Predictive Churn AI
 ==================================================================================================
@@ -32,8 +32,9 @@ Relio 플랫폼은 에어갭 B2B CRM 수집 및 파이프라인 관리를 시작
 - **Streamable HTTP MCP**: Tool Allowlist 및 Scope 교집합 검사 기반 AI 연동.
 
 ### 2.2 Phase 2: v1.5.0 계약 파이프라인 & 다중 통화 Forecast (2026 Q3)
-- **다중 통화(Multi-Currency) 환율 적용**: 글로벌 B2B 영업을 위한 실시간/고정 환율 파이프라인.
-- **계약 및 매출 이행 자동화**: 계약 승인 시 자동 매출 일정 파싱 및 이행 상태 트래킹.
+- **다중 통화(Multi-Currency) 환율 적용**: 외화 원금과 생성 시점 고정 환율을 보존하고 KRW 기준금액으로 Dashboard, Forecast, Snapshot, Coaching과 승인 조건을 일관되게 집계합니다.
+- **계약 및 매출 이행 자동화**: 계약 활성화 시 일시·월·분기·연 단위 Revenue Schedule을 자동 생성하고 예정·기한 경과·매출 인식 상태를 트래킹합니다.
+- **Renewal Radar**: 계약 종료일, 사전 점검 일수, 자동 갱신 조항, 갱신 진행상태와 다음 행동을 한 화면에서 관리합니다.
 
 ### 2.3 Phase 3: v2.0.0 AI 자율 영업 코파일럿 (2026 Q4)
 - **NL-to-CRM Action (MCP 2.0)**: AI 에이전트가 "A사 미팅 결과 기록하고 Opportunity 스테이지를 Negotiation으로 변경해줘" 질의 시 권한 검증 후 자동 업데이트.

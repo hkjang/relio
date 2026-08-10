@@ -36,10 +36,11 @@ func TestAsDateSupportsAPIAndDatabaseFormats(t *testing.T) {
 func TestOpportunityFieldAndPresent(t *testing.T) {
 	closeDate := time.Date(2026, time.August, 31, 0, 0, 0, 0, time.UTC)
 	opp := crm.Opportunity{
-		Name:              "Enterprise Renewal",
-		ExpectedAmount:    500_000_000,
-		ExpectedCloseDate: &closeDate,
-		CustomFields:      map[string]any{"procurementConfirmed": true},
+		Name:               "Enterprise Renewal",
+		ExpectedAmount:     500_000_000,
+		BaseExpectedAmount: 500_000_000,
+		ExpectedCloseDate:  &closeDate,
+		CustomFields:       map[string]any{"procurementConfirmed": true},
 	}
 	if got := opportunityField(opp, "expectedAmount"); got != 500_000_000.0 {
 		t.Fatalf("expectedAmount = %v", got)

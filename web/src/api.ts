@@ -22,6 +22,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 }
 
 export const money = (value?: number) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW', maximumFractionDigits: 0 }).format(value || 0)
+export const currencyMoney = (value?: number, currency = 'KRW') => new Intl.NumberFormat('ko-KR', { style: 'currency', currency, maximumFractionDigits: currency === 'KRW' ? 0 : 2 }).format(value || 0)
 export const number = (value?: number) => new Intl.NumberFormat('ko-KR').format(value || 0)
 export const date = (value?: string) => value ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(value)) : '—'
 export const relative = (value?: string) => {

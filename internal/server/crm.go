@@ -116,7 +116,7 @@ func (s *Server) createContact(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, 201, v)
 }
 func (s *Server) listOpportunities(w http.ResponseWriter, r *http.Request) {
-	f := crm.OpportunityFilter{Query: r.URL.Query().Get("q"), CustomerID: r.URL.Query().Get("customerId"), Status: strings.ToUpper(r.URL.Query().Get("status")), StageID: r.URL.Query().Get("stageId"), Cursor: r.URL.Query().Get("cursor"), Sort: r.URL.Query().Get("sort"), Limit: httpx.IntQuery(r, "limit", 50, 1, 200), StaleOnly: r.URL.Query().Get("stale") == "true"}
+	f := crm.OpportunityFilter{Query: r.URL.Query().Get("q"), CustomerID: r.URL.Query().Get("customerId"), Status: strings.ToUpper(r.URL.Query().Get("status")), StageID: r.URL.Query().Get("stageId"), ForecastCategory: strings.ToUpper(r.URL.Query().Get("forecastCategory")), Cursor: r.URL.Query().Get("cursor"), Sort: r.URL.Query().Get("sort"), Limit: httpx.IntQuery(r, "limit", 50, 1, 200), StaleOnly: r.URL.Query().Get("stale") == "true"}
 	v, err := s.CRM.ListOpportunities(r.Context(), principal(r), f)
 	if err != nil {
 		s.serviceError(w, r, err)

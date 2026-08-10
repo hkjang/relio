@@ -152,23 +152,26 @@ func (s *Service) Contracts(ctx context.Context, p *auth.Principal, customerID s
 	if expiringDays < 0 || expiringDays > 3650 {
 		expiringDays = 0
 	}
-	rows, err := s.DB.Query(ctx, `SELECT c.id,c.contract_no,c.customer_id,cu.name,c.title,c.amount,c.start_date,c.end_date,c.status,c.auto_renew,c.owner_id,c.version,c.created_at,c.updated_at FROM contracts c JOIN customers cu ON cu.id=c.customer_id WHERE `+scopeSQL("c")+` AND ($4='' OR c.customer_id::text=$4) AND ($5=0 OR c.end_date BETWEEN current_date AND current_date+$5) AND (NOT $6 OR c.auto_renew=true) ORDER BY c.end_date NULLS LAST LIMIT $7`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, expiringDays, renewalOnly, limit)
+	rows, err := s.DB.Query(ctx, `SELECT c.id,c.contract_no,c.customer_id,cu.name,c.opportunity_id,c.title,c.amount,c.currency_code,c.exchange_rate,c.base_amount,c.start_date,c.end_date,c.status,CASE WHEN c.status='ACTIVE' AND c.end_date<current_date THEN 'EXPIRED' WHEN c.status='ACTIVE' AND c.end_date<=current_date+c.renewal_notice_days THEN 'EXPIRING' ELSE c.status END,c.auto_renew,c.revenue_schedule_type,c.renewal_notice_days,c.renewal_status,COALESCE(c.renewal_action,''),c.activated_at,c.owner_id,c.version,c.created_at,c.updated_at,CASE WHEN c.end_date IS NULL THEN NULL ELSE c.end_date-current_date END,COALESCE(rs.schedule_count,0),COALESCE(rs.recognized_count,0),COALESCE(rs.recognized_base_amount,0) FROM contracts c JOIN customers cu ON cu.id=c.customer_id LEFT JOIN LATERAL (SELECT count(*) schedule_count,count(*) FILTER(WHERE status='RECOGNIZED') recognized_count,COALESCE(sum(base_amount) FILTER(WHERE status='RECOGNIZED'),0) recognized_base_amount FROM revenue_schedules WHERE contract_id=c.id) rs ON true WHERE `+scopeSQL("c")+` AND ($4='' OR c.customer_id::text=$4) AND ($5=0 OR c.end_date BETWEEN current_date AND current_date+$5) AND (NOT $6 OR c.auto_renew=true) ORDER BY c.end_date NULLS LAST LIMIT $7`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, expiringDays, renewalOnly, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var id, no, cid, cname, title, status, owner string
-		var amount float64
+		var id, no, cid, cname, title, currency, status, radarStatus, scheduleType, renewalStatus, renewalAction, owner string
+		var opportunity *string
+		var amount, rate, baseAmount, recognizedBaseAmount float64
 		var start, end *time.Time
+		var activated *time.Time
 		var renew bool
-		var version int
+		var version, renewalNotice, scheduleCount, recognizedCount int
+		var daysToExpiry *int
 		var created, updated time.Time
-		if err = rows.Scan(&id, &no, &cid, &cname, &title, &amount, &start, &end, &status, &renew, &owner, &version, &created, &updated); err != nil {
+		if err = rows.Scan(&id, &no, &cid, &cname, &opportunity, &title, &amount, &currency, &rate, &baseAmount, &start, &end, &status, &radarStatus, &renew, &scheduleType, &renewalNotice, &renewalStatus, &renewalAction, &activated, &owner, &version, &created, &updated, &daysToExpiry, &scheduleCount, &recognizedCount, &recognizedBaseAmount); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"id": id, "contractNo": no, "customerId": cid, "customerName": cname, "title": title, "amount": amount, "startDate": start, "endDate": end, "status": status, "autoRenew": renew, "ownerId": owner, "version": version, "createdAt": created, "updatedAt": updated})
+		out = append(out, map[string]any{"id": id, "contractNo": no, "customerId": cid, "customerName": cname, "opportunityId": opportunity, "title": title, "amount": amount, "currencyCode": currency, "exchangeRate": rate, "baseAmount": baseAmount, "startDate": start, "endDate": end, "status": status, "radarStatus": radarStatus, "daysToExpiry": daysToExpiry, "autoRenew": renew, "revenueScheduleType": scheduleType, "scheduleCount": scheduleCount, "recognizedCount": recognizedCount, "recognizedBaseAmount": recognizedBaseAmount, "renewalNoticeDays": renewalNotice, "renewalStatus": renewalStatus, "renewalAction": renewalAction, "activatedAt": activated, "ownerId": owner, "version": version, "createdAt": created, "updatedAt": updated})
 	}
 	return out, rows.Err()
 }
@@ -178,6 +181,8 @@ type QuotationInput struct {
 	OpportunityID   string         `json:"opportunityId"`
 	Title           string         `json:"title"`
 	Amount          float64        `json:"amount"`
+	CurrencyCode    string         `json:"currencyCode"`
+	ExchangeRate    *float64       `json:"exchangeRate"`
 	DiscountPercent float64        `json:"discountPercent"`
 	ValidUntil      *string        `json:"validUntil"`
 	CustomFields    map[string]any `json:"customFields"`
@@ -196,17 +201,30 @@ func (s *Service) CreateQuotation(ctx context.Context, p *auth.Principal, in Quo
 	if _, err := s.GetCustomer(ctx, p, in.CustomerID); err != nil {
 		return nil, errors.New("customer not found or inaccessible")
 	}
+	currency := strings.ToUpper(strings.TrimSpace(in.CurrencyCode))
+	if currency == "" {
+		currency = baseCurrencyCode
+	}
+	rate := 1.0
+	if in.ExchangeRate != nil {
+		rate = *in.ExchangeRate
+	} else if currency != baseCurrencyCode {
+		return nil, errors.New("exchangeRate is required for non-KRW quotations")
+	}
+	if err := validateCurrency(currency, rate); err != nil {
+		return nil, err
+	}
 	valid, err := dateValue(in.ValidUntil)
 	if err != nil {
 		return nil, err
 	}
 	id := ids.New()
 	no := "Q-" + time.Now().Format("20060102") + "-" + strings.ToUpper(ids.Token(4))
-	_, err = s.DB.Exec(ctx, `INSERT INTO quotations(id,quotation_no,customer_id,opportunity_id,owner_id,organization_id,title,amount,discount_percent,valid_until,custom_fields,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$5,$5)`, id, no, in.CustomerID, nullable(in.OpportunityID), p.UserID, nullable(p.OrganizationID), strings.TrimSpace(in.Title), in.Amount, in.DiscountPercent, valid, jsonValue(in.CustomFields))
+	_, err = s.DB.Exec(ctx, `INSERT INTO quotations(id,quotation_no,customer_id,opportunity_id,owner_id,organization_id,title,amount,currency_code,exchange_rate,discount_percent,valid_until,custom_fields,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$5,$5)`, id, no, in.CustomerID, nullable(in.OpportunityID), p.UserID, nullable(p.OrganizationID), strings.TrimSpace(in.Title), in.Amount, currency, rate, in.DiscountPercent, valid, jsonValue(in.CustomFields))
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{"id": id, "quotationNo": no, "customerId": in.CustomerID, "opportunityId": in.OpportunityID, "title": in.Title, "amount": in.Amount, "discountPercent": in.DiscountPercent, "validUntil": valid, "status": "DRAFT", "version": 1}
+	out := map[string]any{"id": id, "quotationNo": no, "customerId": in.CustomerID, "opportunityId": in.OpportunityID, "title": in.Title, "amount": in.Amount, "currencyCode": currency, "exchangeRate": rate, "baseAmount": in.Amount * rate, "discountPercent": in.DiscountPercent, "validUntil": valid, "status": "DRAFT", "version": 1}
 	_, _ = s.DB.Exec(ctx, `INSERT INTO quotation_versions(id,quotation_id,version_no,snapshot,created_by) VALUES($1,$2,1,$3,$4)`, ids.New(), id, mustJSON(out), p.UserID)
 	s.audit(ctx, p, m, "CREATE", "quotation", id, nil, out)
 	return out, nil
@@ -219,23 +237,23 @@ func (s *Service) ListQuotations(ctx context.Context, p *auth.Principal, custome
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.DB.Query(ctx, `SELECT q.id,q.quotation_no,q.customer_id,c.name,q.opportunity_id,q.title,q.amount,q.discount_percent,q.status,q.valid_until,q.owner_id,q.version,q.created_at,q.updated_at FROM quotations q JOIN customers c ON c.id=q.customer_id WHERE `+scopeSQL("q")+` AND ($4='' OR q.customer_id::text=$4) ORDER BY q.updated_at DESC LIMIT $5`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, limit)
+	rows, err := s.DB.Query(ctx, `SELECT q.id,q.quotation_no,q.customer_id,c.name,q.opportunity_id,q.title,q.amount,q.currency_code,q.exchange_rate,q.base_amount,q.discount_percent,q.status,q.valid_until,q.owner_id,q.version,q.created_at,q.updated_at FROM quotations q JOIN customers c ON c.id=q.customer_id WHERE `+scopeSQL("q")+` AND ($4='' OR q.customer_id::text=$4) ORDER BY q.updated_at DESC LIMIT $5`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var id, no, cid, cname, title, status, owner string
+		var id, no, cid, cname, title, currency, status, owner string
 		var opp *string
-		var amount, discount float64
+		var amount, rate, base, discount float64
 		var valid *time.Time
 		var version int
 		var created, updated time.Time
-		if err = rows.Scan(&id, &no, &cid, &cname, &opp, &title, &amount, &discount, &status, &valid, &owner, &version, &created, &updated); err != nil {
+		if err = rows.Scan(&id, &no, &cid, &cname, &opp, &title, &amount, &currency, &rate, &base, &discount, &status, &valid, &owner, &version, &created, &updated); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"id": id, "quotationNo": no, "customerId": cid, "customerName": cname, "opportunityId": opp, "title": title, "amount": amount, "discountPercent": discount, "status": status, "validUntil": valid, "ownerId": owner, "version": version, "createdAt": created, "updatedAt": updated})
+		out = append(out, map[string]any{"id": id, "quotationNo": no, "customerId": cid, "customerName": cname, "opportunityId": opp, "title": title, "amount": amount, "currencyCode": currency, "exchangeRate": rate, "baseAmount": base, "discountPercent": discount, "status": status, "validUntil": valid, "ownerId": owner, "version": version, "createdAt": created, "updatedAt": updated})
 	}
 	return out, rows.Err()
 }
@@ -245,7 +263,7 @@ func (s *Service) SalesKPI(ctx context.Context, p *auth.Principal) (map[string]a
 		return nil, err
 	}
 	var revenue, target float64
-	_ = s.DB.QueryRow(ctx, `SELECT COALESCE(sum(amount),0) FROM sales s WHERE recognized_date>=date_trunc('month',now())::date AND `+scopeSQL("s"), p.DataScope, p.UserID, nullable(p.OrganizationID)).Scan(&revenue)
+	_ = s.DB.QueryRow(ctx, `SELECT COALESCE(sum(base_amount),0) FROM sales s WHERE recognized_date>=date_trunc('month',now())::date AND `+scopeSQL("s"), p.DataScope, p.UserID, nullable(p.OrganizationID)).Scan(&revenue)
 	_ = s.DB.QueryRow(ctx, `SELECT COALESCE(sum(amount),0) FROM targets t WHERE current_date BETWEEN period_start AND period_end AND ($1='COMPANY' OR t.user_id=$2 OR ($1 IN ('DEPARTMENT','DIVISION') AND t.organization_id=$3) OR ($1='TEAM' AND (t.user_id=$2 OR t.user_id IN (SELECT id FROM users WHERE manager_id=$2))))`, p.DataScope, p.UserID, nullable(p.OrganizationID)).Scan(&target)
 	forecast, err := s.Forecast(ctx, p)
 	if err != nil {
@@ -265,7 +283,7 @@ func (s *Service) WinLossAnalysis(ctx context.Context, p *auth.Principal, months
 	if months < 1 || months > 60 {
 		months = 12
 	}
-	rows, err := s.DB.Query(ctx, `SELECT status,count(*),COALESCE(sum(expected_amount),0) FROM opportunities o WHERE status IN ('WON','LOST') AND updated_at>=now()-make_interval(months=>$4) AND `+scopeSQL("o")+` GROUP BY status`, p.DataScope, p.UserID, nullable(p.OrganizationID), months)
+	rows, err := s.DB.Query(ctx, `SELECT status,count(*),COALESCE(sum(base_expected_amount),0) FROM opportunities o WHERE status IN ('WON','LOST') AND updated_at>=now()-make_interval(months=>$4) AND `+scopeSQL("o")+` GROUP BY status`, p.DataScope, p.UserID, nullable(p.OrganizationID), months)
 	if err != nil {
 		return nil, err
 	}

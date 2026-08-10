@@ -49,7 +49,8 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', shortcut) }
   }, [])
   useEffect(() => setMenuOpen(false), [path])
-  const canAdmin = user.isBootstrap || user.permissions.includes('admin:*') || user.permissions.includes('admin:read')
+  const permissions = user.permissions || []
+  const canAdmin = user.isBootstrap || permissions.includes('admin:*') || permissions.includes('admin:read')
   const nav = area === 'app' ? [...appNav, ...(approvalEnabled ? [{to:'/app/approvals',key:'approvals',label:'검토 · 승인'}] : [])] : area === 'me' ? meNav : adminNav
   const filteredNav = area !== 'admin' || !adminQuery.trim() ? nav : nav.filter(item => `${item.label} ${item.group || ''} ${item.keywords || ''}`.toLowerCase().includes(adminQuery.trim().toLowerCase()))
   const adminSearch = (value:string) => setAdminQuery(value)
