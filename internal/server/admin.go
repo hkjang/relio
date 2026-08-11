@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -391,7 +392,10 @@ func (s *Server) adminRoles(w http.ResponseWriter, r *http.Request) {
 		s.serviceError(w, r, err)
 		return
 	}
-	rows, err := s.DB.Query(r.Context(), `SELECT r.id,r.code,r.name,COALESCE(r.description,''),r.data_scope,r.system_role,COALESCE(array_agg(rp.permission) FILTER(WHERE rp.permission IS NOT NULL),'{}') FROM roles r LEFT JOIN role_permissions rp ON rp.role_id=r.id GROUP BY r.id ORDER BY r.system_role DESC,r.name`)
+	rows, err := s.DB.Query(r.Context(), `SELECT r.id,r.code,r.name,COALESCE(r.description,''),r.data_scope,r.system_role,r.is_default,
+		COALESCE(array_agg(DISTINCT rp.permission) FILTER(WHERE rp.permission IS NOT NULL),'{}'),
+		(SELECT count(*) FROM user_roles ur WHERE ur.role_id=r.id)
+		FROM roles r LEFT JOIN role_permissions rp ON rp.role_id=r.id GROUP BY r.id ORDER BY r.system_role DESC,r.name`)
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
@@ -400,15 +404,96 @@ func (s *Server) adminRoles(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id, code, name, description, scope string
-		var system bool
+		var system, isDefault bool
 		var permissions []string
-		if err = rows.Scan(&id, &code, &name, &description, &scope, &system, &permissions); err != nil {
+		var userCount int
+		if err = rows.Scan(&id, &code, &name, &description, &scope, &system, &isDefault, &permissions, &userCount); err != nil {
 			s.serviceError(w, r, err)
 			return
 		}
-		items = append(items, map[string]any{"id": id, "code": code, "name": name, "description": description, "dataScope": scope, "systemRole": system, "permissions": permissions})
+		items = append(items, map[string]any{"id": id, "code": code, "name": name, "description": description, "dataScope": scope, "systemRole": system, "isDefault": isDefault, "permissions": permissions, "userCount": userCount})
 	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
+}
+
+// permissionCatalog is the authoritative list of function permissions the Role
+// editor may assign. Keeping it in one place stops the console from drifting
+// away from the checks the services actually perform.
+var permissionCatalog = []struct {
+	Group       string
+	Permission  string
+	Label       string
+	Description string
+}{
+	{"고객", "customer:read", "고객 조회", "Data Scope 범위의 고객과 Customer 360을 조회합니다."},
+	{"고객", "customer:write", "고객 등록·수정", "고객을 생성, 수정, 병합하고 Account Plan을 저장합니다."},
+	{"담당자", "contact:read", "담당자 조회", "고객 담당자와 Relationship Map을 조회합니다."},
+	{"담당자", "contact:write", "담당자 등록·수정", "담당자와 담당자 간 관계를 관리합니다."},
+	{"Lead", "lead:read", "Lead 조회", "미전환 Lead 목록을 조회합니다."},
+	{"Lead", "lead:write", "Lead 등록·수정", "Lead를 생성하고 전환합니다."},
+	{"Opportunity", "opportunity:read", "Opportunity 조회", "Pipeline, Deal Health, Playbook을 조회합니다. Dashboard 진입에 필요합니다."},
+	{"Opportunity", "opportunity:write", "Opportunity 등록·수정", "Opportunity와 Stage, Team, Playbook 실행 상태를 변경합니다."},
+	{"영업활동", "activity:read", "활동 조회", "Activity Timeline을 조회합니다."},
+	{"영업활동", "activity:write", "활동 기록", "미팅, 통화, 이메일 등 고객 접점을 기록합니다."},
+	{"상품", "product:read", "상품 조회", "상품 카탈로그를 조회합니다."},
+	{"상품", "product:write", "상품 등록·수정", "상품을 등록, 수정, 판매중지합니다."},
+	{"견적", "quotation:read", "견적 조회", "견적과 버전 이력을 조회합니다."},
+	{"견적", "quotation:write", "견적 작성", "견적을 생성하고 개정합니다."},
+	{"계약", "contract:read", "계약 조회", "계약과 Revenue Schedule을 조회합니다."},
+	{"계약", "contract:write", "계약 등록·활성화", "계약을 등록하고 활성화하며 갱신 정보를 관리합니다."},
+	{"매출", "sales:read", "매출 조회", "확정 매출을 조회합니다."},
+	{"매출", "sales:write", "매출 인식", "Revenue Schedule을 인식하고 매출을 등록합니다."},
+	{"영업목표", "target:read", "목표 조회", "영업 목표와 달성률을 조회합니다."},
+	{"영업목표", "target:write", "목표 설정", "기간별 영업 목표를 설정합니다."},
+	{"Forecast", "forecast:read", "Forecast 조회", "Forecast, Waterfall, Snapshot을 조회합니다."},
+	{"Forecast", "forecast:write", "Forecast Override", "팀장 판단으로 Forecast를 조정합니다."},
+	{"보고서", "report:read", "보고서 조회", "Win/Loss 분석과 리포트를 조회합니다."},
+	{"알림", "notification:read", "알림 조회", "본인 알림을 조회합니다."},
+	{"알림", "notification:write", "알림 처리", "알림을 읽음 처리합니다."},
+	{"승인", "approval:request", "검토 요청", "활성 승인 정책이 있을 때 팀장 검토를 요청합니다."},
+	{"승인", "approval:approve", "검토 승인·반려", "지정된 승인자로서 요청을 승인하거나 반려합니다."},
+	{"연동", "mcp:use", "MCP 사용", "AI Agent가 MCP 채널로 접근할 수 있게 합니다."},
+	{"관리", "admin:read", "관리자 조회", "Admin Console의 설정, 감사 로그, 진단을 조회합니다."},
+	{"관리", "admin:write", "관리자 변경", "설정, 사용자, Role, 정책을 변경합니다."},
+	{"관리", "admin:*", "전체 관리자", "모든 기능 권한을 포함합니다. 시스템 관리자 전용입니다."},
+}
+
+// knownPermission rejects a typo before it silently produces a Role that grants
+// nothing, which is exactly how an SSO user ends up locked out of every screen.
+func knownPermission(permission string) bool {
+	for _, entry := range permissionCatalog {
+		if entry.Permission == permission {
+			return true
+		}
+	}
+	return false
+}
+
+func validatePermissions(permissions []string) error {
+	for _, permission := range permissions {
+		if !knownPermission(strings.ToLower(strings.TrimSpace(permission))) {
+			return fmt.Errorf("unknown permission %q", permission)
+		}
+	}
+	return nil
+}
+
+func (s *Server) adminPermissionCatalog(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(principal(r), false); err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	items := make([]map[string]any, 0, len(permissionCatalog))
+	for _, entry := range permissionCatalog {
+		items = append(items, map[string]any{"group": entry.Group, "permission": entry.Permission, "label": entry.Label, "description": entry.Description})
+	}
+	httpx.JSON(w, 200, map[string]any{"items": items, "dataScopes": []map[string]string{
+		{"value": "USER", "label": "본인 데이터"},
+		{"value": "TEAM", "label": "팀 (직속 부하 포함)"},
+		{"value": "DEPARTMENT", "label": "부서"},
+		{"value": "DIVISION", "label": "본부"},
+		{"value": "COMPANY", "label": "전사"},
+	}})
 }
 func (s *Server) createRole(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -422,6 +507,7 @@ func (s *Server) createRole(w http.ResponseWriter, r *http.Request) {
 		Description string   `json:"description"`
 		DataScope   string   `json:"dataScope"`
 		Permissions []string `json:"permissions"`
+		IsDefault   bool     `json:"isDefault"`
 	}
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
@@ -432,9 +518,12 @@ func (s *Server) createRole(w http.ResponseWriter, r *http.Request) {
 		s.serviceError(w, r, errors.New("code and name are required"))
 		return
 	}
-	validScope := map[string]bool{"USER": true, "TEAM": true, "DEPARTMENT": true, "DIVISION": true, "COMPANY": true}
-	if !validScope[in.DataScope] {
+	if !validDataScopes[in.DataScope] {
 		s.serviceError(w, r, errors.New("invalid dataScope"))
+		return
+	}
+	if err := validatePermissions(in.Permissions); err != nil {
+		s.serviceError(w, r, err)
 		return
 	}
 	id := ids.New()
@@ -444,10 +533,16 @@ func (s *Server) createRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	_, err = tx.Exec(r.Context(), `INSERT INTO roles(id,code,name,description,data_scope) VALUES($1,$2,$3,$4,$5)`, id, in.Code, in.Name, nullAdmin(in.Description), in.DataScope)
+	if in.IsDefault {
+		if _, err = tx.Exec(r.Context(), `UPDATE roles SET is_default=false WHERE is_default`); err != nil {
+			s.serviceError(w, r, err)
+			return
+		}
+	}
+	_, err = tx.Exec(r.Context(), `INSERT INTO roles(id,code,name,description,data_scope,is_default) VALUES($1,$2,$3,$4,$5,$6)`, id, in.Code, in.Name, nullAdmin(in.Description), in.DataScope, in.IsDefault)
 	if err == nil {
-		for _, permission := range in.Permissions {
-			_, err = tx.Exec(r.Context(), `INSERT INTO role_permissions(role_id,permission) VALUES($1,$2)`, id, permission)
+		for _, permission := range normalizePermissions(in.Permissions) {
+			_, err = tx.Exec(r.Context(), `INSERT INTO role_permissions(role_id,permission) VALUES($1,$2) ON CONFLICT DO NOTHING`, id, permission)
 			if err != nil {
 				break
 			}

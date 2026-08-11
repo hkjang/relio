@@ -46,9 +46,12 @@ type Server struct {
 	MCP       *mcp.Server
 	Intel     *intelligence.Service
 	Relations *relationship.Service
-	started   time.Time
-	limiter   *loginLimiter
-	requests  *requestLimiter
+	// EncryptionKeyConfigured reports whether the instance data key is wrapped
+	// by the ENCRYPTION_KEY environment variable rather than the data volume.
+	EncryptionKeyConfigured bool
+	started                 time.Time
+	limiter                 *loginLimiter
+	requests                *requestLimiter
 }
 type loginLimiter struct {
 	mu      sync.Mutex
@@ -177,6 +180,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/pipeline", s.requireAuth(http.HandlerFunc(s.pipelines), false))
 	mux.Handle("GET /api/v1/products", s.requireAuth(http.HandlerFunc(s.listProducts), false))
 	mux.Handle("POST /api/v1/products", s.requireAuth(http.HandlerFunc(s.createProduct), false))
+	mux.Handle("PUT /api/v1/products/{id}", s.requireAuth(http.HandlerFunc(s.updateProduct), false))
+	mux.Handle("DELETE /api/v1/products/{id}", s.requireAuth(http.HandlerFunc(s.deleteProduct), false))
 	mux.Handle("GET /api/v1/activities", s.requireAuth(http.HandlerFunc(s.listActivities), false))
 	mux.Handle("POST /api/v1/activities", s.requireAuth(http.HandlerFunc(s.addActivity), false))
 	mux.Handle("GET /api/v1/forecasts", s.requireAuth(http.HandlerFunc(s.forecast), false))
@@ -218,6 +223,7 @@ func (s *Server) Handler() http.Handler {
 	// Administrator APIs are isolated under /api/v1/admin and require admin permissions in each handler.
 	mux.Handle("GET /api/v1/admin/settings", s.requireAuth(http.HandlerFunc(s.listSettings), false))
 	mux.Handle("PUT /api/v1/admin/settings/{namespace}/{key}", s.requireAuth(http.HandlerFunc(s.putSetting), false))
+	mux.Handle("DELETE /api/v1/admin/settings/{namespace}/{key}", s.requireAuth(http.HandlerFunc(s.deleteSetting), false))
 	mux.Handle("GET /api/v1/admin/oidc", s.requireAuth(http.HandlerFunc(s.getOIDC), false))
 	mux.Handle("PUT /api/v1/admin/oidc", s.requireAuth(http.HandlerFunc(s.putOIDC), false))
 	mux.Handle("POST /api/v1/admin/oidc/test", s.requireAuth(http.HandlerFunc(s.testOIDC), false))
@@ -226,13 +232,22 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/approval-policies", s.requireAuth(http.HandlerFunc(s.listPolicies), false))
 	mux.Handle("POST /api/v1/admin/approval-policies", s.requireAuth(http.HandlerFunc(s.savePolicy), false))
 	mux.Handle("PUT /api/v1/admin/approval-policies/{id}", s.requireAuth(http.HandlerFunc(s.savePolicy), false))
+	mux.Handle("DELETE /api/v1/admin/approval-policies/{id}", s.requireAuth(http.HandlerFunc(s.deletePolicy), false))
 	mux.Handle("GET /api/v1/admin/users", s.requireAuth(http.HandlerFunc(s.adminUsers), false))
 	mux.Handle("POST /api/v1/admin/users", s.requireAuth(http.HandlerFunc(s.createUser), false))
+	mux.Handle("PUT /api/v1/admin/users/{id}", s.requireAuth(http.HandlerFunc(s.updateUser), false))
+	mux.Handle("DELETE /api/v1/admin/users/{id}", s.requireAuth(http.HandlerFunc(s.deleteUser), false))
 	mux.Handle("PUT /api/v1/admin/users/{id}/roles", s.requireAuth(http.HandlerFunc(s.setUserRoles), false))
+	mux.Handle("POST /api/v1/admin/users/{id}/password", s.requireAuth(http.HandlerFunc(s.resetUserPassword), false))
 	mux.Handle("GET /api/v1/admin/roles", s.requireAuth(http.HandlerFunc(s.adminRoles), false))
 	mux.Handle("POST /api/v1/admin/roles", s.requireAuth(http.HandlerFunc(s.createRole), false))
+	mux.Handle("PUT /api/v1/admin/roles/{id}", s.requireAuth(http.HandlerFunc(s.updateRole), false))
+	mux.Handle("DELETE /api/v1/admin/roles/{id}", s.requireAuth(http.HandlerFunc(s.deleteRole), false))
+	mux.Handle("GET /api/v1/admin/permissions", s.requireAuth(http.HandlerFunc(s.adminPermissionCatalog), false))
 	mux.Handle("GET /api/v1/admin/organizations", s.requireAuth(http.HandlerFunc(s.adminOrganizations), false))
 	mux.Handle("POST /api/v1/admin/organizations", s.requireAuth(http.HandlerFunc(s.createOrganization), false))
+	mux.Handle("PUT /api/v1/admin/organizations/{id}", s.requireAuth(http.HandlerFunc(s.updateOrganization), false))
+	mux.Handle("DELETE /api/v1/admin/organizations/{id}", s.requireAuth(http.HandlerFunc(s.deleteOrganization), false))
 	mux.Handle("GET /api/v1/admin/audit", s.requireAuth(http.HandlerFunc(s.adminAudit), false))
 	mux.Handle("GET /api/v1/admin/operations", s.requireAuth(http.HandlerFunc(s.adminOperations), false))
 	mux.Handle("GET /api/v1/admin/operations/support-bundle", s.requireAuth(http.HandlerFunc(s.adminSupportBundle), false))
@@ -242,8 +257,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/configuration/apply", s.requireAuth(http.HandlerFunc(s.applyConfiguration), false))
 	mux.Handle("GET /api/v1/admin/custom-fields", s.requireAuth(http.HandlerFunc(s.customFields), false))
 	mux.Handle("POST /api/v1/admin/custom-fields", s.requireAuth(http.HandlerFunc(s.createCustomField), false))
+	mux.Handle("PUT /api/v1/admin/custom-fields/{id}", s.requireAuth(http.HandlerFunc(s.updateCustomField), false))
+	mux.Handle("DELETE /api/v1/admin/custom-fields/{id}", s.requireAuth(http.HandlerFunc(s.deleteCustomField), false))
 	mux.Handle("GET /api/v1/admin/pipelines", s.requireAuth(http.HandlerFunc(s.adminPipelines), false))
+	mux.Handle("POST /api/v1/admin/pipelines", s.requireAuth(http.HandlerFunc(s.createPipeline), false))
+	mux.Handle("PUT /api/v1/admin/pipelines/{id}", s.requireAuth(http.HandlerFunc(s.updatePipeline), false))
+	mux.Handle("DELETE /api/v1/admin/pipelines/{id}", s.requireAuth(http.HandlerFunc(s.deletePipeline), false))
 	mux.Handle("POST /api/v1/admin/pipelines/{id}/stages", s.requireAuth(http.HandlerFunc(s.createStage), false))
+	mux.Handle("PUT /api/v1/admin/stages/{id}", s.requireAuth(http.HandlerFunc(s.updateStage), false))
+	mux.Handle("DELETE /api/v1/admin/stages/{id}", s.requireAuth(http.HandlerFunc(s.deleteStage), false))
 	mux.Handle("GET /api/v1/admin/sales-execution", s.requireAuth(http.HandlerFunc(s.adminSalesExecution), false))
 	mux.Handle("PUT /api/v1/admin/stages/{id}/sales-execution", s.requireAuth(http.HandlerFunc(s.saveSalesExecution), false))
 	mux.Handle("GET /api/v1/admin/deal-health-rules", s.requireAuth(http.HandlerFunc(s.adminDealHealthRules), false))
