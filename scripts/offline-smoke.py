@@ -508,6 +508,8 @@ build = request("/api/v1/system/version")
 assert build["name"] == "Relio"
 operations = request("/api/v1/admin/operations")
 assert 0 <= operations["readinessScore"] <= 100
+assert operations["secrets"]["registered"] is True and operations["secrets"]["matches"] is True
+assert len(operations["secrets"]["keyId"]) == 12
 diagnostic_keys = {item["key"] for item in operations["diagnostics"]}
 assert {"postgresql", "schema", "master-key", "storage"}.issubset(diagnostic_keys)
 assert operations["features"]["api"] is True and operations["features"]["mcp"] is True
@@ -552,6 +554,211 @@ assert {"CONFIGURATION_BUNDLE_EXPORT", "CONFIGURATION_BUNDLE_APPLY"}.issubset(co
 openapi = request("/api/openapi.json")
 assert "get" in openapi["paths"]["/admin/data-quality"]
 assert "post" in openapi["paths"]["/admin/configuration/apply"]
+assert "delete" in openapi["paths"]["/admin/roles/{id}"]
+assert "put" in openapi["paths"]["/admin/stages/{id}"]
+
+# ---------------------------------------------------------------- admin CRUD
+# Every administrator resource that can be listed must also be editable and
+# removable, and destructive calls must refuse to break referential integrity.
+permission_catalog = request("/api/v1/admin/permissions")
+assert {"permission", "label", "group"} <= set(permission_catalog["items"][0])
+assert "opportunity:read" in {item["permission"] for item in permission_catalog["items"]}
+assert {"USER", "TEAM", "COMPANY"} <= {item["value"] for item in permission_catalog["dataScopes"]}
+
+roles = request("/api/v1/admin/roles")["items"]
+default_roles = [role for role in roles if role["isDefault"]]
+assert len(default_roles) == 1, "exactly one Role must be the SSO sign-in default"
+assert "opportunity:read" in default_roles[0]["permissions"], "the default Role must be able to open the dashboard"
+system_role = next(role for role in roles if role["systemRole"])
+expect_http_error(f"/api/v1/admin/roles/{system_role['id']}", "DELETE", headers=csrf_header, contains="system Role")
+
+created_role = request(
+    "/api/v1/admin/roles",
+    "POST",
+    {
+        "code": "SMOKE_TEMP_ROLE",
+        "name": "Smoke 임시 Role",
+        "description": "삭제 검증용",
+        "dataScope": "USER",
+        "permissions": ["customer:read", "opportunity:read"],
+    },
+    csrf_header,
+)
+request(
+    f"/api/v1/admin/roles/{created_role['id']}",
+    "PUT",
+    {
+        "name": "Smoke 임시 Role 2",
+        "description": "수정 검증용",
+        "dataScope": "TEAM",
+        "permissions": ["customer:read"],
+        "isDefault": False,
+    },
+    csrf_header,
+)
+updated_role = next(role for role in request("/api/v1/admin/roles")["items"] if role["id"] == created_role["id"])
+assert updated_role["dataScope"] == "TEAM" and updated_role["permissions"] == ["customer:read"]
+expect_http_error(
+    f"/api/v1/admin/roles/{created_role['id']}",
+    "PUT",
+    {"name": "typo", "dataScope": "USER", "permissions": ["customer:reed"], "isDefault": False},
+    csrf_header,
+    contains="unknown permission",
+)
+request(f"/api/v1/admin/roles/{created_role['id']}", "DELETE", None, csrf_header, expect_json=False)
+assert created_role["id"] not in {role["id"] for role in request("/api/v1/admin/roles")["items"]}
+
+created_org = request(
+    "/api/v1/admin/organizations",
+    "POST",
+    {"name": "Smoke 임시 조직", "code": "SMOKE_TEMP_ORG", "type": "TEAM"},
+    csrf_header,
+)
+request(
+    f"/api/v1/admin/organizations/{created_org['id']}",
+    "PUT",
+    {"name": "Smoke 임시 조직 2", "code": "SMOKE_TEMP_ORG", "type": "DEPARTMENT", "parentId": "", "active": True},
+    csrf_header,
+)
+assert "Smoke 임시 조직 2" in {org["name"] for org in request("/api/v1/admin/organizations")["items"]}
+request(f"/api/v1/admin/organizations/{created_org['id']}", "DELETE", None, csrf_header, expect_json=False)
+root_org = next(org for org in request("/api/v1/admin/organizations")["items"] if org["code"] == "RELIO")
+expect_http_error(f"/api/v1/admin/organizations/{root_org['id']}", "DELETE", headers=csrf_header, contains="RELIO")
+
+custom_field = request(
+    "/api/v1/admin/custom-fields",
+    "POST",
+    {"entityType": "Customer", "key": "smoke_temp_field", "label": "Smoke Field", "type": "Text", "required": False, "displayOrder": 900},
+    csrf_header,
+)
+request(
+    f"/api/v1/admin/custom-fields/{custom_field['id']}",
+    "PUT",
+    {"label": "Smoke Field 2", "type": "Select", "required": True, "options": ["A", "B"], "active": False, "displayOrder": 910},
+    csrf_header,
+)
+edited_field = next(item for item in request("/api/v1/admin/custom-fields")["items"] if item["id"] == custom_field["id"])
+assert edited_field["label"] == "Smoke Field 2" and edited_field["type"] == "Select" and edited_field["active"] is False
+request(f"/api/v1/admin/custom-fields/{custom_field['id']}", "DELETE", None, csrf_header)
+
+admin_pipelines = request("/api/v1/admin/pipelines")["items"]
+default_pipeline = next(pipeline for pipeline in admin_pipelines if pipeline["default"])
+expect_http_error(f"/api/v1/admin/pipelines/{default_pipeline['id']}", "DELETE", headers=csrf_header, contains="default Pipeline")
+new_stage = request(
+    f"/api/v1/admin/pipelines/{default_pipeline['id']}/stages",
+    "POST",
+    {
+        "name": "Smoke 임시 Stage",
+        "order": max(stage["order"] for stage in default_pipeline["stages"]) + 1,
+        "probability": 15,
+        "forecastCategory": "PIPELINE",
+        "isWon": False,
+        "isLost": False,
+        "color": "#888888",
+    },
+    csrf_header,
+)
+request(
+    f"/api/v1/admin/stages/{new_stage['id']}",
+    "PUT",
+    {
+        "name": "Smoke 임시 Stage 2",
+        "order": 2,
+        "probability": 25,
+        "forecastCategory": "BEST_CASE",
+        "isWon": False,
+        "isLost": False,
+        "active": True,
+        "color": "#777777",
+        "minDays": None,
+        "maxDays": 14,
+    },
+    csrf_header,
+)
+reordered = next(p for p in request("/api/v1/admin/pipelines")["items"] if p["id"] == default_pipeline["id"])
+moved = next(stage for stage in reordered["stages"] if stage["id"] == new_stage["id"])
+assert moved["order"] == 2 and moved["probability"] == 25 and moved["forecastCategory"] == "BEST_CASE"
+orders = sorted(stage["order"] for stage in reordered["stages"])
+assert orders == list(range(1, len(orders) + 1)), f"stage order must stay contiguous: {orders}"
+request(f"/api/v1/admin/stages/{new_stage['id']}", "DELETE", None, csrf_header, expect_json=False)
+compacted = next(p for p in request("/api/v1/admin/pipelines")["items"] if p["id"] == default_pipeline["id"])
+orders = sorted(stage["order"] for stage in compacted["stages"])
+assert orders == list(range(1, len(orders) + 1)), f"stage order must stay contiguous after delete: {orders}"
+
+smoke_product = request(
+    "/api/v1/products",
+    "POST",
+    {"code": "SMOKE-TEMP", "name": "Smoke 임시 상품", "description": "삭제 검증용", "unitPrice": 1000},
+    csrf_header,
+)
+request(
+    f"/api/v1/products/{smoke_product['id']}",
+    "PUT",
+    {"code": "SMOKE-TEMP", "name": "Smoke 임시 상품 2", "description": "수정 검증용", "unitPrice": 2000, "active": False},
+    csrf_header,
+)
+assert any(
+    item["name"] == "Smoke 임시 상품 2" and item["active"] is False
+    for item in request("/api/v1/products?limit=200")["items"]
+)
+request(f"/api/v1/products/{smoke_product['id']}", "DELETE", None, csrf_header, expect_json=False)
+
+# A managed user must be editable, re-rolable and deactivatable, and the
+# Break Glass account must resist all three.
+smoke_user = request(
+    "/api/v1/admin/users",
+    "POST",
+    {
+        "username": "smoke-managed-user",
+        "displayName": "Smoke 관리 대상",
+        "email": "smoke-managed@relio.invalid",
+        "password": "Smoke-Managed-Password-2026",
+        "organizationId": "",
+        "title": "사원",
+        "roleIds": [],
+    },
+    csrf_header,
+)
+request(
+    f"/api/v1/admin/users/{smoke_user['id']}",
+    "PUT",
+    {"displayName": "Smoke 관리 대상 2", "email": "smoke-managed@relio.invalid", "organizationId": "", "managerId": "", "title": "대리", "active": True},
+    csrf_header,
+)
+request(
+    f"/api/v1/admin/users/{smoke_user['id']}/roles",
+    "PUT",
+    {"roleIds": [default_roles[0]["id"]]},
+    csrf_header,
+)
+request(
+    f"/api/v1/admin/users/{smoke_user['id']}/password",
+    "POST",
+    {"password": "Smoke-Reset-Password-2026"},
+    csrf_header,
+)
+managed = next(item for item in request("/api/v1/admin/users")["items"] if item["id"] == smoke_user["id"])
+assert managed["displayName"] == "Smoke 관리 대상 2" and managed["title"] == "대리"
+assert managed["roles"] == [default_roles[0]["name"]]
+bootstrap_user = next(item for item in request("/api/v1/admin/users")["items"] if item["isBootstrap"])
+for method, path, body in (
+    ("DELETE", f"/api/v1/admin/users/{bootstrap_user['id']}", None),
+    ("PUT", f"/api/v1/admin/users/{bootstrap_user['id']}", {"displayName": "x", "email": "", "organizationId": "", "managerId": "", "title": "", "active": False}),
+):
+    expect_http_error(path, method, body, csrf_header, contains="break glass")
+request(f"/api/v1/admin/users/{smoke_user['id']}", "DELETE", None, csrf_header)
+assert not next(item for item in request("/api/v1/admin/users")["items"] if item["id"] == smoke_user["id"])["active"]
+
+# Deleting a setting restores the compiled-in default.
+request("/api/v1/admin/settings/system/locale", "PUT", {"value": "en-US", "valueType": "string"}, csrf_header)
+request("/api/v1/admin/settings/system/locale", "DELETE", None, csrf_header)
+assert "locale" not in {item["key"] for item in request("/api/v1/admin/settings?namespace=system")["items"]}
+
+# Activity and customer list filters must actually narrow the result set.
+filtered_customers = request("/api/v1/customers?customerType=PROSPECT&limit=200")["items"]
+assert all(item["customerType"] == "PROSPECT" for item in filtered_customers)
+filtered_activities = request("/api/v1/activities?type=MEETING&limit=100")["items"]
+assert all(item["activityType"] == "MEETING" for item in filtered_activities)
 # Disabling ordinary local login must never lock out the Bootstrap break-glass administrator.
 request(
     "/api/v1/admin/settings/auth/local_login_enabled",

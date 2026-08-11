@@ -31,6 +31,11 @@ services:
       POSTGRES_DSN: postgres://relio:relio-local-password@postgres:5432/relio?sslmode=disable
       BOOTSTRAP_ADMIN: admin
       BOOTSTRAP_ADMIN_PASSWORD: ChangeMe-Relio-2026
+      # Wraps the Instance Data Key that protects Personal Keys and the SSO
+      # Client Secret. Keep this value and the API Keys keep working across
+      # restarts, image upgrades and a recreated relio-data volume.
+      # Generate a production value with: openssl rand -hex 32
+      ENCRYPTION_KEY: 6c6f63616c2d6465762d6f6e6c792d646f2d6e6f742d7573652d696e2d70726f64
     volumes:
       - relio-data:/var/lib/relio
 volumes:
