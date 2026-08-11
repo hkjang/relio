@@ -9,14 +9,21 @@
 
 ## 1. 시스템 부트스트랩 및 필수 환경변수 (Bootstrap Specification)
 
-Relio 컨테이너 프로세스는 정확히 **3개의 애플리케이션 환경변수**만으로 최소 인프라 구축 및 초기 시스템 부트스트랩을 완료합니다.
+Relio 컨테이너 프로세스는 **3개의 필수 환경변수**만으로 최소 인프라 구축 및 초기 시스템 부트스트랩을 완료합니다. 여기에 자격증명 영속성을 위한 **선택 환경변수 1개**를 더할 수 있습니다.
 
 ```bash
 # Relio 실행 환경변수 명세
 POSTGRES_DSN=postgres://relio:Secr3tPass@10.10.50.5:5432/relio?sslmode=disable
 BOOTSTRAP_ADMIN=admin
 BOOTSTRAP_ADMIN_PASSWORD=SuperSecretAdminPassword123!
+
+# 선택: 설정하면 Volume을 새로 만들어도 API Key와 SSO Secret이 유지됩니다.
+# openssl rand -hex 32 으로 최초 1회 생성한 뒤 비밀번호 관리 도구에 보관하세요.
+ENCRYPTION_KEY=3f9c1d...64자리16진수
 ```
+
+> **ENCRYPTION_KEY를 권장하는 이유**:
+> 이 값을 설정하지 않으면 Personal Key Digest와 SSO Client Secret을 여는 열쇠가 `relio-data` Volume 안의 파일에만 존재합니다. Volume이 사라지면 모든 API Key를 재발급하고 SSO Client Secret을 다시 입력해야 합니다. `ENCRYPTION_KEY`를 설정하면 컨테이너와 Volume을 새로 만들어도 같은 값만 주입하면 기존 자격증명이 그대로 살아납니다. 운영 중인 환경에 나중에 추가해도 첫 기동에서 자동으로 이관되며 재발급은 필요 없습니다.
 
 > **부트스트랩 원칙**:  
 > `BOOTSTRAP_ADMIN`은 시스템 최초 기동 시 계정이 존재하지 않을 때만 자동 생성되는 **Break Glass 비상 계정**입니다. 한번 생성된 후에는 환경변수를 변경하더라도 기존 계정을 덮어쓰지 않으므로 안심하고 운영할 수 있습니다.
@@ -34,14 +41,24 @@ docker run -d \
   -e POSTGRES_DSN="postgres://relio:password@postgres:5432/relio" \
   -e BOOTSTRAP_ADMIN="admin" \
   -e BOOTSTRAP_ADMIN_PASSWORD="StrongAdminPassword123!" \
+  -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -v relio-data:/var/lib/relio \
-  relio:v1.0.0
+  relio:v1.6.0
 ```
 
-### 2.1 볼륨에 저장되는 3대 자산
-1. **Instance Master Key**: 비밀 설정 및 시스템 시크릿 암호화(AES-256-GCM)에 사용되는 마스터 키.
-2. **업로드 파일 레포지토리**: 영업 관련 첨부파일, 계약서 및 증빙 문서.
-3. **Export 임시 데이터**: 대용량 엑셀/CSV 내보내기 시 임시 파싱 버퍼.
+### 2.1 볼륨에 저장되는 자산
+1. **업로드 파일 레포지토리**: 영업 관련 첨부파일, 계약서 및 증빙 문서.
+2. **Export 임시 데이터**: 대용량 엑셀/CSV 내보내기 시 임시 파싱 버퍼.
+3. **Instance Data Key 파일**: `ENCRYPTION_KEY`를 사용하지 않을 때만 `secrets/master.key`에 보관됩니다. 환경변수를 사용하면 이 파일 없이도 기동합니다.
+
+### 2.2 자격증명 영속성 점검
+운영 Command Center의 **Master Key** 진단이 `WARNING`이면 아직 Volume에 종속된 상태입니다. Diagnostics 화면의 `보호 방식` 항목에서 `ENCRYPTION_KEY (Volume 독립)`으로 표시되는지 확인하세요.
+
+### 2.2 Master Key와 DB 연속성 검증
+
+Relio는 Master Key 원문이 아닌 단방향 12자리 식별자를 관리자 진단에 표시하고 전체 지문을 PostgreSQL에 등록합니다. Container 교체 전후 `/admin/operations`에서 Master Key ID가 동일한지 확인하세요. DB에 SSO Secret 또는 활성 Personal Key가 있는데 `/var/lib/relio`가 비어 있거나 다른 Key를 포함하면 Application은 새 Key를 생성하지 않고 `instance master key recovery required`로 종료됩니다.
+
+이 경우 PostgreSQL과 같은 복구 시점의 `relio-data` Volume을 다시 연결해야 합니다. DB만 복원하거나 Volume만 복원해서는 자격증명 연속성을 보장할 수 없습니다.
 
 ---
 

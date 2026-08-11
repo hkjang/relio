@@ -115,4 +115,6 @@ Relio는 업무 역할과 접근 보안을 보장하기 위해 3개의 주요 �
 | **Personal Key 인증 실패 (401)** | 키 만료 또는 유예기간(7일) 경과 | `/me/keys` 메뉴에서 신규 키 발급 및 회전(Rotation) 실행 |
 | **MCP 연동 시 일부 도구 안 보임** | 관리자 Tool Allowlist 미승인 | `/admin/mcp` 대시보드에서 해당 사용자의 MCP Tool 권한 확인 |
 | **승인 버튼이 표시되지 않음** | 영업 기회 승인 정책 미활성화 | 해당 Entity에 승인 정책이 없을 경우 승인 버튼은 자동 숨김 처리됨 |
-| **Keycloak 로그인 후 권한 메뉴가 없음** | OIDC Default Role 또는 Role Claim Mapping 미지정 | 관리자가 OIDC Default Role/Mapping을 지정합니다. 화면은 빈 화면 대신 권한 제한 상태로 정상 표시됩니다. |
+| **Keycloak 로그인 후 권한 메뉴가 없음 (403)** | 부여된 Role이 없음 | Relio는 SSO 신규 사용자에게 기본 Sign-in Role을 자동 부여합니다. 그래도 403이면 관리자가 `/admin/roles`에서 기본 Role을 지정했는지, `/admin/users`에서 해당 계정의 Role이 비어 있지 않은지 확인합니다. 권한이 전혀 없는 계정은 빈 화면 대신 안내 화면이 표시됩니다. |
+| **SSO 로그인 실패** | 로그인 화면의 오류 코드 확인 | `not_provisioned`는 계정 미등록, `no_default_role`은 기본 Role 미지정, `discovery_failed`는 Keycloak 연결 문제, `token_exchange_failed`는 Client Secret/Redirect URI 문제입니다. |
+| **재기동 후 SSO/Personal Key가 동작하지 않음** | `ENCRYPTION_KEY` 미설정 상태에서 Volume 유실, 또는 Key 값 변경 | `ENCRYPTION_KEY`를 설정해 두면 Volume을 새로 만들어도 유지됩니다. 로그의 `instance encryption key integrity check failed`를 확인하고 원래 Key 값 또는 DB와 같은 복구 시점의 Volume을 연결합니다. |

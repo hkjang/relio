@@ -79,6 +79,23 @@ Opportunity Team 구성은 협업 역할만 추가합니다. 구성원이라는 
 ## Backup and Upgrade
 
 - PostgreSQL과 `relio-data` Volume을 함께 Backup합니다.
-- 새 Image를 `docker load`하고 기존 Volume과 같은 세 환경변수로 Container만 교체합니다.
+- 새 Image를 `docker load`하고 기존 Volume과 같은 환경변수로 Container만 교체합니다. `ENCRYPTION_KEY`를 사용하는 배포는 Volume 없이도 같은 값만 주면 교체가 완료됩니다.
 - `/admin/overview`에서 운영 준비도와 우선 조치를 확인하고 `/admin/operations`에서 Application Version, Schema Version, Last Migration을 확인합니다.
+- `/admin/operations`의 Data Key ID가 교체 전후 동일하고 `보호 방식`이 기대한 값인지 확인합니다.
 - Migration 실패 시 Application은 시작하지 않으므로 기존 Image와 DB Backup으로 복구합니다.
+
+### ENCRYPTION_KEY 도입 (권장)
+
+재기동이나 Volume 재생성 때마다 API Key를 다시 발급하지 않으려면 `ENCRYPTION_KEY`를 설정합니다.
+
+1. `openssl rand -hex 32`로 값을 한 번 생성해 비밀번호 관리 도구에 보관합니다.
+2. 기존 `relio-data` Volume을 그대로 연결한 상태에서 `ENCRYPTION_KEY`를 추가해 Container를 재기동합니다.
+3. 로그의 `instance data key re-wrapped with the new wrapping key`와 `/admin/operations`의 `보호 방식 = ENCRYPTION_KEY (Volume 독립)`을 확인합니다.
+
+이관 중 Data Key 자체는 바뀌지 않으므로 기존 Personal Key와 SSO Client Secret은 재발급 없이 계속 동작합니다. 이후에는 Volume을 새로 만들어도 같은 `ENCRYPTION_KEY`만 주면 정상 기동합니다.
+
+### Credential Continuity 복구
+
+로그에 `instance encryption key integrity check failed`가 나타나면 새 Key를 만들거나 DB의 암호문을 임의로 삭제하지 않습니다. 원래 `ENCRYPTION_KEY` 값을 다시 주입하거나, PostgreSQL Backup과 같은 시점의 `relio-data` Volume을 연결한 뒤 다시 시작합니다.
+
+원래 Key와 Volume Backup이 모두 없다면 암호학적으로 기존 Secret 복구는 불가능합니다. 이 경우 이전 버전과 현재 Volume으로 Bootstrap Admin 로그인 후 OIDC Client Secret을 다시 저장하고, 활성 Personal REST/MCP Key를 모두 폐기·재발급한 다음 업그레이드하세요.

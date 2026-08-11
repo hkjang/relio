@@ -18,7 +18,8 @@ Relio는 인터넷이 차단된 기업 환경에서 단일 Docker Image로 운�
 
 ## 핵심 특성
 
-- 애플리케이션 환경변수는 정확히 `POSTGRES_DSN`, `BOOTSTRAP_ADMIN`, `BOOTSTRAP_ADMIN_PASSWORD` 세 개입니다.
+- 애플리케이션 환경변수는 필수 3개(`POSTGRES_DSN`, `BOOTSTRAP_ADMIN`, `BOOTSTRAP_ADMIN_PASSWORD`)와 선택 1개(`ENCRYPTION_KEY`)뿐입니다.
+- `ENCRYPTION_KEY`를 설정하면 Personal Key와 SSO Client Secret이 재기동, 이미지 교체, Volume 재생성 후에도 그대로 유지됩니다.
 - `/app`, `/me`, `/admin`을 분리하고 관리자는 프로필 메뉴를 통해 Admin Console로 이동합니다.
 - Admin Command Center에서 운영 준비도, 우선 조치, PostgreSQL·Schema·Master Key·Storage·OIDC·API/MCP 진단과 Background Job을 확인합니다.
 - Secret을 제외한 Support Bundle과 검색·변경 전후 비교가 가능한 Audit Log를 제공합니다.
@@ -60,28 +61,47 @@ Password: ChangeMe-Relio-2026
 
 ## 운영 실행
 
-Relio Container에 전달하는 환경변수는 세 개뿐입니다.
+Relio Container에 전달하는 환경변수는 필수 3개와 선택 1개입니다.
 
 ```bash
+# 최초 1회만 생성하고 비밀번호 관리 도구에 보관하세요.
+ENCRYPTION_KEY="$(openssl rand -hex 32)"
+
 docker run -d \
   --name relio \
   -p 8080:8080 \
   -e POSTGRES_DSN="postgres://relio:password@postgres:5432/relio" \
   -e BOOTSTRAP_ADMIN="admin" \
   -e BOOTSTRAP_ADMIN_PASSWORD="ChangeMe-To-A-Strong-Password" \
+  -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -v relio-data:/var/lib/relio \
-  relio:v1.5.0
+  relio:v1.6.0
 ```
 
-`relio-data`에는 Instance Master Key, 업로드 파일과 Export 임시 데이터가 저장됩니다. Container를 교체하거나 Rollback해도 이 Volume을 유지해야 암호화된 설정과 Personal Key Digest 체계가 유지됩니다.
+### 자격증명 영속성 (ENCRYPTION_KEY)
+
+Personal Key Digest와 SSO Client Secret은 Instance Data Key로 보호됩니다. 이 Data Key는 한 번 만들어지면 바뀌지 않고, 무엇으로 봉인할지만 선택합니다.
+
+| 구성 | 재기동 | 이미지 교체 | `relio-data` Volume 재생성 |
+| --- | --- | --- | --- |
+| `ENCRYPTION_KEY` 설정 | 유지 | 유지 | **유지** |
+| 미설정 (`master.key` 파일만) | 유지 | 유지 | 복구 필요 |
+
+`ENCRYPTION_KEY`는 64자리 16진수, Base64로 인코딩한 32바이트, 또는 32자 이상 Passphrase를 받습니다. 값 자체는 저장하지 않고 Data Key를 봉인하는 데만 사용하며 PostgreSQL에는 단방향 지문만 남습니다.
+
+이미 운영 중인 환경에 `ENCRYPTION_KEY`를 추가하면 기존 `relio-data` Volume이 연결된 상태의 첫 기동에서 자동으로 이관됩니다. **기존 API Key와 SSO 설정은 그대로 유지되며 재발급이 필요 없습니다.** 이후에는 Volume 없이도 같은 키만 주면 기동됩니다.
+
+`relio-data`에는 업로드 파일과 Export 임시 데이터가 저장되며, `ENCRYPTION_KEY`를 쓰지 않을 때만 Data Key 파일도 함께 보관합니다.
+
+Relio는 Data Key의 단방향 ID를 PostgreSQL에 등록합니다. SSO Secret 또는 활성 Personal Key가 있는 DB에 다른 키·다른 Volume을 연결하면 새 키를 조용히 만들지 않고 기동을 중단합니다. 로그의 `instance encryption key integrity check failed`를 확인하고 원래 `ENCRYPTION_KEY` 값 또는 같은 복구 시점의 `relio-data`를 다시 연결하세요.
 
 ### 오프라인 Release 설치
 
 GitHub Release에서 파일 하나만 반입합니다.
 
 ```bash
-gunzip -c relio-v1.5.0.tar.gz | docker load
-docker image inspect relio:v1.5.0
+gunzip -c relio-v1.6.0.tar.gz | docker load
+docker image inspect relio:v1.6.0
 ```
 
 SHA-256은 Release 본문에 기록되며 별도 Checksum Asset은 배포하지 않습니다.
@@ -122,7 +142,7 @@ Sales Intelligence MCP는 `find_deals_at_risk`, `explain_deal_risk`, `recommend_
 ```bash
 make test
 make build
-make docker VERSION=1.5.0
+make docker VERSION=1.6.0
 ```
 
 검증 항목:
@@ -130,25 +150,25 @@ make docker VERSION=1.5.0
 ```bash
 ./scripts/check-env-contract.sh
 ./scripts/check-static-assets.sh
-./scripts/run-offline-container-test.sh relio:v1.5.0
-./scripts/run-upgrade-container-test.sh relio:v1.4.0 relio:v1.5.0
+./scripts/run-offline-container-test.sh relio:v1.6.0
+./scripts/run-upgrade-container-test.sh relio:v1.5.0 relio:v1.6.0
 ```
 
-오프라인 테스트는 Docker internal network에서 PostgreSQL과 Relio를 시작하고 Migration, Bootstrap 로그인, CRM/영업 기능, REST Personal Key, MCP, Admin Operations, Data Quality, Configuration Bundle 왕복, Support Bundle/Audit 검색과 외부 정적 자산 부재를 검사합니다.
+오프라인 테스트는 Docker internal network에서 PostgreSQL과 Relio를 시작하고 Migration, Bootstrap 로그인, CRM/영업 기능, REST Personal Key, MCP, Admin Operations, Data Quality, Configuration Bundle 왕복, Support Bundle/Audit 검색과 외부 정적 자산 부재를 검사합니다. Container 교체 후 SSO Secret·Personal Key 유지와 잘못된 Volume의 Fail-Closed 동작도 검증합니다.
 
 ## Release
 
 SemVer Tag를 push하면 `.github/workflows/release.yml`이 테스트, 이미지 빌드, 오프라인 검증, `docker save`, gzip 압축과 GitHub Release를 수행합니다.
 
 ```bash
-git tag v1.5.0
-git push origin v1.5.0
+git tag v1.6.0
+git push origin v1.6.0
 ```
 
 Relio가 Release Asset으로 직접 업로드하는 파일은 다음 하나뿐입니다.
 
 ```text
-relio-v1.5.0.tar.gz
+relio-v1.6.0.tar.gz
 ```
 
 ## 설계 문서

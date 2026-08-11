@@ -19,7 +19,7 @@ React 빌드 결과는 `internal/webui/dist`에서 Go Binary에 embed됩니다. 
 ## Startup
 
 ```text
-3개 환경변수 검증
+필수 3개 + 선택 ENCRYPTION_KEY 환경변수 검증
 → PostgreSQL 연결 재시도
 → Advisory Migration Lock
 → Transaction Migration
@@ -46,7 +46,11 @@ Migration이 실패하면 HTTP Server를 시작하지 않습니다. `schema_migr
 
 ## Configuration
 
-공통 설정은 Namespace/Key/Type/Version을 가진 `system_settings`에 저장합니다. OIDC, Role/Group Mapping, Pipeline, Approval, Custom Field는 별도 Domain 테이블을 사용합니다. Secret 설정은 `/var/lib/relio/secrets/master.key`로 암호화합니다.
+공통 설정은 Namespace/Key/Type/Version을 가진 `system_settings`에 저장합니다. OIDC, Role/Group Mapping, Pipeline, Approval, Custom Field는 별도 Domain 테이블을 사용합니다. Secret 설정은 Instance Data Key로 AES-256-GCM 암호화합니다.
+
+Instance Data Key는 Envelope 구조입니다. 실제 암호화·HMAC에 쓰이는 Data Key는 봉인된 형태로 `instance_data_key`에 저장하고, 그 Data Key를 여는 Wrapping Key만 `ENCRYPTION_KEY` 환경변수 또는 `/var/lib/relio/secrets/master.key`에서 읽습니다. Wrapping Key를 바꿔도 Data Key는 그대로이므로 이미 암호화된 Secret과 발급된 Personal Key Digest가 계속 유효합니다.
+
+`instance_key_registry`와 `instance_data_key`는 Key 원문이 아닌 Domain-separated SHA-256 지문만 보관합니다. HTTP Server를 시작하기 전에 봉인 해제 가능성, DB Registry 일치와 기존 AES-GCM 암호문의 복호화 가능성을 검증합니다. Key 누락이나 불일치는 신규 Key 생성으로 진행하지 않고 Fail-Closed 처리하므로 OIDC와 Personal Key가 조용히 무효화되는 상태를 허용하지 않습니다.
 
 ## Approval
 

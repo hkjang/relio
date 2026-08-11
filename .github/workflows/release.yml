@@ -111,17 +111,23 @@ jobs:
           ### 실행
 
           \`\`\`bash
+          # 최초 1회만 생성하고 비밀번호 관리 도구에 보관하세요.
+          ENCRYPTION_KEY="\$(openssl rand -hex 32)"
+
           docker run -d \\
             --name relio \\
             -p 8080:8080 \\
             -e POSTGRES_DSN="postgres://relio:password@postgres:5432/relio" \\
             -e BOOTSTRAP_ADMIN="admin" \\
             -e BOOTSTRAP_ADMIN_PASSWORD="ChangeMe-Immediately" \\
+            -e ENCRYPTION_KEY="\$ENCRYPTION_KEY" \\
             -v relio-data:/var/lib/relio \\
             relio:${image_tag}
           \`\`\`
 
-          Relio Application이 받는 환경변수는 \`POSTGRES_DSN\`, \`BOOTSTRAP_ADMIN\`, \`BOOTSTRAP_ADMIN_PASSWORD\` 세 개뿐입니다. Instance Master Key와 업로드 데이터를 보존하려면 \`/var/lib/relio\` Volume을 반드시 유지하세요.
+          Relio Application이 받는 환경변수는 필수 3개(\`POSTGRES_DSN\`, \`BOOTSTRAP_ADMIN\`, \`BOOTSTRAP_ADMIN_PASSWORD\`)와 선택 1개(\`ENCRYPTION_KEY\`)뿐입니다.
+
+          \`ENCRYPTION_KEY\`를 설정하면 Personal Key와 SSO Client Secret이 재기동, 이미지 교체, \`relio-data\` Volume 재생성 후에도 유지됩니다. 설정하지 않으면 자격증명을 여는 Key가 Volume 안에만 존재하므로 \`/var/lib/relio\`를 PostgreSQL과 같은 복구 시점으로 반드시 보존해야 합니다.
 
           ## 검증
 
