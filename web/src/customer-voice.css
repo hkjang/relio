@@ -1,0 +1,43 @@
+/* 고객의 목소리 (VOC) — 접수부터 해결·만족도까지 */
+.voice-kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:15px}
+.voice-kpi-grid>*{display:flex;flex-direction:column;gap:3px;text-align:left;background:#fff;border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+.voice-kpi-grid button{cursor:pointer}
+.voice-kpi-grid button:hover{border-color:#a9cfe0;background:#fbfdff}
+.voice-kpi-grid button.active{border-color:#1b7f93;box-shadow:0 0 0 3px #1b7f9318}
+.voice-kpi-grid span{font-size:12px;color:#7c8c9c}
+.voice-kpi-grid strong{font-size:26px;color:#173f63;line-height:1.1}
+.voice-kpi-grid small{font-size:11px;color:#93a1ae}
+.voice-status-row{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:14px}
+.voice-breach{font-size:11px;font-weight:700;color:#a93546;background:#fdecef;border:1px solid #f2ccd3;border-radius:6px;padding:4px 7px}
+.voice-quote{border-left:3px solid #63b0c4;background:#f4fafc;border-radius:0 10px 10px 0;padding:14px 16px;margin-bottom:16px;font-size:14px;line-height:1.7;color:#2c4459;white-space:pre-wrap}
+.voice-resolution{background:#f0f9f4;border:1px solid #cbe8d8;border-radius:11px;padding:14px 16px;margin-top:14px}
+.voice-resolution b{font-size:13px;color:#22795b}
+.voice-resolution p{font-size:13px;color:#38556a;margin:6px 0 0;line-height:1.7;white-space:pre-wrap}
+.voice-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+.drawer-section textarea{width:100%;border:1px solid #d8e1e9;border-radius:8px;padding:11px;font-size:14px;color:#24384e;outline:0}
+.drawer-section textarea:focus{border-color:#2794a8;box-shadow:0 0 0 3px #1d99aa14}
+.voice-panel{margin-bottom:18px}
+.voice-mini-kpi{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.voice-mini-kpi>div{background:#f7fafc;border-radius:10px;padding:12px 13px}
+.voice-mini-kpi small{display:block;font-size:11px;color:#8494a3;margin-bottom:4px}
+.voice-mini-kpi b{font-size:17px;color:#1d4666}
+.voice-list{display:grid;gap:7px}
+.voice-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:10px;align-items:center;text-align:left;background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+.voice-row:hover{background:#f7fafc;border-color:#bcd6e4}
+.voice-row-main b{display:block;font-size:14px;color:#26405a}
+.voice-row-main small{display:block;font-size:11px;color:#8b99a6;margin-top:3px}
+tr.row-danger{background:#fffafb}
+tr.row-danger:hover{background:#fdeff2}
+.status-complaint,.status-defect,.status-churn-risk{background:#fbeaec;color:#bd4657}
+.status-request,.status-inquiry{background:#eaf3fb;color:#2b6690}
+.status-praise{background:#e9f7ef;color:#248059}
+.status-received{background:#fff4e2;color:#a4691a}
+.status-in-review,.status-in-progress{background:#eaf2fc;color:#2f5f96}
+.status-pending-customer{background:#f4eefb;color:#6b4a9c}
+.status-resolved{background:#e6f5ed;color:#28785a}
+.status-customer-contact{background:#e8f4f8;color:#1f6b81}
+.status-escalated{background:#fdeeea;color:#b1512f}
+.status-reopened{background:#fff2d8;color:#a96b13}
+.status-satisfaction{background:#f1f4f9;color:#4d647a}
+@media(max-width:1300px){.voice-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:900px){.voice-kpi-grid,.voice-mini-kpi{grid-template-columns:repeat(2,minmax(0,1fr))}.voice-row{grid-template-columns:1fr}}

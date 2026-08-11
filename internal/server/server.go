@@ -29,6 +29,7 @@ import (
 	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/hkjang/relio/internal/platform/ids"
 	"github.com/hkjang/relio/internal/relationship"
+	"github.com/hkjang/relio/internal/voice"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -46,6 +47,7 @@ type Server struct {
 	MCP       *mcp.Server
 	Intel     *intelligence.Service
 	Relations *relationship.Service
+	Voices    *voice.Service
 	// EncryptionKeyConfigured reports whether the instance data key is wrapped
 	// by the ENCRYPTION_KEY environment variable rather than the data volume.
 	EncryptionKeyConfigured bool
@@ -120,8 +122,8 @@ func (l *requestLimiter) allow(key string, limit int) bool {
 	return true
 }
 
-func New(db *pgxpool.Pool, log *slog.Logger, authService *auth.Service, auditService *audit.Service, crmService *crm.Service, settings *admin.SettingsService, keys *apikey.Service, approvals *approval.Service, oidcService *oidc.Service, mcpServer *mcp.Server, intel *intelligence.Service, relations *relationship.Service) *Server {
-	return &Server{DB: db, Log: log, Auth: authService, Audit: auditService, CRM: crmService, Settings: settings, Keys: keys, Approvals: approvals, OIDC: oidcService, MCP: mcpServer, Intel: intel, Relations: relations, started: time.Now(), limiter: newLoginLimiter(), requests: newRequestLimiter()}
+func New(db *pgxpool.Pool, log *slog.Logger, authService *auth.Service, auditService *audit.Service, crmService *crm.Service, settings *admin.SettingsService, keys *apikey.Service, approvals *approval.Service, oidcService *oidc.Service, mcpServer *mcp.Server, intel *intelligence.Service, relations *relationship.Service, voices *voice.Service) *Server {
+	return &Server{DB: db, Log: log, Auth: authService, Audit: auditService, CRM: crmService, Settings: settings, Keys: keys, Approvals: approvals, OIDC: oidcService, MCP: mcpServer, Intel: intel, Relations: relations, Voices: voices, started: time.Now(), limiter: newLoginLimiter(), requests: newRequestLimiter()}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -204,6 +206,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/targets", s.requireAuth(http.HandlerFunc(s.createTarget), false))
 	mux.Handle("GET /api/v1/notifications", s.requireAuth(http.HandlerFunc(s.listNotifications), false))
 	mux.Handle("POST /api/v1/notifications/{id}/read", s.requireAuth(http.HandlerFunc(s.readNotification), false))
+	// 고객의 목소리(VOC): 불만, 요청, 문의와 이탈 징후의 전체 수명주기.
+	mux.Handle("GET /api/v1/voices", s.requireAuth(http.HandlerFunc(s.listVoices), false))
+	mux.Handle("POST /api/v1/voices", s.requireAuth(http.HandlerFunc(s.createVoice), false))
+	mux.Handle("GET /api/v1/voices/summary", s.requireAuth(http.HandlerFunc(s.voiceSummary), false))
+	mux.Handle("GET /api/v1/voices/categories", s.requireAuth(http.HandlerFunc(s.voiceCategories), false))
+	mux.Handle("GET /api/v1/voices/{id}", s.requireAuth(http.HandlerFunc(s.getVoice), false))
+	mux.Handle("PUT /api/v1/voices/{id}", s.requireAuth(http.HandlerFunc(s.updateVoice), false))
+	mux.Handle("POST /api/v1/voices/{id}/events", s.requireAuth(http.HandlerFunc(s.commentVoice), false))
 	mux.Handle("GET /api/v1/reports", s.requireAuth(http.HandlerFunc(s.reports), false))
 	mux.Handle("GET /api/v1/reports/win-loss", s.requireAuth(http.HandlerFunc(s.winLoss), false))
 	mux.Handle("GET /api/v1/approvals", s.requireAuth(http.HandlerFunc(s.listApprovals), false))
@@ -270,6 +280,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/admin/stages/{id}/sales-execution", s.requireAuth(http.HandlerFunc(s.saveSalesExecution), false))
 	mux.Handle("GET /api/v1/admin/deal-health-rules", s.requireAuth(http.HandlerFunc(s.adminDealHealthRules), false))
 	mux.Handle("PUT /api/v1/admin/deal-health-rules/{id}", s.requireAuth(http.HandlerFunc(s.saveDealHealthRule), false))
+	mux.Handle("GET /api/v1/admin/voice-categories", s.requireAuth(http.HandlerFunc(s.adminVoiceCategories), false))
+	mux.Handle("POST /api/v1/admin/voice-categories", s.requireAuth(http.HandlerFunc(s.createVoiceCategory), false))
+	mux.Handle("PUT /api/v1/admin/voice-categories/{id}", s.requireAuth(http.HandlerFunc(s.updateVoiceCategory), false))
+	mux.Handle("DELETE /api/v1/admin/voice-categories/{id}", s.requireAuth(http.HandlerFunc(s.deleteVoiceCategory), false))
 	mux.Handle("GET /api/v1/admin/personal-keys", s.requireAuth(http.HandlerFunc(s.adminPersonalKeys), false))
 	mux.Handle("DELETE /api/v1/admin/personal-keys/{id}", s.requireAuth(http.HandlerFunc(s.adminRevokeKey), false))
 	mux.Handle("POST /api/v1/admin/users/{id}/keys/revoke-all", s.requireAuth(http.HandlerFunc(s.adminRevokeAllKeys), false))
