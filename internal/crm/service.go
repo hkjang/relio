@@ -107,21 +107,37 @@ func scopeSQL(alias string) string {
 // that operate on the same CRM entities as the web, REST, and MCP adapters.
 func ScopeSQL(alias string) string { return scopeSQL(alias) }
 
+// CustomerQuery carries the list filters the customer screen exposes. Filters
+// are applied on top of, never instead of, the caller's Data Scope.
+type CustomerQuery struct {
+	Q            string
+	CustomerType string
+	Grade        string
+	Cursor       string
+	Sort         string
+	Limit        int
+}
+
 func (s *Service) ListCustomers(ctx context.Context, p *auth.Principal, q, cursor, sortBy string, limit int) (Page[Customer], error) {
+	return s.SearchCustomers(ctx, p, CustomerQuery{Q: q, Cursor: cursor, Sort: sortBy, Limit: limit})
+}
+
+func (s *Service) SearchCustomers(ctx context.Context, p *auth.Principal, filter CustomerQuery) (Page[Customer], error) {
 	if err := auth.Require(p, "customer:read"); err != nil {
 		return Page[Customer]{}, err
 	}
+	limit := filter.Limit
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	offset := pageOffset(cursor)
+	offset := pageOffset(filter.Cursor)
 	orders := map[string]string{"name": "c.name ASC,c.id", "-name": "c.name DESC,c.id", "annualRevenue": "c.annual_revenue ASC NULLS LAST,c.id", "-annualRevenue": "c.annual_revenue DESC NULLS LAST,c.id", "createdAt": "c.created_at ASC,c.id", "-createdAt": "c.created_at DESC,c.id", "updatedAt": "c.updated_at ASC,c.id", "-updatedAt": "c.updated_at DESC,c.id"}
-	order := orders[sortBy]
+	order := orders[filter.Sort]
 	if order == "" {
 		order = "c.updated_at DESC,c.id"
 	}
-	query := `SELECT c.id,c.name,COALESCE(c.registration_no,''),c.customer_type,COALESCE(c.grade,''),COALESCE(c.industry,''),COALESCE(c.website,''),COALESCE(c.phone,''),COALESCE(c.email,''),COALESCE(c.address,''),c.owner_id,u.display_name,COALESCE(c.organization_id::text,''),c.health,COALESCE(c.annual_revenue,0),COALESCE(c.employee_count,0),c.custom_fields,c.version,c.created_at,c.updated_at FROM customers c JOIN users u ON u.id=c.owner_id WHERE c.active=true AND c.merged_into_id IS NULL AND ` + scopeSQL("c") + ` AND ($4='' OR lower(c.name) LIKE '%'||lower($4)||'%' OR lower(COALESCE(c.registration_no,'')) LIKE '%'||lower($4)||'%') ORDER BY ` + order + ` LIMIT $5 OFFSET $6`
-	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), strings.TrimSpace(q), limit+1, offset)
+	query := `SELECT c.id,c.name,COALESCE(c.registration_no,''),c.customer_type,COALESCE(c.grade,''),COALESCE(c.industry,''),COALESCE(c.website,''),COALESCE(c.phone,''),COALESCE(c.email,''),COALESCE(c.address,''),c.owner_id,u.display_name,COALESCE(c.organization_id::text,''),c.health,COALESCE(c.annual_revenue,0),COALESCE(c.employee_count,0),c.custom_fields,c.version,c.created_at,c.updated_at FROM customers c JOIN users u ON u.id=c.owner_id WHERE c.active=true AND c.merged_into_id IS NULL AND ` + scopeSQL("c") + ` AND ($4='' OR lower(c.name) LIKE '%'||lower($4)||'%' OR lower(COALESCE(c.registration_no,'')) LIKE '%'||lower($4)||'%') AND ($5='' OR c.customer_type=$5) AND ($6='' OR COALESCE(c.grade,'')=$6) ORDER BY ` + order + ` LIMIT $7 OFFSET $8`
+	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), strings.TrimSpace(filter.Q), strings.ToUpper(strings.TrimSpace(filter.CustomerType)), strings.ToUpper(strings.TrimSpace(filter.Grade)), limit+1, offset)
 	if err != nil {
 		return Page[Customer]{}, err
 	}
@@ -734,10 +750,21 @@ func (s *Service) ChangeOpportunityStage(ctx context.Context, p *auth.Principal,
 }
 
 func (s *Service) Pipelines(ctx context.Context, p *auth.Principal) ([]Pipeline, error) {
+	return s.pipelines(ctx, p, false)
+}
+
+// AllPipelines includes deactivated Pipelines and Stages so the administrator
+// console can still edit or re-enable them. Salespeople keep seeing only the
+// active configuration through Pipelines.
+func (s *Service) AllPipelines(ctx context.Context, p *auth.Principal) ([]Pipeline, error) {
+	return s.pipelines(ctx, p, true)
+}
+
+func (s *Service) pipelines(ctx context.Context, p *auth.Principal, includeInactive bool) ([]Pipeline, error) {
 	if err := auth.Require(p, "opportunity:read"); err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT p.id,p.name,p.active,p.is_default,s.id,s.name,s.stage_order,s.probability,s.forecast_category,s.is_won,s.is_lost,s.active,s.color,s.min_days,s.max_days FROM pipelines p LEFT JOIN pipeline_stages s ON s.pipeline_id=p.id WHERE p.active=true ORDER BY p.is_default DESC,p.name,s.stage_order`)
+	rows, err := s.DB.Query(ctx, `SELECT p.id,p.name,p.active,p.is_default,s.id,s.name,s.stage_order,s.probability,s.forecast_category,s.is_won,s.is_lost,s.active,s.color,s.min_days,s.max_days FROM pipelines p LEFT JOIN pipeline_stages s ON s.pipeline_id=p.id WHERE (p.active=true OR $1) ORDER BY p.is_default DESC,p.name,s.stage_order`, includeInactive)
 	if err != nil {
 		return nil, err
 	}
@@ -810,13 +837,18 @@ func (s *Service) getActivity(ctx context.Context, p *auth.Principal, id string)
 	return x, err
 }
 func (s *Service) ListActivities(ctx context.Context, p *auth.Principal, customerID, opportunityID string, limit int) ([]Activity, error) {
+	return s.ListActivitiesByType(ctx, p, customerID, opportunityID, "", limit)
+}
+
+// ListActivitiesByType backs the activity type filter on the timeline screen.
+func (s *Service) ListActivitiesByType(ctx context.Context, p *auth.Principal, customerID, opportunityID, activityType string, limit int) ([]Activity, error) {
 	if err := auth.Require(p, "activity:read"); err != nil {
 		return nil, err
 	}
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.DB.Query(ctx, `SELECT a.id,a.customer_id,a.opportunity_id,a.activity_type,a.subject,COALESCE(a.description,''),a.occurred_at,COALESCE(a.next_action,''),a.next_action_date,a.owner_id,u.display_name,a.created_at FROM activities a JOIN users u ON u.id=a.owner_id WHERE `+scopeSQL("a")+` AND ($4='' OR a.customer_id::text=$4) AND ($5='' OR a.opportunity_id::text=$5) ORDER BY a.occurred_at DESC LIMIT $6`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, opportunityID, limit)
+	rows, err := s.DB.Query(ctx, `SELECT a.id,a.customer_id,a.opportunity_id,a.activity_type,a.subject,COALESCE(a.description,''),a.occurred_at,COALESCE(a.next_action,''),a.next_action_date,a.owner_id,u.display_name,a.created_at FROM activities a JOIN users u ON u.id=a.owner_id WHERE `+scopeSQL("a")+` AND ($4='' OR a.customer_id::text=$4) AND ($5='' OR a.opportunity_id::text=$5) AND ($6='' OR a.activity_type=$6) ORDER BY a.occurred_at DESC LIMIT $7`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, opportunityID, strings.ToUpper(strings.TrimSpace(activityType)), limit)
 	if err != nil {
 		return nil, err
 	}

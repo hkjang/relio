@@ -85,3 +85,39 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .status-expiring,.status-due,.status-planned,.status-in-progress{background:#fff2d8;color:#a96b13}.status-recognized,.status-renewed{background:#e6f5ed;color:#28845c}.status-churned{background:#fbeaec;color:#bd4657}.status-not-started,.status-draft{background:#edf1f4;color:#617285}
 .contract-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:13px}.contract-kpis>div{background:#fff;border:1px solid var(--line);border-radius:10px;padding:13px 16px}.contract-kpis small,.contract-kpis b{display:block}.contract-kpis small{font-size:8px;color:#7c8e9c}.contract-kpis b{font-size:15px;color:#24465c;margin-top:5px}.contract-flow-note{display:flex;flex-direction:column;gap:4px;margin-top:14px;padding:13px 15px;border:1px solid #cfe4e3;border-radius:9px;background:#f3faf9}.contract-flow-note b{font-size:10px;color:#236d70}.contract-flow-note span{font-size:8.5px;color:#70878d;line-height:1.5}.contract-state{display:flex;align-items:center;gap:9px;padding:0 2px 13px;font-size:9px;color:#718493}.contract-state small{margin-left:auto}.revenue-schedule{display:flex;flex-direction:column}.revenue-schedule>div{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:9px;align-items:center;padding:10px 0;border-bottom:1px solid #edf1f4}.schedule-sequence{width:24px;height:24px;display:grid;place-items:center;border-radius:8px;background:#e8f3f5;color:#267486;font-size:9px;font-weight:800}.revenue-schedule b,.revenue-schedule small{display:block}.revenue-schedule b{font-size:9.5px}.revenue-schedule small{font-size:8px;color:#82919d;margin-top:3px}.renewal-form{display:grid;gap:10px;margin-top:12px}.renewal-form label{display:flex;flex-direction:column;gap:5px;font-size:9px;color:#5f7281}.renewal-form select,.renewal-form textarea{border:1px solid #dce4ea;border-radius:7px;padding:9px;font:inherit;color:#324c60;background:#fff}.renewal-form button{justify-self:end}.currency-mix{display:flex;flex-wrap:wrap;gap:7px;margin-top:20px;padding-top:14px;border-top:1px solid #edf1f4}.currency-mix>small{width:100%;font-size:8px;color:#82919c}.currency-mix span{display:grid;grid-template-columns:auto auto;gap:2px 7px;align-items:center;border:1px solid #dce7eb;background:#f8fbfc;border-radius:7px;padding:7px 9px;font-size:8px;color:#526d7b}.currency-mix b{color:#1c7280}.currency-mix em{grid-column:1/3;font-style:normal;color:#84939d}
 @media(max-width:760px){.contract-kpis{grid-template-columns:1fr}.revenue-schedule>div{grid-template-columns:auto minmax(0,1fr) auto}.revenue-schedule button{grid-column:2/4;justify-self:start}}
+
+/* v1.6 administrator CRUD, confirmation dialogs and permission editor */
+.btn-danger{background:var(--danger);color:#fff;border:1px solid #c53f56}.btn-danger:hover:not(:disabled){background:#c53f56}.btn-danger:disabled{opacity:.5}
+.confirm-form{padding:22px}.confirm-form .alert{margin:0 0 15px}.confirm-form code{background:#eef3f9;padding:2px 5px;border-radius:4px;font-size:9px}
+.row-menu{display:flex;gap:4px;align-items:center;flex-wrap:wrap}.row-menu button{border:1px solid var(--line);background:#fff;color:#4d647a;border-radius:6px;padding:5px 8px;font-size:8px;white-space:nowrap}.row-menu button:hover:not(:disabled){background:#f2f6f9;color:#155d78}.row-menu button.danger{color:#c04455;border-color:#eed4d9}.row-menu button.danger:hover:not(:disabled){background:#fdf1f3}.row-menu button:disabled{opacity:.4}
+.default-tag{font-size:6px;font-style:normal;background:#e3f2ef;color:#1c7d76;padding:2px 4px;border-radius:3px;margin-left:5px;vertical-align:middle}
+.permission-picker{border-top:1px solid var(--line);margin-top:18px;padding-top:16px}.permission-picker>b{font-size:11px}.permission-picker>p{font-size:9px;color:#8291a1;margin:5px 0 13px}.permission-picker code{background:#eef3f9;padding:1px 4px;border-radius:3px}
+.permission-group{margin-bottom:14px}.permission-group h4{font-size:9px;color:#5f7285;text-transform:uppercase;letter-spacing:.06em;margin:0 0 7px;padding-bottom:5px;border-bottom:1px solid #eef2f6}
+.permission-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:7px}
+.permission-grid .check-label{display:flex!important;flex-direction:row!important;align-items:flex-start!important;gap:8px!important;border:1px solid var(--line);border-radius:8px;padding:9px;background:#fbfcfd;font-size:9px}
+.permission-grid .check-label:has(input:checked){border-color:#a8d5d1;background:#f2fafa}
+.permission-grid .check-label input{width:auto!important;margin-top:2px}
+.permission-grid .check-label>span{display:block;min-width:0}
+.permission-grid .check-label b{display:block;font-size:10px;color:#26405a}
+.permission-grid .check-label b code{font-size:7px;color:#7d8f9f;background:transparent;margin-left:5px}
+.permission-grid .check-label small{display:block;font-size:8px;color:#8493a2;margin-top:3px;line-height:1.5}
+.effective-permission{display:grid;grid-template-columns:150px 1fr;gap:12px;align-items:start;background:#f6f9fb;border:1px solid #e6edf2;border-radius:9px;padding:14px;margin-top:15px}
+.effective-permission small{display:block;font-size:8px;color:#7f8f9f;margin-bottom:6px}
+.support-note.warn{background:#fff8ec;border-color:#f0dcb4}.support-note.warn b{color:#96631c}
+.settings-section .panel-head .row-menu{margin-left:auto}
+.stage-config .row-menu{justify-content:flex-end}
+.notification-wrap{position:relative}
+.notification-menu{width:340px;right:0;padding:0;max-height:420px;overflow:auto}
+.notification-menu header{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid var(--line)}
+.notification-menu header b{font-size:11px}.notification-menu header span{font-size:8px;color:#c0704a;background:#fff1e8;border-radius:4px;padding:3px 6px}
+.notification-empty{font-size:9px;color:#8493a2;padding:24px 15px;text-align:center;margin:0}
+.notification-list{display:flex;flex-direction:column}
+.notification-list button{display:grid;grid-template-columns:auto 1fr;gap:9px;align-items:flex-start;text-align:left;border:0;border-bottom:1px solid #eef2f6;background:transparent;padding:11px 15px;width:100%}
+.notification-list button:hover{background:#f5f8fa}
+.notification-list button.unread{background:#f4fafb}
+.notification-list button.unread b{color:#12506f}
+.notification-type{font-size:7px;color:#5a7386;background:#eef3f7;border-radius:4px;padding:3px 5px;white-space:nowrap}
+.notification-list b{display:block;font-size:10px;color:#2b4258}
+.notification-list small{display:block;font-size:8px;color:#8493a2;margin-top:3px;line-height:1.5}
+.sso-error-code{display:block;font-size:8px;color:#9c6a72;margin-top:7px;font-family:ui-monospace,monospace}
+.activity-filter button em{margin-left:auto;font-style:normal;font-size:8px;color:#8493a2}

@@ -1,4 +1,5 @@
 import { Fragment, ReactNode, useEffect, useRef, useState } from 'react'
+import { api } from '../api'
 import { User, Version } from '../types'
 
 export function navigate(path: string) { history.pushState({}, '', path); window.dispatchEvent(new PopStateEvent('popstate')) }
@@ -28,6 +29,7 @@ const adminNav: NavItem[] = [
   {to:'/admin/relationships',key:'customers',label:'Relationship Intelligence',group:'영업 정책',keywords:'graph account plan team'},
   {to:'/admin/approval',key:'approvals',label:'승인 Workflow',group:'영업 정책',keywords:'review approve reject'},
   {to:'/admin/custom-fields',key:'opportunities',label:'Custom Field',group:'영업 정책',keywords:'metadata jsonb field'},
+  {to:'/admin/products',key:'contracts',label:'상품 카탈로그',group:'영업 정책',keywords:'product price catalog 단가 상품'},
   {to:'/admin/keys',key:'api',label:'Personal Key · API · MCP',group:'개발자',keywords:'rotation scope origin tool'},
   {to:'/admin/data',key:'data',label:'Data Quality · Config',group:'데이터',keywords:'quality data configuration bundle export import diff'},
 ]
@@ -75,7 +77,7 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
         <div className="global-search"><span>⌕</span><input ref={searchRef} aria-label={area === 'admin' ? '관리자 메뉴 검색' : '통합 검색'} value={area === 'admin' ? adminQuery : undefined} placeholder={area === 'admin' ? '설정, 정책, 운영 기능 검색' : '고객, 담당자, Opportunity 통합 검색'} onChange={area === 'admin' ? e=>adminSearch(e.target.value) : undefined} onKeyDown={e => { if (e.key === 'Enter') { if (area === 'admin' && filteredNav[0]) navigate(filteredNav[0].to); else if (e.currentTarget.value) navigate('/app/customers?q=' + encodeURIComponent(e.currentTarget.value)) } }}/><kbd>{area === 'admin' ? '⌘ K' : 'Enter'}</kbd></div>
         <div className="top-actions">
           {area === 'app' && <div className="quick-wrap"><button className="btn btn-primary btn-sm" onClick={() => setQuickOpen(v => !v)} aria-expanded={quickOpen}>＋ Quick Action</button>{quickOpen && <div className="popover quick-menu"><button onClick={() => {setQuickOpen(false); navigate('/app/customers?new=1')}}>고객 등록</button><button onClick={() => {setQuickOpen(false); navigate('/app/opportunities?new=1')}}>Opportunity 생성</button><button onClick={() => {setQuickOpen(false); navigate('/app/activities?new=meeting')}}>미팅 기록</button><button onClick={() => {setQuickOpen(false); navigate('/app/activities?new=call')}}>전화 기록</button><button onClick={() => {setQuickOpen(false); navigate('/app/activities?new=task')}}>Task 생성</button></div>}</div>}
-          <button className="icon-btn" aria-label="알림">♢<span className="notification-dot" /></button>
+          <NotificationBell canRead={user.isBootstrap || (user.permissions||[]).some(p => p === 'admin:*' || p === 'notification:read')} />
           <div className="profile-wrap" ref={profileRef}><button className="profile-button" onClick={() => setProfileOpen(v => !v)} aria-expanded={profileOpen}><span className="avatar">{user.displayName.slice(0,1).toUpperCase()}</span><span className="profile-copy"><b>{user.displayName}</b><small>{user.dataScope} · {user.authMethod}</small></span><span>⌄</span></button>{profileOpen && <div className="popover profile-menu"><div className="profile-head"><span className="avatar large">{user.displayName.slice(0,1)}</span><div><b>{user.displayName}</b><small>{user.email || user.username}</small></div></div><Link to="/me/profile">내 프로필</Link><Link to="/me/dashboard">개인 설정</Link><Link to="/me/keys">API / MCP Key</Link>{canAdmin && <><hr/><Link to="/admin/overview">관리자 콘솔 <span>→</span></Link></>}<hr/><div className="version-menu"><b>Relio v{version.version}</b><span>Build {version.gitCommit.slice(0,8)}</span></div><button className="logout" onClick={onLogout}>로그아웃</button></div>}</div>
         </div>
       </header>
@@ -87,7 +89,59 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
   </div>
 }
 
+// NotificationBell surfaces the notifications the API already produces. Before
+// this the bell was decorative and the only way to see a notification was the
+// REST endpoint.
+type Notification = { id: string; title: string; body?: string; type: string; readAt?: string; resourceType?: string; resourceId?: string; createdAt: string }
+function NotificationBell({ canRead }: { canRead: boolean }) {
+  const [open, setOpen] = useState(false)
+  const [items, setItems] = useState<Notification[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const wrap = useRef<HTMLDivElement>(null)
+  const unread = (items || []).filter(x => !x.readAt).length
+  const load = () => api<{ items?: Notification[] }>('/api/v1/notifications?limit=20').then(v => setItems(v.items || [])).catch(() => setItems([]))
+  useEffect(() => { if (!canRead) { setItems([]); return } void load() }, [canRead])
+  useEffect(() => {
+    const close = (e: MouseEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false) }
+    addEventListener('mousedown', close); return () => removeEventListener('mousedown', close)
+  }, [])
+  async function markRead(id: string) {
+    setBusy(true)
+    try {
+      await api(`/api/v1/notifications/${id}/read`, { method: 'POST' })
+      setItems(v => (v || []).map(x => x.id === id ? { ...x, readAt: new Date().toISOString() } : x))
+    } catch { /* a stale notification must not break navigation */ } finally { setBusy(false) }
+  }
+  if (!canRead) return null
+  return <div className="notification-wrap" ref={wrap}>
+    <button className="icon-btn" aria-label={unread ? `읽지 않은 알림 ${unread}건` : '알림'} aria-expanded={open} onClick={() => { setOpen(v => !v); if (!open) void load() }}>♢{unread > 0 && <span className="notification-dot" />}</button>
+    {open && <div className="popover notification-menu">
+      <header><b>알림</b>{unread > 0 && <span>{unread}건 미확인</span>}</header>
+      {!items ? <p className="notification-empty">불러오는 중입니다…</p>
+        : items.length ? <div className="notification-list">{items.map(x => <button key={x.id} className={x.readAt ? '' : 'unread'} disabled={busy} onClick={() => { void markRead(x.id); if (x.resourceType === 'OPPORTUNITY') navigate('/app/opportunities'); else if (x.resourceType === 'CUSTOMER' && x.resourceId) navigate('/app/customers/' + x.resourceId) }}>
+          <span className="notification-type">{x.type}</span>
+          <span><b>{x.title}</b>{x.body && <small>{x.body}</small>}</span>
+        </button>)}</div>
+        : <p className="notification-empty">새로운 알림이 없습니다.</p>}
+    </div>}
+  </div>
+}
+
 export function Empty({ icon = '◇', title, description, action }: { icon?: string; title: string; description: string; action?: ReactNode }) { return <div className="empty"><span className="empty-icon">{icon}</span><h3>{title}</h3><p>{description}</p>{action}</div> }
 export function Spinner() { return <div className="spinner-wrap" role="status"><span className="spinner"/><p>데이터를 불러오는 중입니다</p></div> }
 export function Status({ value }: { value: string }) { const c = value.toLowerCase().replaceAll('_','-'); return <span className={`status status-${c}`}>{value}</span> }
 export function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) { return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}><div className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}><div className="modal-head"><h2>{title}</h2><button className="icon-btn" aria-label="닫기" onClick={onClose}>×</button></div>{children}</div></div> }
+
+// Confirm gates every destructive administrator action. Typing the record name is
+// required only when the action cannot be undone from the console.
+export function Confirm({ title, description, confirmLabel = '삭제', requireText, busy, onCancel, onConfirm }: { title: string; description: ReactNode; confirmLabel?: string; requireText?: string; busy?: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const [typed, setTyped] = useState('')
+  const ready = !requireText || typed.trim() === requireText
+  return <Modal title={title} onClose={onCancel}>
+    <div className="form confirm-form">
+      <div className="alert alert-error"><b>이 작업은 되돌릴 수 없습니다</b><span>{description}</span></div>
+      {requireText && <label>확인을 위해 <code>{requireText}</code>를 입력하세요<input autoFocus value={typed} onChange={e => setTyped(e.target.value)} placeholder={requireText}/></label>}
+      <div className="modal-actions"><button type="button" className="btn btn-ghost" onClick={onCancel}>취소</button><button type="button" className="btn btn-danger" disabled={!ready || busy} onClick={onConfirm}>{busy ? '처리 중…' : confirmLabel}</button></div>
+    </div>
+  </Modal>
+}

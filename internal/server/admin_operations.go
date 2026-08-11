@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	"github.com/hkjang/relio/internal/platform/database"
 	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/hkjang/relio/internal/platform/ids"
+	"github.com/hkjang/relio/internal/platform/secrets"
 	"github.com/hkjang/relio/internal/platform/version"
 )
 
@@ -142,17 +144,18 @@ type adminRecentJob struct {
 }
 
 type adminOperationsSnapshot struct {
-	Application    any                    `json:"application"`
-	Database       map[string]any         `json:"database"`
-	Jobs           map[string]int         `json:"jobs"`
-	Counts         map[string]int         `json:"counts"`
-	Features       map[string]any         `json:"features"`
-	Diagnostics    []adminDiagnosticCheck `json:"diagnostics"`
-	Actions        []adminActionItem      `json:"actions"`
-	RecentJobs     []adminRecentJob       `json:"recentJobs"`
-	ReadinessScore int                    `json:"readinessScore"`
-	UptimeSeconds  int                    `json:"uptimeSeconds"`
-	GeneratedAt    time.Time              `json:"generatedAt"`
+	Application    any                     `json:"application"`
+	Database       map[string]any          `json:"database"`
+	Secrets        secrets.IntegrityStatus `json:"secrets"`
+	Jobs           map[string]int          `json:"jobs"`
+	Counts         map[string]int          `json:"counts"`
+	Features       map[string]any          `json:"features"`
+	Diagnostics    []adminDiagnosticCheck  `json:"diagnostics"`
+	Actions        []adminActionItem       `json:"actions"`
+	RecentJobs     []adminRecentJob        `json:"recentJobs"`
+	ReadinessScore int                     `json:"readinessScore"`
+	UptimeSeconds  int                     `json:"uptimeSeconds"`
+	GeneratedAt    time.Time               `json:"generatedAt"`
 }
 
 func diagnosticReadiness(checks []adminDiagnosticCheck) int {
@@ -238,17 +241,27 @@ func (s *Server) collectAdminOperations(ctx context.Context) (adminOperationsSna
 		return adminOperationsSnapshot{}, err
 	}
 
+	secretIntegrity := secrets.Inspect(ctx, s.DB, s.Settings.Secrets, config.MasterKeyPath, s.EncryptionKeyConfigured)
 	masterKeyStatus := "HEALTHY"
-	masterKeySummary := "Instance Master Key를 안전하게 읽을 수 있습니다."
-	if info, err := os.Stat(config.MasterKeyPath); err != nil || info.Size() != 32 {
+	masterKeySummary := fmt.Sprintf("Data Key %s가 %s로 보호되고 있어 재기동해도 API Key와 SSO Secret이 유지됩니다.", secretIntegrity.KeyID, config.EncryptionKeyEnv)
+	if !secretIntegrity.Registered || !secretIntegrity.Matches {
 		masterKeyStatus = "CRITICAL"
-		masterKeySummary = "Instance Master Key 파일을 확인할 수 없습니다."
+		masterKeySummary = "Instance Data Key와 PostgreSQL 등록 정보가 일치하지 않습니다. " + config.EncryptionKeyEnv + " 값을 원래대로 복구하세요."
+	} else if !secretIntegrity.Portable {
+		masterKeyStatus = "WARNING"
+		masterKeySummary = fmt.Sprintf("Data Key %s가 %s 파일에만 보관되어 있습니다. %s를 설정하면 Volume을 재생성해도 API Key가 유지됩니다.", secretIntegrity.KeyID, config.MasterKeyPath, config.EncryptionKeyEnv)
 	}
 	storageStatus := "HEALTHY"
-	storageSummary := config.DataDirectory + " Persistent Volume이 연결되어 있습니다."
+	storageSummary := fmt.Sprintf("%s 보안 ID가 DB와 일치합니다 · 보호 자격증명 %d건", config.DataDirectory, secretIntegrity.ProtectedCredentials)
 	if info, err := os.Stat(config.DataDirectory); err != nil || !info.IsDir() {
 		storageStatus = "CRITICAL"
 		storageSummary = config.DataDirectory + " Persistent Volume을 확인할 수 없습니다."
+	} else if !secretIntegrity.Matches {
+		storageStatus = "CRITICAL"
+		storageSummary = config.DataDirectory + "와 PostgreSQL의 보안 ID가 일치하지 않습니다."
+	} else if secretIntegrity.Portable {
+		storageStatus = "HEALTHY"
+		storageSummary = fmt.Sprintf("%s는 업로드와 Export 전용입니다. 자격증명 %d건은 %s로 보호됩니다.", config.DataDirectory, secretIntegrity.ProtectedCredentials, config.EncryptionKeyEnv)
 	}
 	serviceStatus := "HEALTHY"
 	serviceSummary := "Service URL이 " + serviceURL + "로 설정되어 있습니다."
@@ -321,6 +334,7 @@ func (s *Server) collectAdminOperations(ctx context.Context) (adminOperationsSna
 	return adminOperationsSnapshot{
 		Application:    version.Current(),
 		Database:       map[string]any{"name": databaseName, "serverVersion": serverVersion, "sizeBytes": databaseSize, "migration": migration},
+		Secrets:        secretIntegrity,
 		Jobs:           map[string]int{"ready": readyJobs, "running": runningJobs, "failed": failedJobs},
 		Counts:         counts,
 		Features:       map[string]any{"localLogin": localLogin, "oidc": oidcEnabled, "api": apiEnabled, "mcp": mcpEnabled, "approval": counts["approvalPolicies"] > 0},
@@ -434,7 +448,7 @@ func (s *Server) adminPipelines(w http.ResponseWriter, r *http.Request) {
 		s.serviceError(w, r, err)
 		return
 	}
-	v, err := s.CRM.Pipelines(r.Context(), principal(r))
+	v, err := s.CRM.AllPipelines(r.Context(), principal(r))
 	if err != nil {
 		s.serviceError(w, r, err)
 		return

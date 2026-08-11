@@ -25,7 +25,14 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, 200, v)
 }
 func (s *Server) listCustomers(w http.ResponseWriter, r *http.Request) {
-	v, err := s.CRM.ListCustomers(r.Context(), principal(r), r.URL.Query().Get("q"), r.URL.Query().Get("cursor"), r.URL.Query().Get("sort"), httpx.IntQuery(r, "limit", 50, 1, 200))
+	v, err := s.CRM.SearchCustomers(r.Context(), principal(r), crm.CustomerQuery{
+		Q:            r.URL.Query().Get("q"),
+		CustomerType: r.URL.Query().Get("customerType"),
+		Grade:        r.URL.Query().Get("grade"),
+		Cursor:       r.URL.Query().Get("cursor"),
+		Sort:         r.URL.Query().Get("sort"),
+		Limit:        httpx.IntQuery(r, "limit", 50, 1, 200),
+	})
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
@@ -181,7 +188,7 @@ func (s *Server) pipelines(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, 200, map[string]any{"items": v})
 }
 func (s *Server) listActivities(w http.ResponseWriter, r *http.Request) {
-	v, err := s.CRM.ListActivities(r.Context(), principal(r), r.URL.Query().Get("customerId"), r.URL.Query().Get("opportunityId"), httpx.IntQuery(r, "limit", 50, 1, 200))
+	v, err := s.CRM.ListActivitiesByType(r.Context(), principal(r), r.URL.Query().Get("customerId"), r.URL.Query().Get("opportunityId"), r.URL.Query().Get("type"), httpx.IntQuery(r, "limit", 50, 1, 200))
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
