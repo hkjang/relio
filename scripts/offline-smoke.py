@@ -741,11 +741,29 @@ managed = next(item for item in request("/api/v1/admin/users")["items"] if item[
 assert managed["displayName"] == "Smoke 관리 대상 2" and managed["title"] == "대리"
 assert managed["roles"] == [default_roles[0]["name"]]
 bootstrap_user = next(item for item in request("/api/v1/admin/users")["items"] if item["isBootstrap"])
-for method, path, body in (
-    ("DELETE", f"/api/v1/admin/users/{bootstrap_user['id']}", None),
-    ("PUT", f"/api/v1/admin/users/{bootstrap_user['id']}", {"displayName": "x", "email": "", "organizationId": "", "managerId": "", "title": "", "active": False}),
-):
-    expect_http_error(path, method, body, csrf_header, contains="break glass")
+# This smoke test is signed in as the Bootstrap administrator, so deleting that
+# account trips the self-deactivation guard before the break-glass guard. Assert
+# each guard through the call that actually reaches it.
+expect_http_error(
+    f"/api/v1/admin/users/{bootstrap_user['id']}",
+    "DELETE",
+    headers=csrf_header,
+    contains="their own account",
+)
+expect_http_error(
+    f"/api/v1/admin/users/{bootstrap_user['id']}",
+    "PUT",
+    {
+        "displayName": bootstrap_user["displayName"],
+        "email": bootstrap_user["email"],
+        "organizationId": bootstrap_user["organizationId"],
+        "managerId": bootstrap_user["managerId"],
+        "title": bootstrap_user["title"],
+        "active": False,
+    },
+    csrf_header,
+    contains="break glass",
+)
 request(f"/api/v1/admin/users/{smoke_user['id']}", "DELETE", None, csrf_header)
 assert not next(item for item in request("/api/v1/admin/users")["items"] if item["id"] == smoke_user["id"])["active"]
 

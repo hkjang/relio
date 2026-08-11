@@ -104,7 +104,12 @@ else:
     assert config["clientSecretConfigured"] is True
     assert config["clientId"] == "relio-persistence-test"
     if state["oidcVersion"]:
-        assert config["version"] == state["oidcVersion"]
+        # Verify mode saves the masked form once, so the version only ever moves
+        # forward across repeated verifications. A re-keyed or recreated provider
+        # would instead reset it, and the assertions below would fail to decrypt.
+        assert config["version"] >= state["oidcVersion"], (
+            f"OIDC version went backwards: {state['oidcVersion']} -> {config['version']}"
+        )
     # Saving a masked form with a blank Client Secret must preserve the
     # encrypted value, increment the optimistic version and remain decryptable.
     preserved = dict(config)
