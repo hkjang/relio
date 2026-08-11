@@ -5,6 +5,7 @@ import Login from './pages/Login'
 import AppPages from './pages/AppPages'
 import MePages from './pages/MePages'
 import AdminPages from './pages/AdminPages'
+import VoicePages from './pages/VoicePages'
 import { navigate, Spinner } from './components/Layout'
 
 const emptyVersion: Version = { name: 'Relio', version: '…', gitCommit: 'unknown', buildDate: 'unknown', edition: 'Community' }
@@ -46,6 +47,7 @@ export default function App() {
   const common = { path, user, version, approvalEnabled, onLogout: logout, notify }
   let page
   if (path.startsWith('/admin')) page = <AdminPages {...common} />
+  else if (path.startsWith('/app/voices')) page = <VoicePages {...common} />
   else if (path.startsWith('/me')) page = <MePages {...common} onPasswordChanged={async () => { const me=await api<{user:User}>('/api/v1/auth/me');const currentUser=normalizeUser(me.user);setUser(currentUser);setCSRF(currentUser.csrfToken);navigate('/app/dashboard') }} />
   else page = <AppPages {...common} />
   return <>{page}{toast && <div className={`toast ${toast.error?'toast-error':''}`}><span>{toast.error?'!':'✓'}</span>{toast.message}</div>}</>
@@ -55,8 +57,8 @@ function NoAccess({ user, version, onLogout }: { user: User; version: Version; o
   return <div className="password-page"><div className="password-card">
     <div className="brand-mark big">R</div>
     <h1>아직 사용 권한이 없습니다</h1>
-    <p>{user.displayName}님, 로그인은 정상적으로 완료되었지만 이 계정에 부여된 Role이 없어 CRM 화면을 열 수 없습니다.</p>
-    <div className="alert"><b>관리자에게 요청할 내용</b><span>Relio 관리자 콘솔의 <b>사용자 · 조직 → Role</b>에서 이 계정({user.username})에 Role을 부여해 주세요. SSO 신규 사용자라면 <b>Role · Data Scope</b> 화면에서 기본 Sign-in Role을 지정하면 이후 가입자에게 자동으로 적용됩니다.</span></div>
+    <p>{user.displayName}님, 로그인은 정상적으로 완료되었지만 이 계정에 부여된 권한이 없어 업무 화면을 열 수 없습니다.</p>
+    <div className="alert"><b>관리자에게 요청할 내용</b><span>Relio 관리자 화면의 <b>사용자 · 조직 → 권한</b>에서 이 계정({user.username})에 Role을 부여해 주세요. SSO 신규 사용자라면 <b>권한 · 데이터 범위</b> 화면에서 기본 권한을 지정하면 이후 가입자에게 자동으로 적용됩니다.</span></div>
     <button className="btn btn-secondary btn-block" onClick={onLogout}>로그아웃</button>
     <footer>Relio v{version.version} · {user.authMethod}</footer>
   </div></div>

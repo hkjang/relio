@@ -5,5 +5,6 @@ import './styles.css'
 import './mappings.css'
 import './sales-intelligence.css'
 import './relationship-intelligence.css'
+import './customer-voice.css'
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
