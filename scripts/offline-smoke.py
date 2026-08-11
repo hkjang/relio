@@ -52,6 +52,17 @@ request(
     {"currentPassword": initial_password, "newPassword": "Relio-Smoke-Password-2026"},
     csrf_header,
 )
+# This suite issues several hundred requests in well under a minute, which is a
+# property of the test rather than of real usage, so it would trip the default
+# 120/min API throttle partway through. Lift it for the run. The limiter itself is
+# covered by TestRequestLimiterCountsPerIdentityAndWindow.
+request(
+    "/api/v1/admin/settings/api/rate_limit_per_minute",
+    "PUT",
+    {"value": 0, "valueType": "number"},
+    csrf_header,
+)
+
 sessions = request("/api/v1/me/sessions")
 assert len(sessions["items"]) == 1 and sessions["items"][0]["current"] is True
 customer = request(
@@ -551,10 +562,60 @@ assert "SUPPORT_BUNDLE_EXPORT" in {item["action"] for item in support_audit["ite
 configuration_audit = request("/api/v1/admin/audit?channel=ADMIN&q=CONFIGURATION_BUNDLE&limit=10")
 configuration_actions = {item["action"] for item in configuration_audit["items"]}
 assert {"CONFIGURATION_BUNDLE_EXPORT", "CONFIGURATION_BUNDLE_APPLY"}.issubset(configuration_actions)
+# ---------------------------------------------------------------- 개인 작업공간
+# A saved view stores an opaque querystring; a favorite stores a pointer. Neither
+# may widen what its owner can see, so both are re-read through scoped queries.
+view = request(
+    "/api/v1/me/views",
+    "POST",
+    {"resource": "CUSTOMER", "name": "A등급 거래 고객", "query": "customerType=CUSTOMER&grade=A", "pinned": True},
+    csrf_header,
+)
+assert view["query"] == "customerType=CUSTOMER&grade=A" and view["pinned"] is True
+# Saving the same name again updates rather than duplicating.
+again = request(
+    "/api/v1/me/views",
+    "POST",
+    {"resource": "CUSTOMER", "name": "A등급 거래 고객", "query": "grade=A", "pinned": False},
+    csrf_header,
+)
+assert again["id"] == view["id"] and again["query"] == "grade=A"
+assert len([v for v in request("/api/v1/me/views?resource=CUSTOMER")["items"] if v["name"] == "A등급 거래 고객"]) == 1
+expect_http_error("/api/v1/me/views", "POST", {"resource": "USERS", "name": "x", "query": ""}, csrf_header, contains="invalid resource")
+expect_http_error("/api/v1/me/views", "POST", {"resource": "CUSTOMER", "name": "  ", "query": ""}, csrf_header, contains="name is required")
+request(f"/api/v1/me/views/{view['id']}", "DELETE", None, csrf_header, expect_json=False)
+assert not [v for v in request("/api/v1/me/views")["items"] if v["id"] == view["id"]]
+
+toggled = request("/api/v1/me/favorites", "POST", {"resource": "CUSTOMER", "resourceId": customer["id"]}, csrf_header)
+assert toggled["favorited"] is True
+assert customer["id"] in request("/api/v1/me/favorites?resource=CUSTOMER")["ids"]
+starred = request("/api/v1/me/favorites")["items"]
+assert any(item["resourceId"] == customer["id"] and item["resource"] == "CUSTOMER" for item in starred)
+# The same call unstars, so the star is a single idempotent control.
+assert request("/api/v1/me/favorites", "POST", {"resource": "CUSTOMER", "resourceId": customer["id"]}, csrf_header)["favorited"] is False
+# A record the caller cannot read must not be starrable, or favorites would
+# confirm the existence of out-of-scope data.
+expect_http_error(
+    "/api/v1/me/favorites",
+    "POST",
+    {"resource": "CUSTOMER", "resourceId": "00000000-0000-4000-8000-000000000000"},
+    csrf_header,
+    contains="not found",
+)
+
+# The priority queue and the churn score must answer for the seeded data.
+today = request("/api/v1/today")
+assert isinstance(today["items"], list) and isinstance(today["risks"], list)
+risk = request(f"/api/v1/customers/{customer['id']}/risk")
+assert risk["customerId"] == customer["id"] and 0 <= risk["score"] <= 100
+assert risk["level"] in {"HEALTHY", "WATCH", "HIGH", "CRITICAL"}
+
 openapi = request("/api/openapi.json")
 assert "get" in openapi["paths"]["/admin/data-quality"]
 assert "post" in openapi["paths"]["/admin/configuration/apply"]
 assert "delete" in openapi["paths"]["/admin/roles/{id}"]
+assert "get" in openapi["paths"]["/today"]
+assert "post" in openapi["paths"]["/me/favorites"]
 assert "put" in openapi["paths"]["/admin/stages/{id}"]
 
 # ---------------------------------------------------------------- admin CRUD

@@ -26,6 +26,7 @@ import (
 	"github.com/hkjang/relio/internal/intelligence"
 	"github.com/hkjang/relio/internal/mcp"
 	"github.com/hkjang/relio/internal/oidc"
+	"github.com/hkjang/relio/internal/personal"
 	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/hkjang/relio/internal/platform/ids"
 	"github.com/hkjang/relio/internal/relationship"
@@ -48,6 +49,7 @@ type Server struct {
 	Intel     *intelligence.Service
 	Relations *relationship.Service
 	Voices    *voice.Service
+	Personal  *personal.Service
 	// EncryptionKeyConfigured reports whether the instance data key is wrapped
 	// by the ENCRYPTION_KEY environment variable rather than the data volume.
 	EncryptionKeyConfigured bool
@@ -122,8 +124,8 @@ func (l *requestLimiter) allow(key string, limit int) bool {
 	return true
 }
 
-func New(db *pgxpool.Pool, log *slog.Logger, authService *auth.Service, auditService *audit.Service, crmService *crm.Service, settings *admin.SettingsService, keys *apikey.Service, approvals *approval.Service, oidcService *oidc.Service, mcpServer *mcp.Server, intel *intelligence.Service, relations *relationship.Service, voices *voice.Service) *Server {
-	return &Server{DB: db, Log: log, Auth: authService, Audit: auditService, CRM: crmService, Settings: settings, Keys: keys, Approvals: approvals, OIDC: oidcService, MCP: mcpServer, Intel: intel, Relations: relations, Voices: voices, started: time.Now(), limiter: newLoginLimiter(), requests: newRequestLimiter()}
+func New(db *pgxpool.Pool, log *slog.Logger, authService *auth.Service, auditService *audit.Service, crmService *crm.Service, settings *admin.SettingsService, keys *apikey.Service, approvals *approval.Service, oidcService *oidc.Service, mcpServer *mcp.Server, intel *intelligence.Service, relations *relationship.Service, voices *voice.Service, personalService *personal.Service) *Server {
+	return &Server{DB: db, Log: log, Auth: authService, Audit: auditService, CRM: crmService, Settings: settings, Keys: keys, Approvals: approvals, OIDC: oidcService, MCP: mcpServer, Intel: intel, Relations: relations, Voices: voices, Personal: personalService, started: time.Now(), limiter: newLoginLimiter(), requests: newRequestLimiter()}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -230,6 +232,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/me/keys", s.requireAuth(http.HandlerFunc(s.createKey), false))
 	mux.Handle("POST /api/v1/me/keys/{id}/rotate", s.requireAuth(http.HandlerFunc(s.rotateKey), false))
 	mux.Handle("DELETE /api/v1/me/keys/{id}", s.requireAuth(http.HandlerFunc(s.revokeKey), false))
+	mux.Handle("GET /api/v1/me/views", s.requireAuth(http.HandlerFunc(s.listSavedViews), false))
+	mux.Handle("POST /api/v1/me/views", s.requireAuth(http.HandlerFunc(s.createSavedView), false))
+	mux.Handle("PUT /api/v1/me/views/{id}", s.requireAuth(http.HandlerFunc(s.updateSavedView), false))
+	mux.Handle("DELETE /api/v1/me/views/{id}", s.requireAuth(http.HandlerFunc(s.deleteSavedView), false))
+	mux.Handle("GET /api/v1/me/favorites", s.requireAuth(http.HandlerFunc(s.listFavorites), false))
+	mux.Handle("POST /api/v1/me/favorites", s.requireAuth(http.HandlerFunc(s.toggleFavorite), false))
 	mux.Handle("GET /api/v1/me/activity", s.requireAuth(http.HandlerFunc(s.myActivity), false))
 	mux.Handle("GET /api/v1/me/sessions", s.requireAuth(http.HandlerFunc(s.mySessions), false))
 	mux.Handle("DELETE /api/v1/me/sessions/{id}", s.requireAuth(http.HandlerFunc(s.revokeSession), false))
