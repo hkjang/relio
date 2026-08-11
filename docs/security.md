@@ -152,3 +152,34 @@ Relio는 모든 요청에 대해 다음 3개 영역의 **교집합(Intersection)
 - OIDC `Client Secret`
 - API Key Digest 및 Password Hash
 - 고객 개인식별정보(PII)
+
+## Content Security Policy와 방문자 분석
+
+기본 정책은 자기 출처만 허용합니다.
+
+```
+default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none';
+base-uri 'self'; form-action 'self'; script-src 'self'; connect-src 'self';
+img-src 'self' data:; report-uri /api/v1/csp-report
+```
+
+관리자가 방문자 분석 공급자를 활성화하면 `script-src`, `connect-src`, `img-src`에 **허용한 출처만** 추가됩니다. 정책은 요청 시점에 조립되며 30초 캐시와 변경 즉시 무효화를 사용합니다.
+
+### 관리자 권한이 스크립트 실행 권한이 되지 않도록
+
+추적 스크립트는 관리자가 붙여넣은 JavaScript가 아니라, 검증된 필드로 **서버가 생성**해 `/analytics.js`에서 제공합니다. 따라서 `script-src 'self'`가 로더를 그대로 포함하고, 관리자 계정이 전체 사용자 세션에 대한 임의 코드 실행 수단이 되지 않습니다.
+
+입력값은 헤더와 생성 스크립트에 들어가기 전에 좁은 형태로 검증합니다.
+
+- 출처는 스킴 + 호스트(+ 포트)만 허용하고 경로, 질의, 자격증명, 정책을 끊을 수 있는 문자(공백, `;`, `,`, 따옴표, 개행 등)를 거부합니다. 하위 도메인 와일드카드는 선행 `*.` 한 번만 허용하며, 스크립트 출처에는 와일드카드를 쓸 수 없습니다.
+- 스크립트 경로는 `//`와 `..`를 거부해 출처를 벗어나지 못하게 합니다.
+- 사이트 ID는 문자열 리터럴을 끝낼 수 없는 문자만 허용하고, 생성 시 다시 이스케이프합니다.
+- 태그 속성은 `data-*`만 허용합니다. `src`, `onerror` 같은 속성은 거부합니다.
+
+이 설정은 `analytics:manage` 권한이 필요하며 일반 관리자 권한과 분리됩니다. 모든 변경은 출처 목록과 함께 감사 로그에 기록됩니다.
+
+### 차단된 요청 진단
+
+브라우저 위반 보고를 `/api/v1/csp-report`에서 받습니다. 보고 본문은 신뢰하지 않습니다. 크기를 제한하고 값을 다시 검증하며, 전체 URL을 출처로 축약해 `(directive, origin)` 단위로 집계합니다. 따라서 임의 클라이언트가 표를 키울 수 없습니다.
+
+관리자 화면은 차단된 출처와 발생 횟수를 보여주고, 유효한 출처라면 한 번의 클릭으로 허용 설정을 열 수 있습니다. 사용자 콘솔에만 남던 `violates the following Content Security Policy directive` 오류가 운영 화면에서 원인과 조치로 이어집니다.

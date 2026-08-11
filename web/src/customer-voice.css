@@ -154,3 +154,21 @@ tr.row-danger:hover{background:#fdeff2}
 tr[role="button"]{cursor:pointer}
 tr[role="button"]:focus-visible,.voice-row:focus-visible,.today-list button:focus-visible,.risk-list button:focus-visible,.me-task-list button:focus-visible{outline:2px solid #1b7f93;outline-offset:-2px}
 @media(max-width:1100px){.me-grid{grid-template-columns:1fr}.my-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* 방문자 분석 · CSP 진단 */
+.analytics-state{display:grid;gap:15px;padding:18px 20px;border-left:4px solid #cbd5df}
+.analytics-state.on{border-left-color:#1b7f93;background:#f8fdfe}
+.analytics-state>div:first-child{display:flex;align-items:flex-start;gap:12px}
+.analytics-dot{width:11px;height:11px;border-radius:50%;background:#b8c4ce;margin-top:5px;flex:none}
+.analytics-state.on .analytics-dot{background:#1b9c8a;box-shadow:0 0 0 4px #1b9c8a22}
+.analytics-state b{font-size:15px;color:#22405e}
+.analytics-state p{font-size:13px;color:#6f8195;margin:5px 0 0;line-height:1.6}
+.analytics-policy{display:grid;gap:8px}
+.analytics-policy>div{display:grid;grid-template-columns:110px minmax(0,1fr);gap:10px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.analytics-policy small{font-size:11px;color:#7c8c9c;font-family:ui-monospace,monospace}
+.analytics-policy code{font-size:12px;color:#2b4258;word-break:break-all}
+.violation-list{display:grid;gap:8px}
+.violation-list>div{display:grid;grid-template-columns:130px minmax(0,1fr) auto;gap:11px;align-items:center;background:#fffaf7;border:1px solid #f0d9c8;border-radius:9px;padding:11px 12px}
+.violation-directive{font-size:11px;font-family:ui-monospace,monospace;color:#a2601f;background:#fdf0e3;border-radius:5px;padding:4px 7px;text-align:center}
+.violation-origin b{display:block;font-size:13px;color:#2b4258;word-break:break-all}
+.violation-origin small{display:block;font-size:11px;color:#8f9dab;margin-top:3px}

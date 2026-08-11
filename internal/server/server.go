@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/hkjang/relio/internal/admin"
+	"github.com/hkjang/relio/internal/analytics"
 	"github.com/hkjang/relio/internal/api"
 	"github.com/hkjang/relio/internal/apikey"
 	"github.com/hkjang/relio/internal/approval"
@@ -50,6 +51,7 @@ type Server struct {
 	Relations *relationship.Service
 	Voices    *voice.Service
 	Personal  *personal.Service
+	Analytics *analytics.Service
 	// EncryptionKeyConfigured reports whether the instance data key is wrapped
 	// by the ENCRYPTION_KEY environment variable rather than the data volume.
 	EncryptionKeyConfigured bool
@@ -124,8 +126,8 @@ func (l *requestLimiter) allow(key string, limit int) bool {
 	return true
 }
 
-func New(db *pgxpool.Pool, log *slog.Logger, authService *auth.Service, auditService *audit.Service, crmService *crm.Service, settings *admin.SettingsService, keys *apikey.Service, approvals *approval.Service, oidcService *oidc.Service, mcpServer *mcp.Server, intel *intelligence.Service, relations *relationship.Service, voices *voice.Service, personalService *personal.Service) *Server {
-	return &Server{DB: db, Log: log, Auth: authService, Audit: auditService, CRM: crmService, Settings: settings, Keys: keys, Approvals: approvals, OIDC: oidcService, MCP: mcpServer, Intel: intel, Relations: relations, Voices: voices, Personal: personalService, started: time.Now(), limiter: newLoginLimiter(), requests: newRequestLimiter()}
+func New(db *pgxpool.Pool, log *slog.Logger, authService *auth.Service, auditService *audit.Service, crmService *crm.Service, settings *admin.SettingsService, keys *apikey.Service, approvals *approval.Service, oidcService *oidc.Service, mcpServer *mcp.Server, intel *intelligence.Service, relations *relationship.Service, voices *voice.Service, personalService *personal.Service, analyticsService *analytics.Service) *Server {
+	return &Server{DB: db, Log: log, Auth: authService, Audit: auditService, CRM: crmService, Settings: settings, Keys: keys, Approvals: approvals, OIDC: oidcService, MCP: mcpServer, Intel: intel, Relations: relations, Voices: voices, Personal: personalService, Analytics: analyticsService, started: time.Now(), limiter: newLoginLimiter(), requests: newRequestLimiter()}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -139,6 +141,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/oidc/start", s.oidcStart)
 	mux.HandleFunc("GET /api/v1/auth/oidc/callback", s.oidcCallback)
 	mux.Handle("/mcp", s.requireAuth(s.MCP, true))
+	mux.HandleFunc("GET /analytics.js", s.analyticsLoader)
+	mux.HandleFunc("POST /api/v1/csp-report", s.cspReport)
 	mux.HandleFunc("GET /api/openapi.json", func(w http.ResponseWriter, r *http.Request) { httpx.JSON(w, 200, api.OpenAPI()) })
 	mux.HandleFunc("GET /api/docs", s.apiDocs)
 	// Authenticated application APIs.
@@ -291,6 +295,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/admin/stages/{id}/sales-execution", s.requireAuth(http.HandlerFunc(s.saveSalesExecution), false))
 	mux.Handle("GET /api/v1/admin/deal-health-rules", s.requireAuth(http.HandlerFunc(s.adminDealHealthRules), false))
 	mux.Handle("PUT /api/v1/admin/deal-health-rules/{id}", s.requireAuth(http.HandlerFunc(s.saveDealHealthRule), false))
+	mux.Handle("GET /api/v1/admin/analytics", s.requireAuth(http.HandlerFunc(s.listAnalyticsProviders), false))
+	mux.Handle("POST /api/v1/admin/analytics", s.requireAuth(http.HandlerFunc(s.saveAnalyticsProvider), false))
+	mux.Handle("PUT /api/v1/admin/analytics/{id}", s.requireAuth(http.HandlerFunc(s.saveAnalyticsProvider), false))
+	mux.Handle("DELETE /api/v1/admin/analytics/{id}", s.requireAuth(http.HandlerFunc(s.deleteAnalyticsProvider), false))
+	mux.Handle("POST /api/v1/admin/analytics/violations/resolve", s.requireAuth(http.HandlerFunc(s.resolveCSPViolation), false))
 	mux.Handle("GET /api/v1/admin/voice-categories", s.requireAuth(http.HandlerFunc(s.adminVoiceCategories), false))
 	mux.Handle("POST /api/v1/admin/voice-categories", s.requireAuth(http.HandlerFunc(s.createVoiceCategory), false))
 	mux.Handle("PUT /api/v1/admin/voice-categories/{id}", s.requireAuth(http.HandlerFunc(s.updateVoiceCategory), false))
@@ -320,7 +329,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", s.contentSecurityPolicy(r))
 		defer func() {
 			if v := recover(); v != nil {
 				s.Log.Error("request panic", "panic", v, "stack", string(debug.Stack()), "requestId", requestID)

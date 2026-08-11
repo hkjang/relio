@@ -6,7 +6,7 @@ import Layout, { Confirm, Empty, Modal, navigate, Spinner, Status } from '../com
 import { errorMessage } from '../App'
 
 type Props={path:string;user:User;version:Version;approvalEnabled:boolean;onLogout:()=>void;notify:(m:string,e?:boolean)=>void}
-export default function AdminPages(props:Props){const permissions=props.user.permissions||[];const canAdmin=props.user.isBootstrap||permissions.includes('admin:*')||permissions.includes('admin:read');if(!canAdmin)return <Layout area="admin" {...props} title="접근 권한 없음"><div className="panel"><Empty title="관리자 권한이 필요합니다" description="시스템 관리자에게 관리자 조회 권한을 요청하세요."/></div></Layout>;switch(props.path){case'/admin/operations':return <Operations {...props}/>;case'/admin/system':return <SystemSettings {...props}/>;case'/admin/oidc':return <OIDC {...props}/>;case'/admin/users':return <Users {...props}/>;case'/admin/roles':return <Roles {...props}/>;case'/admin/pipeline':return <AdminPipeline {...props}/>;case'/admin/sales-execution':return <SalesExecution {...props}/>;case'/admin/relationships':return <RelationshipIntelligenceSettings {...props}/>;case'/admin/approval':return <ApprovalPolicies {...props}/>;case'/admin/keys':return <KeyPolicies {...props}/>;case'/admin/custom-fields':return <CustomFields {...props}/>;case'/admin/products':return <Products {...props}/>;case'/admin/voice-categories':return <VoiceCategories {...props}/>;case'/admin/security':return <Security {...props}/>;case'/admin/audit':return <Audit {...props}/>;case'/admin/data':return <DataManagement {...props}/>;default:return <Overview {...props}/>}}
+export default function AdminPages(props:Props){const permissions=props.user.permissions||[];const canAdmin=props.user.isBootstrap||permissions.includes('admin:*')||permissions.includes('admin:read');if(!canAdmin)return <Layout area="admin" {...props} title="접근 권한 없음"><div className="panel"><Empty title="관리자 권한이 필요합니다" description="시스템 관리자에게 관리자 조회 권한을 요청하세요."/></div></Layout>;switch(props.path){case'/admin/operations':return <Operations {...props}/>;case'/admin/system':return <SystemSettings {...props}/>;case'/admin/oidc':return <OIDC {...props}/>;case'/admin/users':return <Users {...props}/>;case'/admin/roles':return <Roles {...props}/>;case'/admin/pipeline':return <AdminPipeline {...props}/>;case'/admin/sales-execution':return <SalesExecution {...props}/>;case'/admin/relationships':return <RelationshipIntelligenceSettings {...props}/>;case'/admin/approval':return <ApprovalPolicies {...props}/>;case'/admin/keys':return <KeyPolicies {...props}/>;case'/admin/custom-fields':return <CustomFields {...props}/>;case'/admin/products':return <Products {...props}/>;case'/admin/voice-categories':return <VoiceCategories {...props}/>;case'/admin/analytics':return <Analytics {...props}/>;case'/admin/security':return <Security {...props}/>;case'/admin/audit':return <Audit {...props}/>;case'/admin/data':return <DataManagement {...props}/>;default:return <Overview {...props}/>}}
 function Frame({children,title,subtitle,actions,...props}:Props&{children:React.ReactNode;title:string;subtitle?:string;actions?:React.ReactNode}){return <Layout area="admin" {...props} title={title} subtitle={subtitle} actions={actions}>{children}</Layout>}
 
 type Diagnostic={key:string;label:string;status:string;summary:string;route?:string;required:boolean}
@@ -447,6 +447,116 @@ function VoiceCategoryModal({category,onClose,onSaved,notify}:{category?:VoiceCa
     {editing&&<label className="check-label span-2"><input type="checkbox" name="active" defaultChecked={category!.active}/> 사용 중</label>}
   </div><div className="alert"><b>심각도가 기한을 더 조입니다</b><span>긴급은 응답 2시간·해결 24시간, 높음은 응답 4시간·해결 48시간을 넘지 않도록 자동 단축됩니다.</span></div>
     <div className="modal-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>취소</button><button className="btn btn-primary" disabled={busy}>{busy?'저장 중…':editing?'변경 저장':'유형 추가'}</button></div></form></Modal>
+}
+
+type AnalyticsProvider={id:string;provider:string;name:string;enabled:boolean;siteId?:string;scriptOrigin?:string;scriptPath?:string;collectOrigins:string[];scriptAttributes:Record<string,string>;respectDnt:boolean;authenticatedOnly:boolean;displayOrder:number}
+type Vendor={code:string;label:string;needsSiteId:boolean;needsOrigin:boolean;defaultPath:string}
+type CSPViolation={directive:string;blockedOrigin:string;documentUri?:string;occurrences:number;firstSeenAt:string;lastSeenAt:string;resolved:boolean;suggested:boolean}
+type AnalyticsData={items:AnalyticsProvider[];vendors:Vendor[];violations:CSPViolation[];policy:{scriptSrc:string[];connectSrc:string[];imgSrc:string[];enabled:boolean};loaderPath:string}
+
+function Analytics(props:Props){
+  const [data,setData]=useState<AnalyticsData|null>(null);const [modal,setModal]=useState<null|{provider?:AnalyticsProvider;prefillOrigin?:string}>(null);const [remove,setRemove]=useState<AnalyticsProvider|null>(null);const [busy,setBusy]=useState(false)
+  const load=()=>api<AnalyticsData>('/api/v1/admin/analytics').then(setData).catch(e=>props.notify(errorMessage(e),true))
+  useEffect(()=>{void load()},[])
+  async function confirmRemove(){if(!remove)return;setBusy(true);try{await api(`/api/v1/admin/analytics/${remove.id}`,{method:'DELETE'});props.notify(`${remove.name}을 삭제했습니다.`);setRemove(null);await load()}catch(e){props.notify(errorMessage(e),true)}finally{setBusy(false)}}
+  async function dismiss(v:CSPViolation){try{await api('/api/v1/admin/analytics/violations/resolve',{method:'POST',body:JSON.stringify({directive:v.directive,blockedOrigin:v.blockedOrigin})});await load()}catch(e){props.notify(errorMessage(e),true)}}
+  const active=(data?.items||[]).filter(x=>x.enabled).length
+  const blocked=(data?.violations||[]).filter(v=>!v.resolved)
+  return <Frame {...props} title="방문자 분석" subtitle="사내 Matomo나 자체 수집기를 연결합니다. 설정하지 않으면 Relio는 어떤 외부 요청도 하지 않습니다."
+    actions={<button className="btn btn-primary" onClick={()=>setModal({})}>＋ 공급자 추가</button>}>
+    {!data?<Spinner/>:<div className="settings-stack">
+      <section className={`panel analytics-state ${active?'on':''}`}>
+        <div><span className="analytics-dot"/><div>
+          <b>{active?`방문자 분석 ${active}개 활성`:'방문자 분석 비활성 (기본값)'}</b>
+          <p>{active
+            ? '아래 출처만 Content Security Policy에 추가되며, 추적 스크립트는 이 서버가 생성해 제공합니다.'
+            : 'Relio는 런타임에 외부 CDN·폰트·분석 요청을 하지 않습니다. 공급자를 추가하면 그 출처에 한해 허용됩니다.'}</p>
+        </div></div>
+        {active>0&&<div className="analytics-policy">
+          <div><small>script-src</small><code>{data.policy.scriptSrc.join(' ')||'추가 없음'}</code></div>
+          <div><small>connect-src</small><code>{data.policy.connectSrc.join(' ')||'추가 없음'}</code></div>
+          <div><small>로더</small><code>{data.loaderPath}</code></div>
+        </div>}
+      </section>
+
+      {blocked.length>0&&<section className="panel">
+        <div className="panel-head"><div><h2>차단된 요청 {blocked.length}건</h2>
+          <p>브라우저가 보안 정책으로 막은 출처입니다. 콘솔을 보지 않고도 여기서 확인하고 허용할 수 있습니다.</p></div></div>
+        <div className="violation-list">{blocked.map(v=>
+          <div key={`${v.directive}-${v.blockedOrigin}`}>
+            <span className="violation-directive">{v.directive}</span>
+            <span className="violation-origin"><b>{v.blockedOrigin}</b><small>{v.occurrences}회 · 최근 {date(v.lastSeenAt)}</small></span>
+            <div className="row-menu">
+              {v.suggested&&<button onClick={()=>setModal({prefillOrigin:v.blockedOrigin})}>이 출처 허용</button>}
+              <button onClick={()=>dismiss(v)}>무시</button>
+            </div>
+          </div>)}</div>
+      </section>}
+
+      <section className="panel table-panel">
+        {data.items.length?<table><thead><tr><th>공급자</th><th>유형</th><th>스크립트 출처</th><th>수집 출처</th><th>옵션</th><th>상태</th><th>관리</th></tr></thead>
+          <tbody>{data.items.map(x=><tr key={x.id}>
+            <td><b>{x.name}</b>{x.siteId&&<code className="table-sub">{x.siteId}</code>}</td>
+            <td>{data.vendors.find(v=>v.code===x.provider)?.label||x.provider}</td>
+            <td><code className="truncate">{x.scriptOrigin?`${x.scriptOrigin}${x.scriptPath||''}`:'공급자 기본 주소'}</code></td>
+            <td><code className="truncate">{x.collectOrigins.length?x.collectOrigins.join(', '):'스크립트 출처와 동일'}</code></td>
+            <td><small>{[x.respectDnt?'DNT 준수':null,x.authenticatedOnly?'로그인 후에만':null].filter(Boolean).join(' · ')||'제한 없음'}</small></td>
+            <td><Status value={x.enabled?'ACTIVE':'DISABLED'}/></td>
+            <td><div className="row-menu"><button onClick={()=>setModal({provider:x})}>편집</button><button className="danger" onClick={()=>setRemove(x)}>삭제</button></div></td>
+          </tr>)}</tbody></table>
+          :<Empty icon="◔" title="연결된 방문자 분석이 없습니다" description="사내 Matomo, Plausible, Umami, GA4 또는 직접 지정한 스크립트를 연결할 수 있습니다."
+            action={<button className="btn btn-primary" onClick={()=>setModal({})}>첫 공급자 추가</button>}/>}
+      </section>
+
+      <div className="scope-note">추적 스크립트는 관리자가 입력한 값으로 <b>서버가 생성</b>합니다. 임의의 JavaScript를 붙여넣는 방식이 아니므로 관리자 계정이 곧 전체 사용자 세션에 대한 스크립트 실행 권한이 되지는 않습니다. 이 설정은 <b>analytics:manage</b> 권한이 있어야 변경할 수 있고 모든 변경은 감사 로그에 남습니다.</div>
+    </div>}
+    {modal&&data&&<AnalyticsModal provider={modal.provider} prefillOrigin={modal.prefillOrigin} vendors={data.vendors}
+      onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load()}} notify={props.notify}/>}
+    {remove&&<Confirm title="방문자 분석 공급자 삭제" description={`${remove.name} 설정을 제거합니다. 해당 출처는 즉시 보안 정책에서 빠집니다.`} requireText={remove.name} busy={busy} onCancel={()=>setRemove(null)} onConfirm={confirmRemove}/>}
+  </Frame>
+}
+
+function AnalyticsModal({provider,prefillOrigin,vendors,onClose,onSaved,notify}:{provider?:AnalyticsProvider;prefillOrigin?:string;vendors:Vendor[];onClose:()=>void;onSaved:()=>void;notify:Props['notify']}){
+  const editing=Boolean(provider?.id)
+  const [code,setCode]=useState(provider?.provider||'MATOMO');const [busy,setBusy]=useState(false)
+  const vendor=vendors.find(v=>v.code===code)
+  async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);setBusy(true)
+    const body={provider:code,name:f.get('name'),enabled:f.get('enabled')==='on',siteId:f.get('siteId'),
+      scriptOrigin:f.get('scriptOrigin'),scriptPath:f.get('scriptPath'),
+      collectOrigins:String(f.get('collectOrigins')||'').split(/[\s,]+/).filter(Boolean),
+      scriptAttributes:Object.fromEntries(String(f.get('attributes')||'').split('\n').map(l=>l.split('=')).filter(p=>p.length===2).map(([k,v])=>[k.trim(),v.trim()])),
+      respectDnt:f.get('dnt')==='on',authenticatedOnly:f.get('authOnly')==='on',displayOrder:Number(f.get('order'))}
+    try{await api(editing?`/api/v1/admin/analytics/${provider!.id}`:'/api/v1/admin/analytics',{method:editing?'PUT':'POST',body:JSON.stringify(body)})
+      notify(editing?'방문자 분석 설정을 저장했습니다.':'방문자 분석 공급자를 추가했습니다. 다음 페이지 로드부터 적용됩니다.');onSaved()}
+    catch(err){notify(errorMessage(err),true)}finally{setBusy(false)}}
+  return <Modal title={editing?`${provider!.name} 편집`:'방문자 분석 공급자 추가'} onClose={onClose} wide><form className="form" onSubmit={submit}>
+    <div className="form-grid">
+      <label>공급자 유형 *<select value={code} onChange={e=>setCode(e.target.value)}>{vendors.map(v=><option key={v.code} value={v.code}>{v.label}</option>)}</select></label>
+      <label>표시 이름 *<input name="name" required autoFocus defaultValue={provider?.name||''} placeholder="사내 Matomo"/></label>
+      <label>{code==='GA4'?'측정 ID':code==='PLAUSIBLE'?'도메인':'사이트 ID'}{vendor?.needsSiteId?' *':''}
+        <input name="siteId" defaultValue={provider?.siteId||''} required={vendor?.needsSiteId} placeholder={code==='GA4'?'G-XXXXXXXXXX':'1'}/></label>
+      <label>표시 순서<input name="order" type="number" defaultValue={provider?.displayOrder??100}/></label>
+      <label className="span-2">스크립트 출처{vendor?.needsOrigin?' *':''}
+        <input name="scriptOrigin" defaultValue={provider?.scriptOrigin||prefillOrigin||''} required={vendor?.needsOrigin}
+          placeholder="https://matomo.example.com" pattern="https?://.+"/>
+        <small>스킴과 호스트까지만 입력합니다. 경로·와일드카드는 사용할 수 없습니다.</small></label>
+      <label className="span-2">스크립트 경로<input name="scriptPath" defaultValue={provider?.scriptPath||vendor?.defaultPath||''} placeholder="/matomo.js"/>
+        <small>비우면 공급자 기본 경로를 사용합니다.</small></label>
+      <label className="span-2">추가 수집 출처<input name="collectOrigins" defaultValue={(provider?.collectOrigins||[]).join(' ')}
+          placeholder="https://momento.example.com"/>
+        <small>스크립트가 이벤트를 보내는 주소가 다를 때만 입력합니다. 공백이나 쉼표로 구분하고 <code>https://*.example.com</code> 형식도 허용됩니다. 여기 입력한 출처만 connect-src에 추가됩니다.</small></label>
+      <label className="span-2">스크립트 속성<textarea name="attributes" rows={2}
+          defaultValue={Object.entries(provider?.scriptAttributes||{}).map(([k,v])=>`${k}=${v}`).join('\n')}
+          placeholder={'data-website-id=abc\ndata-host-url=https://umami.example.com'}/>
+        <small><code>data-*</code> 속성만 한 줄에 하나씩 <code>이름=값</code> 형식으로 입력합니다.</small></label>
+      <label className="check-label"><input type="checkbox" name="dnt" defaultChecked={provider?provider.respectDnt:true}/> Do Not Track 요청 존중</label>
+      <label className="check-label"><input type="checkbox" name="authOnly" defaultChecked={provider?.authenticatedOnly}/> 로그인 후 화면만 추적</label>
+      <label className="check-label span-2"><input type="checkbox" name="enabled" defaultChecked={provider?.enabled}/> 이 공급자 활성화</label>
+    </div>
+    <div className="alert"><b>활성화하면 보안 정책이 넓어집니다</b><span>여기 입력한 출처가 모든 사용자 브라우저의 Content Security Policy에 추가되고, Relio의 "런타임 외부 요청 없음" 기본 동작이 그만큼 완화됩니다. 신뢰하는 사내 수집기만 등록하세요.</span></div>
+    <div className="modal-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>취소</button>
+      <button className="btn btn-primary" disabled={busy}>{busy?'저장 중…':editing?'변경 저장':'공급자 추가'}</button></div>
+  </form></Modal>
 }
 
 function Security(props:Props){const {items}=useSettings();const get=(ns:string,k:string,f:any)=>items?.find(x=>x.namespace===ns&&x.key===k)?.value??f;async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);try{await Promise.all([saveSetting({namespace:'auth',key:'local_login_enabled',value:f.get('local')==='on'}),saveSetting({namespace:'security',key:'session_minutes',value:Number(f.get('session'))}),saveSetting({namespace:'api',key:'rate_limit_per_minute',value:Number(f.get('rate'))}),saveSetting({namespace:'security',key:'export_enabled',value:f.get('export')==='on'}),saveSetting({namespace:'files',key:'max_upload_mb',value:Number(f.get('upload'))})]);props.notify('보안 정책을 저장했습니다.')}catch(e){props.notify(errorMessage(e),true)}}return <Frame {...props} title="보안 · 파일 · 알림" subtitle="Local Login, Session, API Rate Limit, Export와 파일 정책을 중앙 관리합니다.">{!items?<Spinner/>:<form className="settings-stack" onSubmit={submit}><section className="panel settings-section"><div className="settings-title"><span>◈</span><div><h2>인증 · 접속 · API</h2><p>비상 관리자 로그인은 이 설정과 관계없이 항상 유지됩니다.</p></div></div><div className="form-grid"><label className="check-label"><input name="local" type="checkbox" defaultChecked={get('auth','local_login_enabled',true)}/> 일반 로컬 로그인 허용</label><label>접속 유지 시간 (분)<input name="session" type="number" min="15" defaultValue={get('security','session_minutes',480)}/></label><label>API 요청 한도 / 분<input name="rate" type="number" min="0" defaultValue={get('api','rate_limit_per_minute',120)}/></label><label>최대 파일 크기 (MB)<input name="upload" type="number" min="1" defaultValue={get('files','max_upload_mb',20)}/></label><label className="check-label"><input name="export" type="checkbox" defaultChecked={get('security','export_enabled',true)}/> CSV / Excel 내보내기 허용</label></div></section><section className="panel security-list">{[['Password','Argon2id · Raw Password 미저장'],['Browser','HttpOnly · SameSite · CSRF · CSP'],['SQL','Parameter Binding'],['Secret','AES-256-GCM Application Encryption'],['Personal Key','HMAC Digest · 1회 Secret 표시'],['MCP','Origin · Authentication · Tool Scope · Audit']].map(([k,v])=><div key={k}><span>✓</span><b>{k}</b><p>{v}</p></div>)}</section><div className="sticky-save"><span>주요 보안 변경은 감사 로그에 기록됩니다.</span><button className="btn btn-primary">보안 정책 저장</button></div></form>}</Frame>}

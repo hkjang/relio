@@ -47,7 +47,10 @@ Relio는 인터넷이 차단된 기업 환경에서 단일 Docker Image로 운�
 - 활성 승인 정책이 없으면 승인 메뉴, 버튼, Status가 나타나지 않습니다. 정책이 있을 때 해당 Entity에만 팀장 검토가 적용됩니다.
 - MCP는 `/mcp`의 Streamable HTTP 어댑터이며 CRM Domain Service와 분리되어 있고 관리자 Tool Allowlist·Origin·Rate 정책을 적용합니다.
 - 로그인 화면과 프로필 Context Menu에서 Version, Commit을 확인할 수 있습니다.
-- 런타임 CDN, 외부 Font, Analytics, Telemetry, License Check, Package Download가 없습니다.
+- 기본 상태에서 런타임 CDN, 외부 Font, Analytics, Telemetry, License Check, Package Download가 없습니다.
+- 사내 Matomo 등 방문자 분석이 필요하면 관리자가 출처별로 명시적으로 허용할 수 있고, 허용한 출처만 Content Security Policy에 추가됩니다.
+- 추적 스크립트는 서버가 생성해 자기 출처에서 제공하므로 관리자가 임의 JavaScript를 주입할 수 없습니다.
+- 브라우저가 차단한 요청은 관리자 화면에 출처별로 집계되어 콘솔을 보지 않고도 원인을 파악하고 허용할 수 있습니다.
 
 ## 빠른 시작
 
