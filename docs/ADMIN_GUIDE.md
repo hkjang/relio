@@ -42,7 +42,7 @@ docker run -d \
   -e BOOTSTRAP_ADMIN_PASSWORD="StrongAdminPassword123!" \
   -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -v relio-data:/var/lib/relio \
-  relio:v1.8.0
+  relio:v1.9.0
 ```
 
 ### 2.2 Master Key와 DB 연속성 검증 (Fail-Closed)
