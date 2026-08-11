@@ -88,3 +88,69 @@ tr.row-danger:hover{background:#fdeff2}
 .activity-to-voice{margin-left:auto;border:1px solid #e2d2d6;background:#fff;color:#a2515f;border-radius:6px;padding:5px 8px;font-size:11px;white-space:nowrap}
 .activity-to-voice:hover{background:#fdf3f5;border-color:#d9b8bf}
 @media(max-width:1200px){.today-grid{grid-template-columns:1fr}.risk-band{grid-template-columns:1fr}}
+
+/* 저장된 검색 · 즐겨찾기 · 개인 화면 */
+.saved-views{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:12px}
+.saved-views-label{font-size:12px;color:#7c8c9c;font-weight:650}
+.saved-views-empty{font-size:12px;color:#9fadb9}
+.saved-view-chip{display:inline-flex;align-items:stretch;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
+.saved-view-chip>button:first-child{border:0;background:transparent;color:#3a5876;font-size:12px;padding:6px 9px}
+.saved-view-chip>button:first-child:hover{background:#f2f7fa;color:#155d78}
+.saved-view-remove{border:0;border-left:1px solid var(--line);background:transparent;color:#a4b1bc;font-size:12px;padding:0 7px}
+.saved-view-remove:hover{background:#fdf1f3;color:#bc4357}
+.saved-view-add{border:1px dashed #c4d2de;background:transparent;color:#4f6a83;border-radius:8px;font-size:12px;padding:6px 10px}
+.saved-view-add:hover{background:#f6fafc;border-color:#a9c3d5}
+.saved-view-new{display:inline-flex;align-items:center;gap:5px}
+.saved-view-new input{border:1px solid #cfdae4;border-radius:7px;padding:6px 9px;font-size:12px;width:170px;outline:0}
+.saved-view-new input:focus{border-color:#2794a8;box-shadow:0 0 0 3px #1d99aa14}
+.favorite-star{border:0;background:transparent;color:#c3ccd6;font-size:17px;line-height:1;padding:2px 4px;border-radius:5px}
+.favorite-star:hover{color:#dCA92c;background:#fffbf0}
+.favorite-star.on{color:#e0a92c}
+.favorite-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:13px}
+.favorite-card{display:flex;flex-direction:column;gap:5px;padding:16px}
+.favorite-card header{display:flex;align-items:center;justify-content:space-between}
+.favorite-kind{font-size:11px;color:#5f7385;background:#eef3f7;border-radius:5px;padding:3px 7px}
+.favorite-card>b{font-size:15px;color:#22405e;margin-top:6px}
+.favorite-card>small{font-size:12px;color:#8695a3;min-height:18px}
+.favorite-card>button{margin-top:9px;align-self:flex-start}
+.my-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:15px}
+.my-kpi-grid>div{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 17px}
+.my-kpi-grid small{display:block;font-size:12px;color:#7c8c9c}
+.my-kpi-grid strong{display:block;font-size:24px;color:#173f63;margin:5px 0 3px}
+.my-kpi-grid span{font-size:11px;color:#94a2af}
+.me-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(300px,1fr);gap:15px}
+.me-task-list{display:flex;flex-direction:column}
+.me-task-list button{display:grid;grid-template-columns:auto minmax(0,1fr);gap:11px;align-items:center;text-align:left;border:0;border-bottom:1px solid #eef2f6;background:transparent;padding:12px 2px;width:100%}
+.me-task-list button:last-child{border-bottom:0}
+.me-task-list button:hover{background:#f7fafc}
+.me-task-mark{width:9px;height:9px;border-radius:50%;background:#b8c4ce}
+.me-task-mark.sev-critical{background:#c8455c}.me-task-mark.sev-high{background:#d5822f}
+.me-task-mark.sev-warning{background:#c9a52c}.me-task-mark.sev-info{background:#6d8497}
+.me-task-list b{display:block;font-size:14px;color:#26405a}
+.me-task-list small{display:block;font-size:11px;color:#8494a3;margin-top:3px}
+.calendar-days{display:flex;flex-direction:column;gap:11px}
+.calendar-days>div{border-left:3px solid #dbe3ea;padding-left:13px}
+.calendar-days>div.today{border-left-color:#1b7f93}
+.calendar-days>div.past{border-left-color:#d38b93}
+.calendar-days header{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+.calendar-days header b{font-size:13px;color:#2b4258}
+.calendar-days header em{font-style:normal;font-size:10px;background:#e6f4f7;color:#146a80;border-radius:4px;padding:2px 6px}
+.calendar-days header em.overdue{background:#fbeaec;color:#bd4657}
+.calendar-days button{display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px;align-items:center;text-align:left;border:1px solid var(--line);border-radius:9px;background:#fff;padding:9px 11px;width:100%;margin-bottom:5px}
+.calendar-days button:hover{background:#f7fafc;border-color:#bcd6e4}
+.calendar-days button b{display:block;font-size:13px;color:#26405a}
+.calendar-days button small{display:block;font-size:11px;color:#8b99a6;margin-top:2px}
+.notification-page-list{display:flex;flex-direction:column}
+.notification-page-list>div{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:11px;align-items:center;border-bottom:1px solid #eef2f6;padding:13px 2px}
+.notification-page-list>div:last-child{border-bottom:0}
+.notification-page-list>div.unread{background:#f6fbfc}
+.notification-page-list b{display:block;font-size:14px;color:#26405a}
+.notification-page-list small{display:block;font-size:12px;color:#8494a3;margin-top:3px}
+.notification-page-list em{display:block;font-style:normal;font-size:11px;color:#9fadb9;margin-top:4px}
+.target-bar{height:7px;border-radius:5px;background:#eaeff4;overflow:hidden;min-width:110px}
+.target-bar span{display:block;height:100%;background:#4f8fbe}
+.target-bar span.near{background:#d0a133}.target-bar span.done{background:#2f9268}
+/* Keyboard focus must be visible now that rows are reachable by Tab. */
+tr[role="button"]{cursor:pointer}
+tr[role="button"]:focus-visible,.voice-row:focus-visible,.today-list button:focus-visible,.risk-list button:focus-visible,.me-task-list button:focus-visible{outline:2px solid #1b7f93;outline-offset:-2px}
+@media(max-width:1100px){.me-grid{grid-template-columns:1fr}.my-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

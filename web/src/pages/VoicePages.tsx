@@ -1,9 +1,10 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { api, date, relative } from '../api'
 import { Customer, User, Version } from '../types'
-import Layout, { Empty, Modal, Spinner, Status, navigate } from '../components/Layout'
+import Layout, { Empty, Modal, Spinner, Status, navigate, rowProps, useDialog } from '../components/Layout'
 import { initials, label } from '../labels'
 import { errorMessage } from '../App'
+import { SavedViews } from '../components/SavedViews'
 
 type Props = { path: string; user: User; version: Version; approvalEnabled: boolean; onLogout: () => void; notify: (m: string, e?: boolean) => void }
 
@@ -111,6 +112,11 @@ export default function VoicePages(props: Props) {
         <div><span>만족도</span><strong>{summary.satisfactionAverage ? `${summary.satisfactionAverage.toFixed(1)}` : '—'}</strong><small>5점 만점</small></div>
       </div>
 
+      <SavedViews resource="VOICE" current={exportQuery(filter)} notify={props.notify}
+        onApply={q => { const p = new URLSearchParams(q)
+          const next = { voiceType: p.get('voiceType') || '', severity: p.get('severity') || '', status: p.get('status') || '',
+            view: p.get('overdue') === 'true' ? 'overdue' : p.get('open') === 'true' ? 'open' : 'all' }
+          setFilter(next); void load(next) }} />
       <div className="toolbar">
         <select value={filter.view} onChange={e => change({ view: e.target.value })} aria-label="처리 상태 보기">
           <option value="open">처리 중만</option><option value="overdue">기한 초과만</option><option value="all">전체</option>
@@ -129,7 +135,7 @@ export default function VoicePages(props: Props) {
       <section className="panel table-panel">
         {items.length ? <table><thead><tr>
           <th>접수번호 · 제목</th><th>고객</th><th>유형</th><th>심각도</th><th>상태</th><th>응답 기한</th><th>해결 기한</th><th>담당</th>
-        </tr></thead><tbody>{items.map(v => <tr key={v.id} onClick={() => setSelected(v)} className={v.resolutionOverdue ? 'row-danger' : ''}>
+        </tr></thead><tbody>{items.map(v => <tr key={v.id} {...rowProps(() => setSelected(v))} aria-label={`${v.title} 처리 상세 열기`} className={v.resolutionOverdue ? 'row-danger' : ''}>
           <td><b>{v.title}</b><small className="table-sub">{v.voiceNo} · {relative(v.occurredAt)} 접수{v.openDays > 0 ? ` · ${v.openDays}일 경과` : ''}</small></td>
           <td><div className="entity-cell"><span className="customer-logo">{initials(v.customerName)}</span><span><b>{v.customerName}</b><small>{v.contactName || '담당자 미지정'}</small></span></div></td>
           <td><Status value={v.voiceType} /><small className="table-sub">{v.categoryName || label(v.channel)}</small></td>
@@ -196,6 +202,7 @@ function VoiceModal({ prefill, categories, customers, onClose, onSaved, notify }
 }
 
 function VoiceDrawer({ voice, categories, canWrite, onClose, onSaved, notify }: { voice: Voice; categories: Category[]; canWrite: boolean; onClose: () => void; onSaved: () => void; notify: Props['notify'] }) {
+  const surface = useDialog(onClose)
   const [detail, setDetail] = useState<{ voice: Voice; events: VoiceEvent[] } | null>(null)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
@@ -238,7 +245,7 @@ function VoiceDrawer({ voice, categories, canWrite, onClose, onSaved, notify }: 
   }
 
   return <div className="drawer-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-    <aside className="drawer drawer-wide">
+    <aside ref={surface} className="drawer drawer-wide" role="dialog" aria-modal="true">
       <div className="drawer-head">
         <div><p className="eyebrow">고객의 목소리 · {v.voiceNo}</p><h2>{v.title}</h2>
           <p>{v.customerName}{v.contactName ? ` · ${v.contactName}` : ''} · 담당 {v.ownerName}</p></div>

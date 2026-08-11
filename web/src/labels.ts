@@ -111,3 +111,12 @@ export function initials(name?: string | null, length = 2): string {
   const source = cleaned || name.trim()
   return source.slice(0, length) || '?'
 }
+
+/** activityIcon is the glyph shown on a timeline entry for each contact type. */
+export function activityIcon(type?: string | null): string {
+  const glyphs: Record<string, string> = {
+    MEETING: '♟', CALL: '☎', EMAIL: '✉', VISIT: '⌂', NOTE: '▤',
+    TASK: '✓', DEMO: '▶', PROPOSAL: '▦',
+  }
+  return glyphs[(type || '').toUpperCase()] ?? '•'
+}

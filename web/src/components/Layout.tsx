@@ -1,4 +1,4 @@
-import { Fragment, ReactNode, useEffect, useRef, useState } from 'react'
+import React, { Fragment, ReactNode, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { initials, label } from '../labels'
 import { User, Version } from '../types'
@@ -137,7 +137,58 @@ export function Status({ value, raw = false }: { value: string; raw?: boolean })
   const c = value.toLowerCase().replaceAll('_', '-')
   return <span className={`status status-${c}`} title={value}>{raw ? value : label(value)}</span>
 }
-export function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) { return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}><div className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}><div className="modal-head"><h2>{title}</h2><button className="icon-btn" aria-label="닫기" onClick={onClose}>×</button></div>{children}</div></div> }
+export function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  const surface = useDialog(onClose)
+  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
+    <div ref={surface} className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+      <div className="modal-head"><h2>{title}</h2><button className="icon-btn" aria-label="닫기" onClick={onClose}>×</button></div>
+      {children}
+    </div>
+  </div>
+}
+
+/** useDialog makes an overlay usable without a mouse: Escape closes it, Tab stays
+ *  inside it, and focus returns to whatever opened it. Without this a keyboard
+ *  user tabs straight out of the dialog into the page behind it. */
+export function useDialog(onClose: () => void) {
+  const surface = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
+    const focusable = () => Array.from(
+      surface.current?.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') ?? []
+    ).filter(el => el.offsetParent !== null)
+    focusable()[0]?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose(); return }
+      if (e.key !== 'Tab') return
+      const items = focusable()
+      if (!items.length) return
+      const first = items[0], last = items[items.length - 1]
+      if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+      else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => { document.removeEventListener('keydown', onKey, true); opener?.focus?.() }
+  }, [onClose])
+  return surface
+}
+
+/** rowProps turns a clickable table row into a real control: reachable by Tab,
+ *  activated by Enter or Space, and announced as a button to screen readers. */
+export function rowProps(activate: () => void) {
+  return {
+    tabIndex: 0,
+    role: 'button' as const,
+    onClick: activate,
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        // Space scrolls the page by default, which loses the user's place.
+        e.preventDefault()
+        activate()
+      }
+    },
+  }
+}
 
 // Confirm gates every destructive administrator action. Typing the record name is
 // required only when the action cannot be undone from the console.

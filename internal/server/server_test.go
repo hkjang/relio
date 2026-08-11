@@ -107,3 +107,52 @@ func TestRedactDiagnostic(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestLimiterCountsPerIdentityAndWindow(t *testing.T) {
+	limiter := newRequestLimiter()
+	// A limit of zero or less means unlimited, which is how an administrator
+	// disables throttling.
+	for i := 0; i < 500; i++ {
+		if !limiter.allow("unlimited", 0) {
+			t.Fatal("a limit of 0 must never throttle")
+		}
+	}
+	// Within one window a caller gets exactly `limit` requests.
+	for i := 1; i <= 3; i++ {
+		if !limiter.allow("alice", 3) {
+			t.Fatalf("request %d of 3 must be allowed", i)
+		}
+	}
+	if limiter.allow("alice", 3) {
+		t.Fatal("the fourth request must be throttled")
+	}
+	// Identities are independent: one noisy key must not throttle another user.
+	if !limiter.allow("bob", 3) {
+		t.Fatal("a different identity must have its own budget")
+	}
+	// A new window resets the count.
+	limiter.mu.Lock()
+	limiter.entries["alice"] = requestBucket{window: time.Now().Add(-2 * time.Minute), count: 99}
+	limiter.mu.Unlock()
+	if !limiter.allow("alice", 3) {
+		t.Fatal("a stale window must reset the budget")
+	}
+}
+
+func TestLoginLimiterForgetsAfterSuccess(t *testing.T) {
+	limiter := newLoginLimiter()
+	for i := 0; i < 10; i++ {
+		if !limiter.allow("10.0.0.1") {
+			t.Fatalf("attempt %d must be allowed", i+1)
+		}
+	}
+	if limiter.allow("10.0.0.1") {
+		t.Fatal("the eleventh attempt within the window must be blocked")
+	}
+	// A successful login clears the failure record so the user is not locked out
+	// of their next session.
+	limiter.success("10.0.0.1")
+	if !limiter.allow("10.0.0.1") {
+		t.Fatal("a successful login must clear the attempt counter")
+	}
+}
