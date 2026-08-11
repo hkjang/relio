@@ -10,6 +10,7 @@ import (
 
 	"github.com/hkjang/relio/internal/audit"
 	"github.com/hkjang/relio/internal/auth"
+	"github.com/hkjang/relio/internal/oidc"
 	"github.com/hkjang/relio/internal/platform/database"
 	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/hkjang/relio/internal/platform/version"
@@ -124,8 +125,8 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	token, _, err := s.OIDC.Callback(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("code"), httpx.ClientIP(r), r.UserAgent())
 	if err != nil {
-		s.Log.Warn("OIDC callback failed", "error", err)
-		http.Redirect(w, r, "/login?sso_error=callback_failed", http.StatusFound)
+		s.Log.Warn("OIDC callback failed", "error", err, "reason", oidc.CallbackReason(err))
+		http.Redirect(w, r, "/login?sso_error="+urlQuery(oidc.CallbackReason(err)), http.StatusFound)
 		return
 	}
 	s.Auth.SetSessionCookie(w, r, token)
