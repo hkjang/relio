@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hkjang/relio/internal/admin"
+	"github.com/hkjang/relio/internal/analytics"
 	"github.com/hkjang/relio/internal/apikey"
 	"github.com/hkjang/relio/internal/approval"
 	"github.com/hkjang/relio/internal/audit"
@@ -82,9 +83,10 @@ func main() {
 	oidcService := &oidc.Service{DB: db, Secrets: secretManager, Auth: authService, Audit: auditService}
 	authService.OIDCValidator = oidcService.ValidateAccessToken
 	personalService := &personal.Service{DB: db}
+	analyticsService := &analytics.Service{DB: db, Audit: auditService}
 	voiceService := &voice.Service{DB: db, CRM: crmService, Audit: auditService}
-	mcpServer := &mcp.Server{DB: db, CRM: crmService, Approvals: approvalService, Intelligence: intelligenceService, Relationships: relationshipService}
-	app := server.New(db, logger, authService, auditService, crmService, settingsService, keyService, approvalService, oidcService, mcpServer, intelligenceService, relationshipService, voiceService, personalService)
+	mcpServer := &mcp.Server{DB: db, CRM: crmService, Approvals: approvalService, Intelligence: intelligenceService, Relationships: relationshipService, Voices: voiceService}
+	app := server.New(db, logger, authService, auditService, crmService, settingsService, keyService, approvalService, oidcService, mcpServer, intelligenceService, relationshipService, voiceService, personalService, analyticsService)
 	app.EncryptionKeyConfigured = cfg.EncryptionKey != ""
 	runner := job.New(db, logger)
 	runner.Snapshot = intelligenceService.CaptureForecastSnapshots
