@@ -37,6 +37,7 @@ type Discovery struct {
 }
 type Config struct {
 	ID                     string     `json:"id,omitempty"`
+	Version                int        `json:"version"`
 	Enabled                bool       `json:"enabled"`
 	IssuerURL              string     `json:"issuerUrl"`
 	ClientID               string     `json:"clientId"`
@@ -109,7 +110,7 @@ func (s *Service) Get(ctx context.Context) (Config, error) {
 	var scopes []string
 	var role *string
 	var discovery, result []byte
-	err := s.DB.QueryRow(ctx, `SELECT id,enabled,issuer_url,client_id,client_secret_encrypted,scopes,username_claim,email_claim,name_claim,group_claim,role_claim,auto_provision,default_role_id,COALESCE(root_ca_pem,''),discovery,last_tested_at,last_test_result FROM oidc_providers ORDER BY created_at LIMIT 1`).Scan(&c.ID, &c.Enabled, &c.IssuerURL, &c.ClientID, &secret, &scopes, &c.UsernameClaim, &c.EmailClaim, &c.NameClaim, &c.GroupClaim, &c.RoleClaim, &c.AutoProvision, &role, &c.RootCAPEM, &discovery, &c.LastTestedAt, &result)
+	err := s.DB.QueryRow(ctx, `SELECT id,version,enabled,issuer_url,client_id,client_secret_encrypted,scopes,username_claim,email_claim,name_claim,group_claim,role_claim,auto_provision,default_role_id,COALESCE(root_ca_pem,''),discovery,last_tested_at,last_test_result FROM oidc_providers ORDER BY created_at LIMIT 1`).Scan(&c.ID, &c.Version, &c.Enabled, &c.IssuerURL, &c.ClientID, &secret, &scopes, &c.UsernameClaim, &c.EmailClaim, &c.NameClaim, &c.GroupClaim, &c.RoleClaim, &c.AutoProvision, &role, &c.RootCAPEM, &discovery, &c.LastTestedAt, &result)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.CallbackURL = s.callbackURL(ctx)
 		defaults(&c)
@@ -142,6 +143,9 @@ func (s *Service) privateConfig(ctx context.Context) (Config, error) {
 		return c, err
 	}
 	c.ClientSecret, err = s.Secrets.Decrypt(encrypted)
+	if err != nil {
+		return c, errors.New("OIDC Client Secret cannot be decrypted; restore the matching relio-data volume")
+	}
 	return c, err
 }
 
@@ -168,7 +172,10 @@ func (s *Service) Save(ctx context.Context, p *auth.Principal, c Config, ip, req
 		return Config{}, err
 	}
 	defaults(&c)
-	existing, _ := s.Get(ctx)
+	existing, err := s.Get(ctx)
+	if err != nil {
+		return Config{}, err
+	}
 	c.ClientSecretConfigured = existing.ClientSecretConfigured
 	if err := validate(c); err != nil {
 		return Config{}, err
@@ -181,7 +188,9 @@ func (s *Service) Save(ctx context.Context, p *auth.Principal, c Config, ip, req
 			return Config{}, err
 		}
 	} else if existing.ID != "" {
-		_ = s.DB.QueryRow(ctx, `SELECT client_secret_encrypted FROM oidc_providers WHERE id=$1`, existing.ID).Scan(&encrypted)
+		if err = s.DB.QueryRow(ctx, `SELECT client_secret_encrypted FROM oidc_providers WHERE id=$1`, existing.ID).Scan(&encrypted); err != nil {
+			return Config{}, fmt.Errorf("preserve OIDC Client Secret: %w", err)
+		}
 	}
 	id := existing.ID
 	if id == "" {
@@ -191,9 +200,16 @@ func (s *Service) Save(ctx context.Context, p *auth.Principal, c Config, ip, req
 			return Config{}, err
 		}
 	} else {
-		_, err := s.DB.Exec(ctx, `UPDATE oidc_providers SET enabled=$2,issuer_url=$3,client_id=$4,client_secret_encrypted=$5,scopes=$6,username_claim=$7,email_claim=$8,name_claim=$9,group_claim=$10,role_claim=$11,auto_provision=$12,default_role_id=$13,root_ca_pem=$14,updated_by=$15,updated_at=now() WHERE id=$1`, id, c.Enabled, strings.TrimRight(c.IssuerURL, "/"), c.ClientID, encrypted, c.Scopes, c.UsernameClaim, c.EmailClaim, c.NameClaim, c.GroupClaim, c.RoleClaim, c.AutoProvision, nullString(c.DefaultRoleID), nullString(c.RootCAPEM), p.UserID)
+		expectedVersion := c.Version
+		if expectedVersion == 0 {
+			expectedVersion = existing.Version
+		}
+		result, err := s.DB.Exec(ctx, `UPDATE oidc_providers SET enabled=$2,issuer_url=$3,client_id=$4,client_secret_encrypted=$5,scopes=$6,username_claim=$7,email_claim=$8,name_claim=$9,group_claim=$10,role_claim=$11,auto_provision=$12,default_role_id=$13,root_ca_pem=$14,updated_by=$15,updated_at=now(),version=version+1 WHERE id=$1 AND version=$16`, id, c.Enabled, strings.TrimRight(c.IssuerURL, "/"), c.ClientID, encrypted, c.Scopes, c.UsernameClaim, c.EmailClaim, c.NameClaim, c.GroupClaim, c.RoleClaim, c.AutoProvision, nullString(c.DefaultRoleID), nullString(c.RootCAPEM), p.UserID, expectedVersion)
 		if err != nil {
 			return Config{}, err
+		}
+		if result.RowsAffected() == 0 {
+			return Config{}, errors.New("OIDC configuration was changed by another user")
 		}
 	}
 	s.Audit.Record(ctx, audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "ADMIN", Action: "OIDC_CONFIG_UPDATE", Resource: "oidc_provider", ResourceID: id, Before: map[string]any{"enabled": existing.Enabled, "issuerUrl": existing.IssuerURL, "clientId": existing.ClientID}, After: map[string]any{"enabled": c.Enabled, "issuerUrl": c.IssuerURL, "clientId": c.ClientID, "clientSecret": "***"}, IP: ip, RequestID: requestID, UserAgent: ua})
@@ -535,14 +551,59 @@ func claim(claims map[string]any, path string) any {
 	}
 	return current
 }
+
+// fallbackRoleID resolves the Role a Keycloak user receives when no Claim
+// mapping applies. Without it a provisioned user has no permission at all and
+// every CRM request answers HTTP 403 even though the SSO login succeeded.
+func (s *Service) fallbackRoleID(ctx context.Context, c Config) (string, error) {
+	if c.DefaultRoleID != "" {
+		var id string
+		err := s.DB.QueryRow(ctx, `SELECT id FROM roles WHERE id=$1`, c.DefaultRoleID).Scan(&id)
+		if err == nil {
+			return id, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+	}
+	var id string
+	err := s.DB.QueryRow(ctx, `SELECT id FROM roles WHERE is_default LIMIT 1`).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// repairRoles attaches the default Role to an SSO user that has none. Users
+// provisioned by earlier releases are in exactly that state, so signing in once
+// is enough to make Relio usable again.
+func (s *Service) repairRoles(ctx context.Context, c Config, userID, username string) {
+	if !c.AutoProvision {
+		return
+	}
+	var roles int
+	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM user_roles WHERE user_id=$1`, userID).Scan(&roles); err != nil || roles > 0 {
+		return
+	}
+	roleID, err := s.fallbackRoleID(ctx, c)
+	if err != nil || roleID == "" {
+		return
+	}
+	if _, err = s.DB.Exec(ctx, `INSERT INTO user_roles(user_id,role_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, userID, roleID); err != nil {
+		return
+	}
+	s.Audit.Record(ctx, audit.Event{ActorID: userID, ActorName: username, Channel: "SSO", Action: "USER_ROLES_REPAIR", Resource: "user", ResourceID: userID, After: map[string]any{"roleIds": []string{roleID}, "reason": "SSO user had no Role and could not use Relio"}})
+}
+
 func (s *Service) resolveUser(ctx context.Context, c Config, claims map[string]any) (string, error) {
 	subject := fmt.Sprint(claims["sub"])
 	if subject == "" {
 		return "", errors.New("ID token has no subject")
 	}
-	var id string
-	err := s.DB.QueryRow(ctx, `SELECT id FROM users WHERE oidc_subject=$1 AND active=true`, subject).Scan(&id)
+	var id, existingName string
+	err := s.DB.QueryRow(ctx, `SELECT id,display_name FROM users WHERE oidc_subject=$1 AND active=true`, subject).Scan(&id, &existingName)
 	if err == nil {
+		s.repairRoles(ctx, c, id, existingName)
 		return id, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -568,10 +629,16 @@ func (s *Service) resolveUser(ctx context.Context, c Config, claims map[string]a
 	}
 	id = ids.New()
 	var orgID string
-	_ = s.DB.QueryRow(ctx, `SELECT id FROM organizations WHERE code='RELIO'`).Scan(&orgID)
+	err = s.DB.QueryRow(ctx, `SELECT id FROM organizations WHERE code='RELIO'`).Scan(&orgID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("resolve default OIDC organization: %w", err)
+	}
 	externalGroups := stringSlice(claim(claims, c.GroupClaim))
 	if len(externalGroups) > 0 {
-		_ = s.DB.QueryRow(ctx, `SELECT organization_id FROM oidc_group_mappings WHERE provider_id=$1 AND external_group=ANY($2) ORDER BY external_group LIMIT 1`, c.ID, externalGroups).Scan(&orgID)
+		err = s.DB.QueryRow(ctx, `SELECT organization_id FROM oidc_group_mappings WHERE provider_id=$1 AND external_group=ANY($2) ORDER BY external_group LIMIT 1`, c.ID, externalGroups).Scan(&orgID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("resolve OIDC group mapping: %w", err)
+		}
 	}
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -583,26 +650,45 @@ func (s *Service) resolveUser(ctx context.Context, c Config, claims map[string]a
 		return "", fmt.Errorf("provision OIDC user: %w", err)
 	}
 	roleIDs := []string{}
-	if c.DefaultRoleID != "" {
-		roleIDs = append(roleIDs, c.DefaultRoleID)
-	}
 	externalRoles := stringSlice(claim(claims, c.RoleClaim))
 	if len(externalRoles) > 0 {
-		rows, e := tx.Query(ctx, `SELECT role_id FROM oidc_role_mappings WHERE provider_id=$1 AND external_role=ANY($2)`, c.ID, externalRoles)
-		if e == nil {
-			for rows.Next() {
-				var role string
-				if rows.Scan(&role) == nil {
-					roleIDs = append(roleIDs, role)
-				}
-			}
-			rows.Close()
+		rows, err := tx.Query(ctx, `SELECT role_id FROM oidc_role_mappings WHERE provider_id=$1 AND external_role=ANY($2)`, c.ID, externalRoles)
+		if err != nil {
+			return "", fmt.Errorf("resolve OIDC role mapping: %w", err)
 		}
+		for rows.Next() {
+			var role string
+			if err = rows.Scan(&role); err != nil {
+				rows.Close()
+				return "", err
+			}
+			roleIDs = append(roleIDs, role)
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return "", err
+		}
+		rows.Close()
+	}
+	// Only fall back when no Claim mapping matched. A user must always end up
+	// with at least one Role, otherwise the login succeeds and the application
+	// is unusable.
+	if len(roleIDs) == 0 {
+		fallback, err := s.fallbackRoleID(ctx, c)
+		if err != nil {
+			return "", fmt.Errorf("resolve default sign-in role: %w", err)
+		}
+		if fallback == "" {
+			return "", errors.New("no default sign-in Role is configured; set one in the administrator console before enabling SSO auto provisioning")
+		}
+		roleIDs = append(roleIDs, fallback)
 	}
 	seen := map[string]bool{}
 	for _, roleID := range roleIDs {
 		if roleID != "" && !seen[roleID] {
-			_, _ = tx.Exec(ctx, `INSERT INTO user_roles(user_id,role_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, id, roleID)
+			if _, err = tx.Exec(ctx, `INSERT INTO user_roles(user_id,role_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, id, roleID); err != nil {
+				return "", fmt.Errorf("assign OIDC role: %w", err)
+			}
 			seen[roleID] = true
 		}
 	}
@@ -626,6 +712,34 @@ func stringSlice(v any) []string {
 		}
 	}
 	return out
+}
+
+// CallbackReason maps a callback failure onto a stable, non-sensitive code so
+// the login screen can tell a user whose account simply is not provisioned apart
+// from a genuine Keycloak connectivity problem.
+func CallbackReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "auto provisioning is disabled"):
+		return "not_provisioned"
+	case strings.Contains(message, "default sign-in Role"):
+		return "no_default_role"
+	case strings.Contains(message, "state is invalid or expired"):
+		return "state_expired"
+	case strings.Contains(message, "token exchange failed"):
+		return "token_exchange_failed"
+	case strings.Contains(message, "ID token"):
+		return "token_invalid"
+	case strings.Contains(message, "username claim"):
+		return "claim_missing"
+	case strings.Contains(message, "discovery"), strings.Contains(message, "provider is unavailable"):
+		return "discovery_failed"
+	default:
+		return "callback_failed"
+	}
 }
 
 func (s *Service) PublicStatus(ctx context.Context) map[string]any {

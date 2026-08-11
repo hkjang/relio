@@ -52,10 +52,17 @@ func main() {
 		logger.Error("database migration failed", "error", err)
 		os.Exit(1)
 	}
-	secretManager, err := secrets.LoadOrCreate(config.MasterKeyPath)
+	secretManager, secretStatus, err := secrets.Resolve(ctx, db, cfg.EncryptionKey, config.MasterKeyPath)
 	if err != nil {
-		logger.Error("instance master key unavailable", "error", err)
+		logger.Error("instance encryption key integrity check failed", "error", err, "recovery", "set ENCRYPTION_KEY to the original value or restore PostgreSQL and /var/lib/relio from the same recovery point")
 		os.Exit(1)
+	}
+	logger.Info("instance encryption key verified", "keyId", secretStatus.KeyID, "wrapOrigin", secretStatus.WrapOrigin, "wrapKeyId", secretStatus.WrapKeyID, "portable", secretStatus.Portable, "protectedCredentials", secretStatus.ProtectedCredentials, "created", secretStatus.Created, "adopted", secretStatus.Adopted)
+	if secretStatus.Adopted {
+		logger.Info("instance data key re-wrapped with the new wrapping key", "wrapOrigin", secretStatus.WrapOrigin, "note", "existing Personal Keys and SSO Client Secrets remain valid")
+	}
+	if !secretStatus.Portable {
+		logger.Warn("credential protection depends on the "+config.DataDirectory+" volume", "recommendation", "set ENCRYPTION_KEY so Personal Keys and SSO Client Secrets survive a volume rebuild")
 	}
 	auditService := &audit.Service{DB: db, Log: logger}
 	authService := &auth.Service{DB: db, Secrets: secretManager}
@@ -74,6 +81,7 @@ func main() {
 	authService.OIDCValidator = oidcService.ValidateAccessToken
 	mcpServer := &mcp.Server{DB: db, CRM: crmService, Approvals: approvalService, Intelligence: intelligenceService, Relationships: relationshipService}
 	app := server.New(db, logger, authService, auditService, crmService, settingsService, keyService, approvalService, oidcService, mcpServer, intelligenceService, relationshipService)
+	app.EncryptionKeyConfigured = cfg.EncryptionKey != ""
 	runner := job.New(db, logger)
 	runner.Snapshot = intelligenceService.CaptureForecastSnapshots
 	go runner.Run(ctx)

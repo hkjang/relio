@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -15,13 +16,39 @@ import (
 
 type Manager struct{ key []byte }
 
-func LoadOrCreate(path string) (*Manager, error) {
+// NewManager wraps raw key bytes. It is used for the data encryption key that
+// is unwrapped from PostgreSQL and for keys parsed out of ENCRYPTION_KEY.
+func NewManager(key []byte) (*Manager, error) {
+	if len(key) != 32 {
+		return nil, errors.New("Relio encryption key must be exactly 32 bytes")
+	}
+	owned := make([]byte, 32)
+	copy(owned, key)
+	return &Manager{key: owned}, nil
+}
+
+func load(path string) (*Manager, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, errors.New("Relio master key must be a regular file")
+	}
 	key, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != 32 {
+		return nil, errors.New("invalid Relio master key length")
+	}
+	return &Manager{key: key}, nil
+}
+
+func LoadOrCreate(path string) (*Manager, error) {
+	manager, err := load(path)
 	if err == nil {
-		if len(key) != 32 {
-			return nil, errors.New("invalid Relio master key length")
-		}
-		return &Manager{key: key}, nil
+		return manager, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read master key: %w", err)
@@ -29,7 +56,7 @@ func LoadOrCreate(path string) (*Manager, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, fmt.Errorf("create secrets directory: %w", err)
 	}
-	key = make([]byte, 32)
+	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("generate master key: %w", err)
 	}
@@ -48,6 +75,21 @@ func LoadOrCreate(path string) (*Manager, error) {
 		return nil, fmt.Errorf("close master key: %w", err)
 	}
 	return &Manager{key: key}, nil
+}
+
+// Fingerprint is a one-way identifier used to bind a PostgreSQL database to
+// the exact master key stored in its companion relio-data volume. It is safe
+// to persist and compare, but it cannot be used to recover the key.
+func (m *Manager) Fingerprint() string {
+	digest := sha256.New()
+	digest.Write([]byte("relio:instance-master-key:v1:"))
+	digest.Write(m.key)
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func (m *Manager) KeyID() string {
+	fingerprint := m.Fingerprint()
+	return fingerprint[:12]
 }
 
 func (m *Manager) Encrypt(plain string) (string, error) {
