@@ -9,14 +9,14 @@
 .relationship-canvas {
   min-height: 230px;
   overflow: auto;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 14px;
   background: linear-gradient(135deg, #f8fbff, #f3f7fd);
 }
 .relationship-canvas svg { display: block; width: 100%; min-width: 680px; }
 .relationship-canvas line { stroke: #8496b2; stroke-width: 2; }
 .relationship-canvas marker path { fill: #8496b2; }
-.relationship-canvas > svg > g > text { fill: #60718b; font-size: 10px; font-weight: 700; text-anchor: middle; paint-order: stroke; stroke: #f7faff; stroke-width: 4px; }
+.relationship-canvas > svg > g > text { fill: #60718b; font-size: 14px; font-weight: 700; text-anchor: middle; paint-order: stroke; stroke: #f7faff; stroke-width: 4px; }
 .relationship-node rect { fill: #fff; stroke: #cfdae9; stroke-width: 1.5px; filter: drop-shadow(0 4px 7px #243c5c16); }
 .relationship-node circle { fill: #dce9fb; }
 .relationship-node.sentiment-support rect { stroke: #4caf79; }
@@ -24,10 +24,10 @@
 .relationship-node.sentiment-oppose rect { stroke: #df6a70; }
 .relationship-node.sentiment-oppose circle { fill: #ffe1e3; }
 .relationship-node text { stroke: none; paint-order: normal; text-anchor: start; }
-.relationship-node .node-initial { fill: #25496f; font-weight: 800; font-size: 13px; }
-.relationship-node .node-name { fill: #172b46; font-weight: 800; font-size: 13px; }
-.relationship-node .node-role { fill: #52647c; font-size: 10px; }
-.relationship-node .node-strength { fill: #7c8ca1; font-size: 9px; }
+.relationship-node .node-initial { fill: #25496f; font-weight: 800; font-size: 16px; }
+.relationship-node .node-name { fill: #172b46; font-weight: 800; font-size: 16px; }
+.relationship-node .node-role { fill: #52647c; font-size: 14px; }
+.relationship-node .node-strength { fill: #7c8ca1; font-size: 13px; }
 
 .relationship-edge-list { display: grid; gap: 7px; margin-top: 14px; }
 .relationship-edge-list > div { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 2px 12px; align-items: center; padding: 9px 11px; border-radius: 10px; background: #f7f9fc; }
@@ -36,7 +36,7 @@
 .relationship-form { display: grid; grid-template-columns: 1fr 1fr 1fr 80px 1.2fr auto; gap: 8px; margin-top: 14px; }
 .relationship-form input,.relationship-form select { min-width: 0; }
 .relationship-score { display: flex; align-items: end; gap: 5px; margin: 22px 0; color: #335f94; }
-.relationship-score strong { font-size: 56px; line-height: .9; }
+.relationship-score strong { font-size: 54px; line-height: .9; }
 .relationship-score span { color: var(--muted); font-weight: 700; }
 
 .account-plan { margin-bottom: 18px; }
@@ -44,17 +44,17 @@
 .account-plan-controls input { width: 95px; }
 .white-space-head { display: flex; align-items: center; justify-content: space-between; margin: 26px 0 10px; }
 .white-space-head h3,.white-space-head p { margin: 0; }
-.white-space-head p { color: var(--muted); font-size: 13px; margin-top: 3px; }
+.white-space-head p { color: var(--muted); font-size: 16px; margin-top: 3px; }
 .white-space-list { display: grid; gap: 8px; }
 .white-space-row { display: grid; grid-template-columns: 1.2fr 160px 150px 1.7fr 38px; gap: 8px; align-items: center; }
 
-.opportunity-team .team-member { display: grid; grid-template-columns: auto minmax(0,1fr) auto auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.opportunity-team .team-member { display: grid; grid-template-columns: auto minmax(0,1fr) auto auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .opportunity-team .team-member div { display: grid; }
 .opportunity-team .team-member small { color: var(--muted); margin-top: 2px; }
 .team-add { display: grid; grid-template-columns: 1.3fr 1fr 1.4fr auto; gap: 8px; margin-top: 14px; }
-.scope-note { margin-top: 14px; padding: 11px 13px; border: 1px solid #bfd7f2; border-radius: 10px; color: #345a82; background: #edf6ff; font-size: 12px; line-height: 1.5; }
+.scope-note { margin-top: 14px; padding: 11px 13px; border: 1px solid #bfd7f2; border-radius: 10px; color: #345a82; background: #edf6ff; font-size: 15px; line-height: 1.5; }
 .role-policy-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
-.role-policy-grid .check-label { padding: 13px; border: 1px solid var(--border); border-radius: 12px; align-items: flex-start; }
+.role-policy-grid .check-label { padding: 13px; border: 1px solid var(--line); border-radius: 12px; align-items: flex-start; }
 .role-policy-grid .check-label span { display: grid; gap: 3px; }
 .role-policy-grid small { color: var(--muted); }
 
@@ -68,3 +68,16 @@
   .account-plan-controls,.white-space-head { align-items: stretch; flex-direction: column; }
   .white-space-row,.relationship-form,.team-add,.role-policy-grid { grid-template-columns: 1fr; }
 }
+
+/* Korean labels are wider than the codes they replaced, so the controls and the
+   graph need room. Buttons must not wrap mid-word. */
+.account-plan-controls button,.white-space-head button{white-space:nowrap}
+.account-plan-controls input{width:110px}
+.account-plan-controls select{width:110px}
+.relationship-canvas svg{min-width:900px}
+.relationship-canvas > svg > g > text{font-size:12px}
+.relationship-node .node-role{font-size:12px}
+.relationship-node .node-strength{font-size:11px}
+.relationship-edge-list > div{grid-template-columns:minmax(0,1fr) auto;row-gap:4px}
+.relationship-edge-list b{font-size:14px}
+.relationship-form{grid-template-columns:1fr 1fr 1fr 90px 1.2fr auto}
