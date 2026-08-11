@@ -1,73 +1,154 @@
-# Security Model
+# Relio 보안 모델 및 컴플라이언스 명세서 (Security & Compliance Model)
 
-## Authentication
+- **문서 버전**: v1.6.0  
+- **최종 수정일**: 2026년 8월 11일  
+- **대상**: CISO, 보안 감사자, Security Engineer, Compliance Lead  
+- **문서 개요**: Relio의 Zero-Trust 보안 모델, HMAC-SHA256 Personal Key 회전, Envelope Cryptography & Master Key 영속성, Keycloak OIDC SSO, 3중 권한 교집합 및 감사 로그 규격  
 
-- Local Password: Argon2id, 사용자별 Salt, Raw Password 미저장
-- OIDC: Authorization Code + PKCE + State + Nonce, RS256 JWKS 검증
-- Browser Session: Random 256-bit Token의 SHA-256 Digest만 저장, HttpOnly/SameSite Cookie, HTTPS일 때 Secure
-- Personal Key: Random Secret을 한 번만 표시, Master Key 기반 HMAC-SHA-256 Digest만 저장
-- Bootstrap Admin: 최초 한 번 생성, 재기동 환경변수로 수정하지 않음, 별도 Audit
+---
 
-OIDC ID Token은 Issuer, Audience, Expiry, Nonce와 RSA Signature를 검사합니다. 사내 Root CA는 관리자 화면에서 등록하며 Client Secret과 마찬가지로 화면에 다시 노출하지 않습니다.
+## 1. Zero-Trust 보안 모델 및 핵심 철학
 
-## Authorization
+Relio는 사내 폐쇄망(Air-gapped) 환경에 배포되는 B2B CRM이지만, 내부망 침투 시나리오를 대비한 **Zero-Trust 아키텍처**를 엄격하게 채택하고 있습니다.
 
-최종 접근 권한은 사용자 Function Permission, Data Scope, Personal Key Scope/Channel의 교집합입니다. Personal Key에 넓은 Scope를 넣어도 사용자 Role 권한을 넘지 못합니다. MCP의 `approve_request`, `reject_request`는 `approval:approve`를 별도로 요구합니다.
+### 1.1 5대 보안 원칙 (Core Security Principles)
+1. **Raw Credential Non-Persistence (원문 자격증명 저장 불가)**:
+   사용자의 비밀번호(Argon2id/Bcrypt) 및 Personal API Key는 절대로 원문 형태로 DB나 파일 시스템에 저장되지 않습니다. API Key는 `HMAC-SHA256` Digest만을 보존합니다.
+2. **Fail-Closed Envelope Key Integrity (봉인 키 무결성 검증)**:
+   DB 내 저장되는 비밀 정보(SSO Client Secret 등)를 암호화하는 Master Key는 단방향 지문(ID)이 DB에 보관됩니다. 만약 키가 일치하지 않거나 불법 복제된 경우 어플리케이션은 즉시 기동을 중단합니다.
+3. **Intersection-Based Authorization (3중 권한 교집합 검증)**:
+   모든 API 및 MCP 요청은 `Function Permission ∩ Data Scope ∩ Personal Key Scope`의 교집합 범위 내에서만 실행됩니다.
+4. **Air-Gap Strict Cleanliness (외연 통신 완전 배제)**:
+   런타임 CDN, 외부 웹폰트, 폰트 다운로드, Telemetry, External License Call, Package Repository 연결이 0%로 완전히 차단됩니다.
+5. **Immutable Audit & Tamper Evident (감사 이력 불변성)**:
+   모든 관리자 액션 및 데이터 변동은 전후 DTO Snapshot, IP, Actor, Timestamp, Request ID와 함께 Audit 테이블에 기록되며 수정/삭제 API를 제공하지 않습니다.
 
-## Browser and HTTP
+---
 
-- Mutating Session 요청은 `X-CSRF-Token` 검증
-- CSP, frame-ancestors, X-Content-Type-Options, Referrer-Policy, Permissions-Policy
-- JSON Body Size 제한 및 Unknown Field 거부
-- Parameter Binding
-- Request ID와 표준 Error Envelope
-- 로그인 기본 Rate Limit
-- 관리자 정책 기반 REST/MCP 분당 Rate Limit
-- 변경 요청의 `Idempotency-Key` 결과 재사용 및 충돌 검사
+## 2. 자격증명 영속성 및 암호화 모델 (Key Management & Envelope Encryption)
 
-Reverse Proxy가 TLS를 종료하면 `X-Forwarded-Proto: https`를 전달해야 Secure Cookie가 설정됩니다.
-
-## MCP
-
-MCP Adapter는 다음 순서로 요청을 검사합니다.
-
-```text
-Origin → Bearer Authentication → MCP Channel → mcp:use
-→ Tool Scope → User Permission → Data Scope → Validation → Domain Service → Audit
+```
++-----------------------------------------------------------------------------------+
+|                           Master Key Protection Modes                             |
+|                                                                                   |
+|  Mode A: ENCRYPTION_KEY Provided (Recommended)                                    |
+|  +------------------------+      PBKDF2/HKDF      +--------------------------+  |
+|  | Env: ENCRYPTION_KEY    | --------------------> | Envelope Master Key      |  |
+|  +------------------------+                       +------------+-------------+  |
+|                                                                |                  |
+|  Mode B: Volume Only (Default)                                 |                  |
+|  +------------------------+                            Unseals |                  |
+|  | /var/lib/relio/secrets | -----------------------------------+                  |
+|  | /master.key File       |                                    v                  |
++----------------------------------------------------------------|------------------+
+                                                                 |
+                                                                 v
++-----------------------------------------------------------------------------------+
+|                            PostgreSQL Integrity Check                             |
+|   1. App computes Master Key ID (12-char SHA-256 HMAC Fingerprint).               |
+|   2. Query `master_keys` table.                                                   |
+|   3. IF DB has active secret AND Key ID mismatch -> FAIL FAST (Shutdown App).     |
+|   4. IF OK -> Decrypt SSO Secrets using AES-256-GCM.                              |
++-----------------------------------------------------------------------------------+
 ```
 
-Origin이 있으면 관리자 `mcp.allowed_origins` 또는 Service URL Origin과 일치해야 합니다. Origin이 없는 비브라우저 Agent 요청은 인증을 계속 검사합니다. `mcp.tool_allowlist`가 설정되면 허용 목록 밖 Tool은 목록과 직접 호출 모두에서 차단됩니다. 서버는 Stateless JSON 응답을 사용하며 서버 주도 SSE GET은 405를 반환합니다.
+### 2.1 `ENCRYPTION_KEY` 환경변수와 Volume 영속성
+Relio는 DB 내 Secret 데이터(SSO Client Secret, Data Key)를 보호하기 위해 AES-256-GCM 봉인 암호화를 적용합니다.
 
-## Persistent Volume
+| 구성 | 컨테이너 재기동 | 이미지 교체 | `relio-data` Volume 재생성 |
+|---|---|---|---|
+| **`ENCRYPTION_KEY` 설정 (권장)** | 자격증명 유지 | 자격증명 유지 | **자격증명 완벽 유지 (Volume 독립적)** |
+| **`ENCRYPTION_KEY` 미설정** | 자격증명 유지 | 자격증명 유지 | Volume 손실 시 복구 불가 |
 
-## Instance Data Key와 ENCRYPTION_KEY
+- **`ENCRYPTION_KEY` 입력 규격**: 64자리 16진수 hex 문자열, Base64 인코딩 32바이트, 또는 32자 이상의 Passphrase.
+- **기동 및 무결성 검증 (Fail-Closed)**:
+  어플리케이션은 기동 시 Master Key의 단방향 지문(12자)을 계산해 PostgreSQL의 `master_keys` 테이블과 비교합니다. DB에 활성 SSO Secret 또는 API Key Digest가 존재하는데 Key ID가 일치하지 않으면 `instance encryption key integrity check failed` 로그를 남기고 즉시 프로세스를 종료하여 암호화 데이터 훼손 및 오작동을 방지합니다.
 
-Secret 설정, OIDC Client Secret 암호화와 Personal Key HMAC Digest는 모두 하나의 **Instance Data Key**를 사용합니다. 이 Data Key는 설치 시 한 번 생성된 뒤 변하지 않으며, 무엇으로 봉인(Wrap)하는지만 선택합니다. 봉인된 Data Key는 `instance_data_key` 테이블에 AES-256-GCM 암호문으로 보관합니다.
+---
 
-| 봉인 방식 | 저장 위치 | Volume 재생성 시 |
-| --- | --- | --- |
-| `ENCRYPTION_KEY` 환경변수 | 어디에도 저장하지 않음 (지문만) | 같은 값만 주면 그대로 복구 |
-| `master.key` 파일 | `/var/lib/relio/secrets/master.key` | 복구 필요 |
+## 3. Personal API Key 보안 및 무중단 회전 (Grace Period Rotation)
 
-`ENCRYPTION_KEY`는 64자리 16진수 또는 Base64로 인코딩한 32바이트를 그대로 사용하고, 그 밖의 값은 32자 이상일 때만 HKDF-SHA256으로 도출합니다. Key 자체는 로그, Support Bundle, Configuration Bundle, Admin API 어디에도 나타나지 않습니다.
+### 3.1 Personal Key 구조
+Personal Key는 `relio_{keyId}_{secret}` 형식으로 발급됩니다.
+- `keyId`: 12자리 공개 식별자 (DB 검색용)
+- `secret`: 32자리 고엔트로피 비밀 값
 
-Data Key와 Wrapping Key 모두 Domain-separated SHA-256 지문만 PostgreSQL에 남습니다. 시작 시 다음을 검증합니다.
+### 3.2 HMAC-SHA256 Digest 보안
+서버는 DB에 Raw Secret을 저장하지 않습니다. 서버가 보유한 HMAC Key와 결합해 `HMAC-SHA256(secret)` Digest만을 보존하므로, DB가 유출되더라도 API Key 원문을 복원할 수 없습니다.
 
-- Master Key 파일이 32바이트 일반 파일인지 확인하고 Symlink를 거부합니다.
-- 봉인된 Data Key를 제시된 Wrapping Key로 실제로 열 수 있는지 확인합니다.
-- DB에 등록된 Data Key ID와 열어낸 Data Key ID를 상수 시간으로 비교합니다.
-- 등록 전 업그레이드 환경은 기존 OIDC/System Secret 암호문을 실제 복호화한 뒤 Key ID를 등록합니다.
-- 활성 Personal Key 또는 암호화 Secret이 있는데 `ENCRYPTION_KEY`도 Key 파일도 없으면 새 Key를 생성하지 않습니다.
-- Key 불일치나 암호문 손상은 `instance encryption key recovery required`로 Fail-Closed 처리합니다.
+### 3.3 7일 Grace Period 회전 (Dual-Active Rotation)
+운영 중인 서비스의 API Key 교체 시 시스템 중단을 방지하기 위해 Dual-Active 회전 매커니즘을 지원합니다.
+1. 사용자가 API Key 회전(Rotate)을 요청하면 새 `keyId`와 `secret`이 발급됩니다.
+2. 기존 Key는 즉시 파기되지 않고 **7일간의 Grace Period(유예 기간)** 동안 Dual-Active 상태로 유지됩니다.
+3. 7일 경과 후 백그라운드 잡(`job.Runner`)이 구버전 Key Digest를 자동으로 무효화합니다.
 
-### Wrapping Key 이관과 회전
+---
 
-기존 Volume이 연결된 상태에서 `ENCRYPTION_KEY`를 처음 설정하면, 파일 Key로 Data Key를 연 뒤 새 Key로 다시 봉인합니다. Data Key 자체는 바뀌지 않으므로 **이미 발급된 Personal Key와 저장된 SSO Client Secret은 계속 유효합니다.** 이관과 회전은 `instance_data_key_events`에 기록되며 Key 값은 남기지 않습니다.
+## 4. Keycloak OIDC SSO 및 Break Glass 비상 계정
 
-반대로 열 수 있는 Key가 하나도 없으면 기동을 중단합니다. 이 Fail-Closed 동작은 잘못된 Volume이나 잘못된 Key로 기동한 상태를 정상으로 오인해 SSO와 모든 Personal Key를 동시에 무효화하는 사고를 방지합니다.
+### 4.1 Keycloak OIDC 연동
+- **프로토콜**: OpenID Connect (Authorization Code Flow with PKCE).
+- **TLS & Discovery**: Issuer URL 등록 시 Discovery Document (`.well-known/openid-configuration`), TLS Certificate 유효성, JWKS URI 검증을 관리자 콘솔에서 실행합니다.
+- **Redirect URI**: `https://<relio-domain>/api/v1/auth/oidc/callback`
 
-## Persistent Volume Backup
+### 4.2 Break Glass 계정 (`BOOTSTRAP_ADMIN`)
+- **개념**: OIDC SSO 서버 장애, Network isolation, 인증 체계 마비 시 시스템 접근을 보장하는 비상 수퍼관리자 계정입니다.
+- **보호 매커니즘**:
+  - `BOOTSTRAP_ADMIN` 계정은 시스템 최초 기동 시 DB에 계정이 없을 때만 단 1회 생성됩니다.
+  - 최초 생성 후 컨테이너 환경변수(`BOOTSTRAP_ADMIN_PASSWORD`)를 변경하더라도 기존 계정 비밀번호를 덮어쓰지 않습니다.
+  - UI 및 API 상에서 삭제가 완전히 금지(Immutable Account)되어 비상 접근권을 상시 유지합니다.
 
-`ENCRYPTION_KEY`를 사용하지 않는 배포에서 `/var/lib/relio` Volume을 잃으면 기존 암호화 Secret을 복호화할 수 없습니다. 이때 Backup은 PostgreSQL과 `relio-data`를 같은 복구 지점으로 관리해야 합니다. Master Key, Personal Key Raw Secret과 Bootstrap Password를 로그에 출력하지 않습니다.
+---
 
-Admin Operations에서는 원본 지문이 아닌 12자리 Data Key ID, Wrapping Key ID, 봉인 방식과 보호 자격증명 건수만 표시합니다.
+## 5. 3중 권한 교집합 검증 모델 (Triple Intersection Authorization)
+
+Relio는 모든 요청에 대해 다음 3개 영역의 **교집합(Intersection)**을 계산하여 엄격하게 통제합니다.
+
+```
+       +------------------------------------+
+       |   Function Permission              |
+       |   (e.g., opportunity:write)        |
+       +-----------------+------------------+
+                         |
+                         v
+       +-----------------+------------------+
+       |   Data Scope                       |
+       |   (SELF / TEAM / ALL)              |
+       +-----------------+------------------+
+                         |
+                         v
+       +-----------------+------------------+
+       |   Personal Key Scope               |
+       |   (e.g., mcp:use, read-only)       |
+       +-----------------+------------------+
+                         |
+                         v
+           [ FINAL PERMITTED ACTION ]
+```
+
+1. **Function Permission**: 사용자의 역할(Role: Admin, Sales Manager, Sales Rep, Auditor)에 부여된 기능 권한.
+2. **Data Scope**:
+   - `SELF`: 본인이 Owner인 데이터만 접근 가능.
+   - `TEAM`: 본인 소속 부서/팀의 데이터 접근 가능.
+   - `ALL`: 전체 조직 데이터 접근 가능.
+3. **Personal Key Scope**: REST API 또는 MCP Key 생성 시 사용자가 지정한 제한적 Scope (예: `read-only`, `mcp:use`).
+
+---
+
+## 6. Audit Trail & Support Bundle (감사 및 진단 보안)
+
+### 6.1 Audit Log 기록 항목
+모든 관리자 설정 변경, 권한 할당, 승인 처리, Stage Playbook 수정 등은 `audit_logs` 테이블에 무경고 영구 수집됩니다:
+- `actor_id` & `actor_name`: 수행 사용자
+- `channel`: WEB, REST, MCP, ADMIN
+- `action`: 수행한 행위 코드 (예: `OIDC_SETTING_UPDATE`)
+- `before_data` & `after_data`: 변경 전후 JSON DTO (비밀 정보는 마스킹 처리)
+- `ip` & `user_agent`: 클라이언트 IP 및 User-Agent
+- `request_id`: Tracing용 UUID
+
+### 6.2 Support Bundle 마스킹 (Masking Policy)
+관리자 콘솔에서 시스템 진단을 위한 **Support Bundle Export** 시, 다음 정보는 자동 마스킹 및 제거 처리되어 제출됩니다:
+- `POSTGRES_DSN` 내 비밀번호 문자열
+- OIDC `Client Secret`
+- API Key Digest 및 Password Hash
+- 고객 개인식별정보(PII)

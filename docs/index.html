@@ -405,16 +405,17 @@
                     <div class="deploy-card glass-panel">
                         <h4>🐳 Single Docker Archive Load</h4>
                         <p>GitHub Release의 .tar.gz 패키지 하나만 오프라인망으로 반입하여 구동합니다.</p>
-<pre><code>gunzip -c relio-v1.0.0.tar.gz | docker load
+<pre><code>gunzip -c relio-v1.6.0.tar.gz | docker load
 
-# 3개 환경변수로 구동
+# 3개 필수 환경변수 및 1개 선택 환경변수로 구동
 docker run -d --name relio \
   -p 8080:8080 \
   -e POSTGRES_DSN="postgres://relio:pass@postgres:5432/relio" \
   -e BOOTSTRAP_ADMIN="admin" \
   -e BOOTSTRAP_ADMIN_PASSWORD="StrongAdminPassword123!" \
+  -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -v relio-data:/var/lib/relio \
-  relio:v1.0.0</code></pre>
+  relio:v1.6.0</code></pre>
                     </div>
                     <div class="deploy-card glass-panel">
                         <h4>⚙️ 3대 필수 환경변수</h4>

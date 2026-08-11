@@ -1,101 +1,156 @@
-# Administrator Guide
+# Relio 엔터프라이즈 관리자 및 운영 매뉴얼 (Administrator Guide)
 
-## 최초 구축
+- **문서 버전**: v1.6.0  
+- **최종 수정일**: 2026년 8월 11일  
+- **대상**: System Administrator, DevOps Engineer, Database Administrator (DBA), Infrastructure Lead  
+- **문서 개요**: Relio 단일 컨테이너 배포, 필수 환경변수 부트스트랩, Command Center 진단, Data Quality Center, Configuration Bundle 관리, Audit Log 운영 및 백업 절차  
 
-1. 세 환경변수와 영속 Volume을 지정해 Relio를 시작합니다.
-2. Bootstrap Admin으로 로그인하고 초기 비밀번호를 변경합니다.
-3. Admin Console의 시스템 설정에서 Service URL, Locale, Timezone을 저장합니다.
-4. 조직, Role/Permission/Data Scope, 사용자를 구성합니다.
-5. 필요할 때만 Keycloak OIDC와 승인 Workflow를 활성화합니다.
+---
 
-## Keycloak
+## 1. 개요 및 빠른 설치 (Quick Start & Deployment)
 
-1. Keycloak에서 Confidential OIDC Client를 생성합니다.
-2. Relio Admin → Keycloak OIDC에 Realm Issuer URL, Client ID, Client Secret을 입력합니다.
-3. 화면에 표시된 Callback URL을 Keycloak Valid Redirect URI로 등록합니다.
-4. 저장 후 연결 테스트를 실행합니다.
-5. Claim과 Default Role을 확인하고 Auto Provision 여부를 결정합니다.
-6. Role Mapping에서 Keycloak Role을 Relio Role로, Group Mapping에서 Keycloak Group을 Relio 조직으로 연결합니다.
-7. 테스트가 성공한 후 SSO를 활성화합니다.
+Relio는 별도의 런타임 설치 없이 단일 Docker Image와 PostgreSQL 데이터베이스만으로 동작합니다.
 
-Keycloak 장애는 `/health/ready`를 실패시키지 않습니다. Bootstrap Admin은 SSO 활성화 후에도 유지합니다.
+### 1.1 개발 및 테스트 실행 (Docker Compose)
+```bash
+# Repository 클론 후 개발 환경 실행
+docker compose up --build
+```
+- **접속 URL**: `http://localhost:8080`
+- **초기 개발 계정**: ID `admin` / Password `ChangeMe-Relio-2026`
+- **최초 로그인**: 초기 로그인 성공 즉시 신규 비밀번호 변경 창으로 강제 이동됩니다.
 
-## 운영 Command Center와 Diagnostics
+### 1.2 엔터프라이즈 프로덕션 배포 명령 (Docker Run)
+```bash
+# 1. Master Key 봉인을 위한 ENCRYPTION_KEY 생성 (최초 1회 실행 후 Vault/비밀번호 관리 도구 보관)
+ENCRYPTION_KEY="$(openssl rand -hex 32)"
 
-`관리자 → 운영 Command Center`는 필수 운영 항목을 0~100 준비도로 계산하고 즉시 조치할 항목을 우선순위로 표시합니다. PostgreSQL, Schema Migration, Instance Master Key, Persistent Volume, Service URL, 사용자·조직, RBAC, Pipeline, Background Job은 필수 항목입니다. OIDC와 승인 Workflow는 선택 기능이므로 관리자가 의도적으로 비활성화한 상태를 장애로 계산하지 않습니다.
+# 2. Relio 컨테이너 실행
+docker run -d \
+  --name relio \
+  -p 8080:8080 \
+  -e POSTGRES_DSN="postgres://relio:Secr3tPass123@10.10.50.5:5432/relio?sslmode=disable" \
+  -e BOOTSTRAP_ADMIN="admin" \
+  -e BOOTSTRAP_ADMIN_PASSWORD="StrongSuperAdminPassword2026!" \
+  -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
+  -v relio-data:/var/lib/relio \
+  relio:v1.6.0
+```
 
-`관리자 → Diagnostics · Job`에서 각 항목의 근거, Application/Database Version, Offline Runtime Contract와 최근 Background Job을 확인합니다. 운영 지원 자료가 필요하면 `Support Bundle`을 내려받습니다. Bundle에는 Password, Token, Personal Key, PostgreSQL DSN, OIDC Client Secret이 포함되지 않으며 다운로드 자체가 Audit에 기록됩니다.
+---
 
-관리자 메뉴 검색은 상단 검색창 또는 `Ctrl/Command + K`로 시작할 수 있습니다. 모바일에서는 상단 `관리 메뉴` 버튼을 눌러 모든 설정에 접근합니다.
+## 2. 필수 환경변수 및 자격증명 영속성 명세 (Environment Configuration)
 
-## Audit Log
+Relio는 오직 **3개의 필수 환경변수**와 **1개의 선택 환경변수**만 사용합니다.
 
-Actor, Action, Resource, Resource ID와 Request ID를 한 번에 검색하고 Channel로 필터링할 수 있습니다. 행의 `상세`를 열면 요청 Metadata와 변경 전·후 JSON을 비교할 수 있습니다. Support Bundle 다운로드는 `SUPPORT_BUNDLE_EXPORT` Action으로 남습니다.
+### 2.1 환경변수 명세 표
+| 환경변수명 | 구별 | 설명 | 예시 |
+|---|---|---|---|
+| `POSTGRES_DSN` | **필수** | PostgreSQL 데이터베이스 접속 DSN | `postgres://user:pass@db:5432/relio` |
+| `BOOTSTRAP_ADMIN` | **필수** | 최초 기동 시 생성되는 비상 수퍼관리자 ID | `admin` |
+| `BOOTSTRAP_ADMIN_PASSWORD` | **필수** | 비상 수퍼관리자 초기 비밀번호 (최소 12자) | `ComplexPasswd123!` |
+| `ENCRYPTION_KEY` | 선택 | Master Key Envelope 봉인 키 (Volume 독립성 제공) | `64자리 16진수 hex / Base64 / 32자+` |
 
-## Data Quality Center
+### 2.2 `ENCRYPTION_KEY`와 볼륨(Volume) 종속성 완화
+- **`ENCRYPTION_KEY` 미설정 시**:
+  Master Key가 `/var/lib/relio/secrets/master.key` 파일로 관리됩니다. 컨테이너 교체는 가능하나 `relio-data` 볼륨이 삭제되면 기존 SSO Client Secret 및 API Key를 복구할 수 없습니다.
+- **`ENCRYPTION_KEY` 설정 시 (권장)**:
+  볼륨이 재생성되거나 새 서버로 이관되더라도 동일한 `ENCRYPTION_KEY` 환경변수만 주입하면 기존 DB의 암호화 데이터 및 자격증명이 완전하게 온전하게 유지됩니다.
 
-`관리자 → Data Quality · Config`에서 고객, 담당자, 진행 Opportunity를 8개 규칙으로 점검합니다. 사업자번호 누락, 담당자 없는 고객, 90일 이상 미접촉 고객, 중복 가능 고객, 연락수단 없는 담당자, Next Action 없는 Deal, Decision Maker 미확인, 30일 이상 정체 Deal을 전체 대상 대비 비율과 가중치로 계산해 0~100 Score로 표시합니다.
+---
 
-각 Rule Card를 열면 최대 8개의 문제 표본과 권장 조치를 확인하고 해당 Customer 360, Opportunity 또는 Deal Intelligence로 이동할 수 있습니다. 데이터가 없는 영역은 감점하지 않습니다. Score만 목표로 삼기보다 영업 영향이 큰 `CRITICAL` 항목과 반복 추세를 먼저 관리합니다.
+## 3. Operations Command Center (`/admin/operations`)
 
-## Configuration Bundle
+운영 관리자는 `/admin/operations` 콘솔에서 시스템 전반의 상태를 실시간으로 진단하고 조치할 수 있습니다.
 
-같은 화면의 `Configuration Bundle` 탭에서 개발·검증·운영 환경 사이에 관리자 정책을 이동할 수 있습니다.
+```
++-----------------------------------------------------------------------------------+
+|                        Admin Operations Command Center                            |
+|                                                                                   |
+|  [ Readiness Score: 100% ]    [ System Health: Healthy ]   [ Schema: v1.6.0 ]     |
+|                                                                                   |
+|  +-----------------------------------------------------------------------------+  |
+|  |  Operational Diagnostics (진단 7종)                                         |  |
+|  |   1. PostgreSQL Connection & Pool Status                [ PASS ]            |  |
+|  |   2. Database Schema Migration Integrity                  [ PASS ]            |  |
+|  |   3. Envelope Master Key & ENCRYPTION_KEY Mode            [ PASS (Env Key) ]  |  |
+|  |   4. Storage Directory (/var/lib/relio) Writable          [ PASS ]            |  |
+|  |   5. OIDC SSO Issuer & JWKS Health                         [ PASS ]            |  |
+|  |   6. REST API & MCP Adapter Readiness                      [ PASS ]            |  |
+|  |   7. Background Job Runner Loop Status                     [ PASS ]            |  |
+|  +-----------------------------------------------------------------------------+  |
+|                                                                                   |
+|  +-----------------------------------------------------------------------------+  |
+|  |  Prioritized Action Items (우선 조치 권고사항)                              |  |
+|  |   - [INFO] ENCRYPTION_KEY environment variable is active.                     |  |
+|  |   - [INFO] Keycloak OIDC Provider is configured and active.                   |  |
+|  +-----------------------------------------------------------------------------+  |
++-----------------------------------------------------------------------------------+
+```
 
-1. `현재 설정 JSON 저장`으로 Source 환경의 Bundle을 내려받습니다.
-2. Target 환경에서 JSON을 선택합니다.
-3. Format, 2MB 크기 제한, 중복 논리 Key, 금지된 Secret과 참조를 검증합니다.
-4. Section별 `CREATE`, `UPDATE`, `SAME` 수와 항목별 변경 전·후 JSON을 확인합니다.
-5. 확인 Checkbox를 선택한 뒤 트랜잭션으로 적용합니다.
+### 3.1 7대 자동 진단 항목
+1. **PostgreSQL Connection**: DB 연결 응답 시간, Active Connection Pool 수치 검사.
+2. **Schema Migration**: 최신 마이그레이션 적용 상태 및 버전 무결성.
+3. **Master Key Protection**: Envelope Key 보호 모드 (`ENCRYPTION_KEY` 사용 여부) 검사.
+4. **Storage Permissions**: `/var/lib/relio` 데이터 디렉토리 쓰기 권한.
+5. **OIDC SSO Endpoint**: Issuer URL Discovery 및 Discovery Endpoints 응답 검사.
+6. **API / MCP Endpoint**: REST API 및 MCP `/mcp` 라우터 준비 상태.
+7. **Background Job Loop**: Daily Snapshot 및 Expire Runner의 작동 여부.
 
-Bundle에는 비밀값이 아닌 System Setting, Custom Role/Permission, Pipeline/Stage, Custom Field, Deal Health Rule, 승인 정책, Sales Playbook과 Exit Criteria가 포함됩니다. OIDC Client Secret, Password, Token, PostgreSQL DSN, 사용자·조직 Identity, 고객과 영업 업무 데이터는 포함되지 않습니다. Import는 항목을 삭제하지 않으며 논리 Key 기준의 생성·갱신만 수행하고 시스템 관리자 Role을 변경할 수 없습니다. Export와 Apply는 각각 `CONFIGURATION_BUNDLE_EXPORT`, `CONFIGURATION_BUNDLE_APPLY` Audit으로 기록됩니다.
+---
 
-## Approval
+## 4. Data Quality Center (`/admin/data-quality`)
 
-정책이 없을 때가 기본 상태입니다. 이때 사용자는 승인 관련 메뉴와 Status를 볼 수 없습니다. 정책을 추가할 때 Entity, 조건 Field/Operator/Value와 승인자를 지정합니다. 정책 조건은 요청 시점 Entity Snapshot에 평가됩니다.
+고객, 담당자, 영업기회 데이터의 완전성을 0~100점 점수 및 이상 징후 표본으로 측정합니다.
 
-## Sales Execution
+### 4.1 5대 데이터 이슈 진단 및 개선 가이드
+1. **Unassigned Customers (담당자 미지정 고객)**: 담당 영업대표가 할당되지 않아 관리 공백이 발생한 고객.
+2. **Duplicate Customer Candidates (중복 의심 고객)**: 동일 사업자번호 또는 상호 유사도가 높은 고객 표본.
+3. **Stale Accounts (30일 이상 미접촉 고객)**: 최근 30일간 미팅, 통화 등 영업 활동 기록이 없는 고객.
+4. **Missing Next Actions (다음 행동 미설정 Deal)**: Open 상태의 Opportunity 중 `Next Action` 및 `Next Action Date`가 비어있는 건.
+5. **Missing Decision Makers (의사결정자 미지정 Deal)**: Opportunity Relationship Map 상에 Decision Maker 역할이 지정되지 않은 건.
 
-Admin → Sales Execution에서 Pipeline Stage별 Playbook과 Exit Criteria를 설정합니다. Playbook은 Guidance, Checklist/Action/Field 항목과 필수 여부로 구성합니다. Exit Criteria는 Field 입력, Decision Maker, 최근 Activity, 필수 Playbook 완료, Custom Field를 검사하며 `OFF`, `WARNING`, `BLOCK` 중 강제 수준을 선택합니다.
+---
 
-`BLOCK` 조건이 충족되지 않으면 Web, REST API, MCP 어느 채널에서도 Stage를 변경할 수 없습니다. `WARNING`은 준비도 응답과 화면에 표시하지만 저장을 차단하지 않습니다. 설정과 사용자 완료 이력은 Audit에 기록됩니다.
+## 5. Configuration Bundle 관리 (`/admin/system/config-bundle`)
 
-Forecast Override는 담당자의 Forecast와 팀장의 판단을 분리합니다. 변경 사유가 필수이며 최신 Manager 판단은 Forecast Intelligence의 Manager Commit에 반영됩니다.
+Relio는 운영 환경 간(예: Staging -> Production) 시스템 설정을 안전하게 이전할 수 있는 **Configuration Bundle**을 지원합니다.
 
-## Personal Key
+### 5.1 Export 및 Safety Non-Destructive Upsert
+- **Export 범위**: Pipeline Stages, Stage Playbooks, Exit Criteria, Sales Coaching Rules, Approval Policies, OIDC Issuer Configuration (비밀번호 및 Business Data 제외).
+- **Import & Diff Engine**:
+  1. JSON 파일 업로드 시 현재 환경과의 차이점을 `CREATE`(신규 생성), `UPDATE`(변경), `NO_CHANGE`(동일) 상태로 표시합니다.
+  2. 관리자가 Diff를 확인한 뒤 **Apply**를 누르면 비파괴 방식(Non-Destructive Upsert)으로 덮어쓰기 적용되며 기존 업무 데이터는 훼손되지 않습니다.
 
-관리자는 최대 Key 수, 기본/최대 만료일, Rotation Grace, REST/MCP 채널 허용 여부를 구성합니다. 관리자는 Key ID, Scope, 만료, 최근 IP 같은 Metadata만 확인할 수 있고 Secret은 볼 수 없습니다.
+---
 
-같은 화면에서 REST/MCP 활성화와 분당 요청 한도, MCP 허용 Origin 및 Tool Allowlist를 관리합니다. Allowlist가 비어 있으면 사용자에게 권한이 있는 Tool 전체를 제공하고, 값이 있으면 목록과 권한을 모두 만족하는 Tool만 제공합니다.
+## 6. Audit Trail & Support Bundle
 
-일반 Local Login을 비활성화해도 Bootstrap Admin 로그인은 차단되지 않습니다. 이는 SSO 장애 시 복구 경로를 보장하기 위한 의도된 Break Glass 예외입니다.
+### 6.1 Audit Log 검색 (`/admin/audit`)
+- **검색 조건**: Channel(WEB, REST, MCP, ADMIN), Resource(customer, opportunity, oidc, user), Action, Actor Name, Request ID.
+- **Diff Viewer**: 변경 전(`before_data`)과 변경 후(`after_data`) JSON 구조체를 시각적으로 비교할 수 있습니다.
 
-## Relationship Intelligence
+### 6.2 Support Bundle 다운로드 (`/admin/operations/support-bundle`)
+- 기술 지원이나 문제 해결을 위해 시스템 진단 정보를 단일 JSON 파일로 Export합니다.
+- **자동 마스킹**: 비밀번호, SSO Secret, Personal Key Digest, PII 데이터는 자동으로 마스킹 처리됩니다.
 
-`관리자 → Relationship Intelligence`에서 Customer 360 Graph 최대 Node 수(10~200), 기본 Account Plan 연도와 Opportunity Team 허용 Role을 설정합니다. 기본 연도를 `0`으로 두면 서버의 현재 연도를 자동 사용합니다. Role 정책과 Graph 제한은 저장 즉시 적용됩니다.
+---
 
-Opportunity Team 구성은 협업 역할만 추가합니다. 구성원이라는 이유로 해당 Opportunity 또는 고객에 대한 USER/TEAM/DEPARTMENT/DIVISION/COMPANY Data Scope가 확대되지 않습니다.
+## 7. 백업 및 재해 복구 (Backup & Disaster Recovery)
 
-## Backup and Upgrade
+### 7.1 데이터베이스 백업 스크립트 예시
+```bash
+#!/bin/bash
+# Relio PostgreSQL 백업 스크립트
+BACKUP_DIR="/backup/relio"
+DATE=$(date +%Y%m%d_%H%M%S)
+mkdir -p "$BACKUP_DIR"
 
-- PostgreSQL과 `relio-data` Volume을 함께 Backup합니다.
-- 새 Image를 `docker load`하고 기존 Volume과 같은 환경변수로 Container만 교체합니다. `ENCRYPTION_KEY`를 사용하는 배포는 Volume 없이도 같은 값만 주면 교체가 완료됩니다.
-- `/admin/overview`에서 운영 준비도와 우선 조치를 확인하고 `/admin/operations`에서 Application Version, Schema Version, Last Migration을 확인합니다.
-- `/admin/operations`의 Data Key ID가 교체 전후 동일하고 `보호 방식`이 기대한 값인지 확인합니다.
-- Migration 실패 시 Application은 시작하지 않으므로 기존 Image와 DB Backup으로 복구합니다.
+pg_dump -h 10.10.50.5 -U relio -d relio -F c -b -v -f "$BACKUP_DIR/relio_db_$DATE.dump"
+echo "Relio Backup completed: relio_db_$DATE.dump"
+```
 
-### ENCRYPTION_KEY 도입 (권장)
-
-재기동이나 Volume 재생성 때마다 API Key를 다시 발급하지 않으려면 `ENCRYPTION_KEY`를 설정합니다.
-
-1. `openssl rand -hex 32`로 값을 한 번 생성해 비밀번호 관리 도구에 보관합니다.
-2. 기존 `relio-data` Volume을 그대로 연결한 상태에서 `ENCRYPTION_KEY`를 추가해 Container를 재기동합니다.
-3. 로그의 `instance data key re-wrapped with the new wrapping key`와 `/admin/operations`의 `보호 방식 = ENCRYPTION_KEY (Volume 독립)`을 확인합니다.
-
-이관 중 Data Key 자체는 바뀌지 않으므로 기존 Personal Key와 SSO Client Secret은 재발급 없이 계속 동작합니다. 이후에는 Volume을 새로 만들어도 같은 `ENCRYPTION_KEY`만 주면 정상 기동합니다.
-
-### Credential Continuity 복구
-
-로그에 `instance encryption key integrity check failed`가 나타나면 새 Key를 만들거나 DB의 암호문을 임의로 삭제하지 않습니다. 원래 `ENCRYPTION_KEY` 값을 다시 주입하거나, PostgreSQL Backup과 같은 시점의 `relio-data` Volume을 연결한 뒤 다시 시작합니다.
-
-원래 Key와 Volume Backup이 모두 없다면 암호학적으로 기존 Secret 복구는 불가능합니다. 이 경우 이전 버전과 현재 Volume으로 Bootstrap Admin 로그인 후 OIDC Client Secret을 다시 저장하고, 활성 Personal REST/MCP Key를 모두 폐기·재발급한 다음 업그레이드하세요.
+### 7.2 재해 복구 (Recovery) 절차
+1. 동일한 `ENCRYPTION_KEY` 환경변수를 사용하여 신규 Relio 컨테이너를 준비합니다.
+2. PostgreSQL DB를 복원합니다: `pg_restore -h <db-host> -U relio -d relio relio_db_<date>.dump`.
+3. Relio 컨테이너를 기동합니다.

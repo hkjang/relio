@@ -1,80 +1,162 @@
-# Relio Architecture
+# Relio 시스템 아키텍처 명세서 (Architecture Specification)
 
-## Runtime
+- **문서 버전**: v1.6.0  
+- **최종 수정일**: 2026년 8월 11일  
+- **대상**: 시스템 아키텍트, Lead Developer, DevOps/SRE 엔지니어, Security Auditor  
+- **문서 목적**: Relio 사내 에어갭 B2B CRM & 영업관리 플랫폼의 전체 소프트웨어 구조, 도메인 모델, 데이터 흐름, 보안 레이어 및 MCP 아키텍처 명세  
 
-필수 구성요소는 Relio Container, PostgreSQL, `relio-data` Volume입니다. Keycloak은 선택 사항이며 장애가 Relio Readiness를 실패시키지 않습니다.
+---
 
-```text
-Web / REST / MCP
-        ↓
-Authentication + Permission + Data Scope
-        ↓
-Application / CRM Domain Service
-        ↓
-PostgreSQL Repository
+## 1. 개요 및 설계 철학 (Architecture Overview)
+
+Relio는 **"사람을 위한 CRM, 시스템을 위한 API, AI Agent를 위한 MCP"**를 기치로 내건 단일 컨테이너 기반 B2B 영업관리 및 CRM 플랫폼입니다. 외부 인터넷 연결이 완전히 차단된 에어갭(Air-gapped) 사내 망 환경에서 추가적인 런타임/미들웨어(Redis, RabbitMQ 등) 없이 **Go 단일 바이너리와 PostgreSQL**만으로 완전한 엔터프라이즈 운영을 지원합니다.
+
+```
++-----------------------------------------------------------------------------------+
+|                                 Client Applications                               |
+|   +--------------------------+  +-------------------------+  +------------------+   |
+|   |  Browser SPA (/app,/admin)|  |  External REST Clients  |  |  AI Agent (MCP)  |   |
+|   +------------+-------------+  +------------+------------+  +--------+---------+   |
++----------------|-----------------------------|------------------------|-----------+
+                 |                             |                        |
+                 v                             v                        v
++-----------------------------------------------------------------------------------+
+|                                Relio Single Container                             |
+|  +-----------------------------------------------------------------------------+  |
+|  |                             HTTP / Web Framework                            |  |
+|  |   - SPA Static Asset Embed (webui/assets.go)                                |  |
+|  |   - Auth & Session / Bearer Token Inspection                                |  |
+|  |   - MCP Streamable HTTP Adapter (/mcp)                                      |  |
+|  +-------------------------------------+---------------------------------------+  |
+|                                        |                                          |
+|  +-------------------------------------v---------------------------------------+  |
+|  |                       Core Business Domain Services                         |  |
+|  |  +------------------+  +-------------------+  +--------------------------+  |  |
+|  |  |  CRM Service     |  |  Intelligence     |  |  Relationship Service    |  |  |
+|  |  |  (360, Pipeline) |  |  (Health,Coaching)|  |  (Map, Account Plan)     |  |  |
+|  +--+------------------+--+-------------------+--+--------------------------+--+  |
+|  |  |  Approval Engine |  |  Admin Diagnostics|  |  API Key & Security      |  |  |
+|  |  |  (Workflow, Policy) | (Center, Config)  |  |  (HMAC, Envelope Crypto) |  |  |
+|  |  +------------------+  +-------------------+  +--------------------------+  |  |
+|  +-------------------------------------+---------------------------------------+  |
+|                                        |                                          |
+|  +-------------------------------------v---------------------------------------+  |
+|  |                     Data Access & Persistence Layer                         |  |
+|  |   - Master Key / Envelope Key Encryption Manager                            |  |
+|  |   - Database Migrations Engine (embed SQL)                                  |  |
+|  |   - Audit Log & Background Job Runner                                       |  |
+|  +-------------------------------------+---------------------------------------+  |
++----------------------------------------|------------------------------------------+
+                                         v
++-----------------------------------------------------------------------------------+
+|                               PostgreSQL Database                                 |
+|   - Multi-tenant Domain Tables, Audit Logs, Security Tokens, Master Key Digest    |
++-----------------------------------------------------------------------------------+
 ```
 
-React 빌드 결과는 `internal/webui/dist`에서 Go Binary에 embed됩니다. Runtime Image에는 Node.js나 Package Manager가 없습니다. Go Binary는 DB Migration, HTTP API, MCP Adapter, Scheduler, 정적 자산과 Healthcheck를 함께 제공합니다.
+### 1.1 핵심 아키텍처 원칙
+1. **Single Binary & Zero External Runtime**:
+   Go 1.24+ 내장 HTTP 서버와 React 19 기반 빌드 정적 자산을 `embed.FS`로 단일 바이너리에 패키징합니다. PostgreSQL 14+ 단일 DB만을 요구합니다.
+2. **Minimal & Immutable Environment Configuration**:
+   필수 3개(`POSTGRES_DSN`, `BOOTSTRAP_ADMIN`, `BOOTSTRAP_ADMIN_PASSWORD`)와 선택 1개(`ENCRYPTION_KEY`) 환경변수만을 허용합니다. 도메인 및 런타임 설정은 DB `system_settings` 테이블에서 관리되며 어플리케이션 재시작 없이 즉시 반영됩니다.
+3. **Envelope Encryption & Key Persistence**:
+   DB 내 저장되는 비밀값(SSO Secret 등)은 AES-256-GCM Envelope Encryption으로 암호화됩니다. `ENCRYPTION_KEY`를 지정할 경우 Volume 재발생 시에도 Key continuous를 완벽히 유지합니다.
+4. **Air-Gap Strict Compliance**:
+   런타임 CDN, 외부 Google Font 다운로드, Telemetry, License Validation 등 외부 통신 시도를 0%로 통제합니다.
 
-## Startup
+---
 
-```text
-필수 3개 + 선택 ENCRYPTION_KEY 환경변수 검증
-→ PostgreSQL 연결 재시도
-→ Advisory Migration Lock
-→ Transaction Migration
-→ Instance Master Key Load/Create
-→ Bootstrap Admin 존재 여부 확인
-→ Scheduler / HTTP Start
-```
+## 2. 계층별 아키텍처 (Layered Architecture)
 
-Migration이 실패하면 HTTP Server를 시작하지 않습니다. `schema_migrations`와 PostgreSQL Advisory Lock으로 다중 Instance 시작을 보호합니다.
+### 2.1 Web UI Layer (`web/src` & `internal/webui`)
+- **React SPA Engine**: React 19, TypeScript, Vite로 구성된 프론트엔드로, `/app`(CRM 메인), `/me`(개인화 설정), `/admin`(관리자 콘솔)의 독립적인 라우팅 영역으로 나뉩니다.
+- **Embedded Asset Serving**: `internal/webui/assets.go`에서 `embed.FS`를 통해 빌드된 정적 HTML/JS/CSS 자산을 서빙하며 gzip 압축 및 캐시 제어를 지원합니다.
 
-## Data Scope
+### 2.2 Server & Route Handling (`internal/server`)
+- **HTTP Engine**: Go `net/http` 기반 서버로 `httpx` 패키지를 사용해 컨텍스트 기반 Logging, Request ID 추적, CORS, IP 파싱을 수행합니다.
+- **REST Endpoints (`/api/v1/*`)**:
+  - `/api/v1/auth/*`: Session 로그인/로그아웃, Keycloak OIDC Callback
+  - `/api/v1/crm/*`: Customer 360, Opportunity, Stage Playbook, Pipeline, Dynamic Currency, Revenue Schedule
+  - `/api/v1/intelligence/*`: Deal Health Score, Risk Explainer, Exit Criteria 준비도 검사, Manager Coaching
+  - `/api/v1/relationship/*`: Relationship Map, Strategic Account Plan, Opportunity Team Members
+  - `/api/v1/admin/*`: Operations Command Center, Data Quality Center, Configuration Bundle Diff, Support Bundle Export
+  - `/api/v1/me/*`: Personal API Key 생성/회전, Personal Dashboard, Audit Log
 
-데이터 Entity의 `owner_id`, `organization_id`를 쿼리 조건에서 검사합니다.
+### 2.3 Business Domain Layer (`internal/crm`, `internal/intelligence`, `internal/relationship`, `internal/approval`, `internal/admin`)
+- **CRM Service (`crm.Service`)**:
+  - Customer 360 Aggregate조회 및 CRUD.
+  - Multi-Currency 지원: Original Currency + Fixed Exchange Rate (생성시점 고정) + KRW Base Amount 변환 집계.
+  - Revenue Schedules: 계약 승인/활성화 시 일시, 월, 분기, 연 단위 일정 자동 분할 생성 및 갱신 파이프라인 관리.
+- **Intelligence Service (`intelligence.Service`)**:
+  - Deal Health Score (0~100) 산출 engine (활동 빈도, Stage 체류일, Exit Criteria 이행률 종합).
+  - Risk Explainer: 위험 원인 분석 및 추천 액션 제공.
+  - Daily Forecast Snapshot & Waterfall: snapshot 간 변화량(신규, 금액 변경, Stage 이동, Slippage, Closed Lost) 비교 분석.
+  - Manager Override: Forecast 판단 근거와 금액을 영업 담당자의 추정치와 분리하여 기록.
+- **Relationship Service (`relationship.Service`)**:
+  - Relationship Map: Decision Maker, Champion, Neutral, Block, Supporter 간 영향력 그래프 및 담당자 매핑.
+  - Strategic Account Plan: 연간 목표, 전략 과제, 경쟁사 위협, White Space Cross-sell 기회 Matrix.
+  - Opportunity Team: Owner 외 협업 역할(Presales, Consultant, Manager, Legal) 기록 (Data Scope 비확대 원칙 준수).
+- **Approval Engine (`approval.Service`)**:
+  - Entity별(Opportunity, Quotation, Contract, Customer) 조건부 팀장 승인 workflow.
+  - Active Policy가 존재할 때만 관련 UI/API 승인 절차 활성화.
+- **Admin & Operations Service (`admin.SettingsManager`)**:
+  - System Settings (`system_settings`) 관리.
+  - Configuration Bundle: Export, Diff Engine (CREATE/UPDATE/NO_CHANGE), 비파괴 Upsert.
+  - Data Quality Center: 완성도 점수 계산 및 5대 문제 이슈(중복, 미접촉, Next Action 미설정 등) 표본 검출.
 
-| Scope | 조건 |
-|---|---|
-| USER | Owner가 본인 |
-| TEAM | 본인 또는 `manager_id`가 본인인 사용자 |
-| DEPARTMENT | 사용자의 Department 조직과 모든 하위 조직 |
-| DIVISION | 사용자의 Division 조직과 모든 하위 조직 |
-| COMPANY | 전사 |
+### 2.4 Model Context Protocol Layer (`internal/mcp`)
+- **Streamable HTTP Adapter (`/mcp`)**:
+  - MCP JSON-RPC 2.0 및 Protocol Version (`2025-11-25`, `2025-06-18`, `2025-03-26`) 규격 지원.
+  - Header 검증: `Accept: application/json, text/event-stream` 및 `MCP-Protocol-Version`.
+- **Permission & Risk Annotation Engine**:
+  - 사용자 권한 ∩ Data Scope ∩ Personal Key Scope 3중 교집합 적용.
+  - Tool Annotations: `readOnlyHint`, `destructiveHint`, `idempotentHint` 및 Risk Level (`READ`, `ANALYZE`, `WRITE`, `APPROVAL`).
+  - Total 13종 전용 MCP Tool 제공 (Sales Intelligence + Relationship Intelligence).
 
-필터는 결과 반환 후가 아니라 PostgreSQL Query에 적용합니다. Customer 360의 하위 데이터와 Dashboard 집계도 같은 범위를 사용합니다.
+### 2.5 Security & Persistence Layer (`internal/platform`)
+- **Secrets Management (`platform/secrets`)**:
+  - Envelope Encryption: DB Data Key 보호를 위한 Master Key 관리.
+  - `ENCRYPTION_KEY` 환경변수가 주어지면 Key derivation 후 Volume 독립적 복구 보장.
+  - Master Key Integrity ID (단방향 12자리 지문) DB 검증으로 잘못된 Volume/Key 연결 시 Fail-Closed 동작.
+- **Personal Key Digest (`apikey.Service`)**:
+  - Raw Personal Key 미저장 (PostgreSQL에는 `HMAC-SHA256` Digest만 보관).
+  - Key Rotation 시 7일 Grace Period dual-active 지원.
+- **Database Engine (`platform/database`)**:
+  - `pgx/v5` Connection Pool.
+  - Go `embed` SQL 쿼리 기반 Schema Migration engine (`migrations/*.sql`).
 
-## Configuration
+---
 
-공통 설정은 Namespace/Key/Type/Version을 가진 `system_settings`에 저장합니다. OIDC, Role/Group Mapping, Pipeline, Approval, Custom Field는 별도 Domain 테이블을 사용합니다. Secret 설정은 Instance Data Key로 AES-256-GCM 암호화합니다.
+## 3. 데이터베이스 스키마 및 도메인 모델 (Database Architecture)
 
-Instance Data Key는 Envelope 구조입니다. 실제 암호화·HMAC에 쓰이는 Data Key는 봉인된 형태로 `instance_data_key`에 저장하고, 그 Data Key를 여는 Wrapping Key만 `ENCRYPTION_KEY` 환경변수 또는 `/var/lib/relio/secrets/master.key`에서 읽습니다. Wrapping Key를 바꿔도 Data Key는 그대로이므로 이미 암호화된 Secret과 발급된 Personal Key Digest가 계속 유효합니다.
+Relio PostgreSQL 스키마는 크게 6개 핵심 파트로 구분됩니다.
 
-`instance_key_registry`와 `instance_data_key`는 Key 원문이 아닌 Domain-separated SHA-256 지문만 보관합니다. HTTP Server를 시작하기 전에 봉인 해제 가능성, DB Registry 일치와 기존 AES-GCM 암호문의 복호화 가능성을 검증합니다. Key 누락이나 불일치는 신규 Key 생성으로 진행하지 않고 Fail-Closed 처리하므로 OIDC와 Personal Key가 조용히 무효화되는 상태를 허용하지 않습니다.
+| 영역 | 주요 테이블 | 역할 |
+|---|---|---|
+| **Core Admin & Security** | `users`, `organizations`, `system_settings`, `api_keys`, `master_keys`, `audit_logs` | 사용자, 조직, RBAC, HMAC Key Digest, Master Key 무결성, Audit |
+| **CRM Core** | `customers`, `contacts`, `opportunities`, `stage_history`, `activities`, `contracts`, `revenue_schedules` | Customer 360, Stage 전환, 활동, 계약, 매출 인식 스케줄 |
+| **Sales Intelligence** | `stage_playbooks`, `deal_health_logs`, `forecast_snapshots`, `manager_overrides` | Playbook, Exit Criteria, Health 로그, Forecast Waterfall, Override |
+| **Relationship** | `contact_relationships`, `account_plans`, `opportunity_team_members` | 관계 망 Graph, Strategic Plan, White Space, 협업 팀원 |
+| **Approval System** | `approval_policies`, `approval_requests`, `approval_logs` | 팀장 승인 정책, 승인 요청 및 승인/반려 이력 |
+| **MCP Operations** | `mcp_request_logs` | MCP 도구 호출 이력, 실행 시간, 쿼리, IP 및 결과 감사 |
 
-## Approval
+---
 
-`approval_policies`에 활성 정책이 없으면 API의 Workflow Status가 false이고 Web/MCP가 관련 기능을 노출하지 않습니다. 정책은 Entity Snapshot에 대해 평가하고 Request/Step/History를 별도 테이블에 Append합니다. 현재 UI는 팀장 1단계이며 데이터 모델은 다단계를 수용합니다.
+## 4. 백그라운드 잡 런너 (Background Job Architecture)
 
-## Sales Intelligence
+`internal/job/runner.go`는 외부 Scheduler 없이 Go Goroutine 기반의 안전한 락(Lock) 매커니즘을 사용해 주기적 작업을 처리합니다.
 
-Web, REST와 MCP는 동일한 `internal/intelligence` Application Service를 사용합니다. Deal Health Engine은 PostgreSQL의 활성 Rule을 평가해 점수·Evidence·Recommended Action을 만들며 계산 결과를 제한적으로 Snapshot합니다. Stage 변경은 CRM Service가 Sales Execution Guard를 호출하므로 Adapter를 우회해도 `BLOCK` Exit Criteria를 건너뛸 수 없습니다.
+1. **Forecast Daily Snapshot Task**:
+   - 매일 자정 전체 Open Opportunity의 Stage, 금액, Close Date 상태를 캡처하여 `forecast_snapshots`에 저장.
+2. **Personal Key Grace Period Expire Task**:
+   - Rotation 후 7일 유예기간이 만료된 구버전 API Key Digest를 자동으로 무효화.
+3. **Data Quality Score Recalculation Task**:
+   - 6시간 간격으로 데이터 완성도 및 5대 이상 징후 표본 데이터 갱신.
 
-Scheduler는 PostgreSQL에 Owner별 일별 Forecast Snapshot과 Opportunity 항목을 저장합니다. Forecast Waterfall은 두 Snapshot을 비교해 New Pipeline, Won/Lost, Amount Change, Slippage를 설명합니다. Manager Override는 담당자 Forecast를 덮어쓰지 않고 별도 이력과 사유로 유지합니다.
+---
 
-## Relationship Intelligence
+## 5. 에어갭 및 컴플라이언스 보장 (Air-Gap Verification Architecture)
 
-`internal/relationship` Application Service는 Web, REST, MCP가 공유하는 고객 관계·Account Plan·Opportunity Team 업무 규칙을 제공합니다. `contact_relationships`는 동일 고객의 Contact 사이 방향성 관계와 강도를 저장하고, Customer 360 Relationship Graph는 Contact의 Decision Maker/Champion/Influence/Sentiment 지표와 결합해 설명 가능한 Relationship Score를 계산합니다.
-
-`account_plans`는 고객·연도별 전략, 목표, 경쟁사, 위험, 목표/잠재 매출과 White Space를 보관합니다. `NOT_OFFERED` 또는 `DISCOVERY` White Space만 Cross-sell 후보로 제공하므로 Web과 AI Agent가 동일한 기준을 사용합니다. `opportunity_members`의 Presales/Consultant/Manager/Legal 역할은 협업 Metadata이며 Data Scope 판정에는 포함하지 않습니다. 모든 조회는 먼저 CRM Domain의 Customer/Opportunity 접근 검사를 통과합니다.
-
-## PostgreSQL-only Operations
-
-- Job/Scheduler: `jobs`, `job_executions`
-- Migration/Leader Lock: Advisory Lock
-- Session: `sessions`
-- Idempotency Result: `idempotency_keys`
-- Notification: `notifications`
-- Audit: Append-only `audit_logs`
-
-Redis, Elasticsearch, 외부 Queue는 기본 배포에 포함하지 않습니다.
+Relio는 폐쇄망 배포를 보장하기 위해 다음과 같은 아키텍처적 검증 스크립트를 포함하고 있습니다:
+- `scripts/check-static-assets.sh`: `web/src` 및 `docs`에 외부 CDN URL(`http://`, `https://`) 포함 여부 정적 검사.
+- `scripts/run-offline-container-test.sh`: Docker internal network (`--network none` 수준의 인터넷 격리 network) 환경에서 DB 조인, 로그인, API, MCP, Upgrade 수행 여부 자동 검증.

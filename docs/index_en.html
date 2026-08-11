@@ -277,16 +277,19 @@
                     <div class="deploy-card glass-panel">
                         <h4>🐳 Single Docker Execution</h4>
                         <p>Import the single .tar.gz package from GitHub Release into your offline network.</p>
-<pre><code>gunzip -c relio-v1.0.0.tar.gz | docker load
-
-# Run with 3 environment variables
-docker run -d --name relio \
+<pre><code>gunzip -c relio-v1.6.0.tar.gz | docker load
+docker image inspect relio:v1.6.0</code></pre>
+            </div>
+            <div class="code-block">
+                <pre><code>docker run -d \
+  --name relio \
   -p 8080:8080 \
-  -e POSTGRES_DSN="postgres://relio:pass@postgres:5432/relio" \
+  -e POSTGRES_DSN="postgres://relio:Secr3tPass@10.10.50.5:5432/relio" \
   -e BOOTSTRAP_ADMIN="admin" \
-  -e BOOTSTRAP_ADMIN_PASSWORD="StrongAdminPassword123!" \
+  -e BOOTSTRAP_ADMIN_PASSWORD="ChangeMe-To-A-Strong-Password" \
+  -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -v relio-data:/var/lib/relio \
-  relio:v1.0.0</code></pre>
+  relio:v1.6.0</code></pre>
                     </div>
                     <div class="deploy-card glass-panel">
                         <h4>⚙️ 3 Required Environment Variables</h4>

@@ -6,10 +6,10 @@
     <title>Relio 엔터프라이즈 관리자 가이드 (Admin Guide)</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary: #3b82f6;
+            --primary: #2563eb;
             --primary-dark: #1d4ed8;
             --text-dark: #0f172a;
             --text-muted: #475569;
@@ -17,22 +17,168 @@
             --border-color: #e2e8f0;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Inter', -apple-system, sans-serif; color: var(--text-dark); background: var(--bg-light); line-height: 1.65; padding: 48px 24px; }
-        .doc-card { max-width: 1040px; margin: 0 auto; background: #ffffff; border: 1px solid var(--border-color); border-radius: 20px; padding: 56px; box-shadow: 0 12px 30px rgba(0,0,0,0.06); }
-        .header-meta { border-bottom: 3px solid var(--primary); padding-bottom: 28px; margin-bottom: 36px; }
-        .header-meta h1 { font-family: 'Plus Jakarta Sans', sans-serif; font-size: 2.2rem; color: #0f172a; margin-bottom: 16px; letter-spacing: -0.02em; }
-        .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; font-size: 0.9rem; color: var(--text-muted); }
-        .meta-item { background: #f1f5f9; padding: 8px 14px; border-radius: 8px; border: 1px solid #e2e8f0; }
-        h2 { font-family: 'Plus Jakarta Sans', sans-serif; font-size: 1.45rem; color: var(--primary-dark); margin: 40px 0 20px; border-bottom: 2px solid #f1f5f9; padding-bottom: 10px; }
-        p { margin-bottom: 18px; font-size: 1rem; color: #334155; }
-        ul, ol { margin-bottom: 20px; padding-left: 24px; }
-        li { margin-bottom: 8px; }
-        pre { background: #0f172a; color: #f8fafc; padding: 24px; border-radius: 12px; font-family: 'JetBrains Mono', monospace; font-size: 0.88rem; overflow-x: auto; margin: 20px 0; }
-        code { font-family: 'JetBrains Mono', monospace; background: #e2e8f0; color: #0f172a; padding: 2px 6px; border-radius: 4px; font-size: 0.88rem; }
-        pre code { background: none; color: inherit; padding: 0; }
-        .print-btn { display: inline-block; background: var(--primary); color: #ffffff; padding: 12px 24px; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 0.92rem; float: right; }
-        .print-btn:hover { background: var(--primary-dark); }
-        @media print { .print-btn { display: none; } body { background: #ffffff; padding: 0; } .doc-card { border: none; box-shadow: none; padding: 0; } }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            color: var(--text-dark);
+            background: var(--bg-light);
+            line-height: 1.7;
+            padding: 40px 20px;
+        }
+        .doc-card {
+            max-width: 1040px;
+            margin: 0 auto;
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 56px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+        }
+        .header-meta {
+            border-bottom: 3px solid var(--primary);
+            padding-bottom: 24px;
+            margin-bottom: 36px;
+        }
+        .header-meta h1 {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-size: 2.1rem;
+            color: #0f172a;
+            margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+        .meta-item {
+            background: #f1f5f9;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+        h1 { display: none; } /* Main H1 handled in header-meta */
+        h2 {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-size: 1.4rem;
+            color: var(--primary-dark);
+            margin: 40px 0 16px;
+            border-bottom: 2px solid #f1f5f9;
+            padding-bottom: 8px;
+        }
+        h3 {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-size: 1.15rem;
+            color: #1e293b;
+            margin: 24px 0 12px;
+        }
+        h4 {
+            font-size: 1.02rem;
+            color: #334155;
+            margin: 18px 0 8px;
+        }
+        p {
+            margin-bottom: 16px;
+            font-size: 0.98rem;
+            color: #334155;
+        }
+        ul, ol {
+            margin-bottom: 20px;
+            padding-left: 24px;
+        }
+        li {
+            margin-bottom: 8px;
+            font-size: 0.96rem;
+            color: #334155;
+        }
+        blockquote {
+            background: #eff6ff;
+            border-left: 4px solid var(--primary);
+            padding: 14px 18px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+            font-size: 0.95rem;
+            color: #1e3a8a;
+        }
+        pre {
+            background: #0f172a;
+            color: #f8fafc;
+            padding: 20px;
+            border-radius: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.88rem;
+            overflow-x: auto;
+            margin: 20px 0;
+            line-height: 1.5;
+        }
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            background: #e2e8f0;
+            color: #0f172a;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.88rem;
+        }
+        pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+        }
+        .table-container {
+            overflow-x: auto;
+            margin: 24px 0;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.92rem;
+            text-align: left;
+        }
+        th {
+            background: #f1f5f9;
+            color: #0f172a;
+            font-weight: 600;
+            padding: 12px 16px;
+            border-bottom: 2px solid var(--border-color);
+        }
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            color: #334155;
+        }
+        tr:nth-child(even) {
+            background: #f8fafc;
+        }
+        hr {
+            border: 0;
+            height: 1px;
+            background: var(--border-color);
+            margin: 32px 0;
+        }
+        .print-btn {
+            display: inline-block;
+            background: var(--primary);
+            color: #ffffff;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+            float: right;
+            transition: background 0.2s ease;
+        }
+        .print-btn:hover {
+            background: var(--primary-dark);
+        }
+        @media print {
+            .print-btn { display: none; }
+            body { background: #ffffff; padding: 0; }
+            .doc-card { border: none; box-shadow: none; padding: 0; max-width: 100%; }
+            pre { white-space: pre-wrap; word-break: break-all; }
+        }
     </style>
 </head>
 <body>
@@ -41,23 +187,120 @@
         <div class="header-meta">
             <h1>Relio 엔터프라이즈 관리자 가이드 (Admin Guide)</h1>
             <div class="meta-grid">
-                <div class="meta-item"><strong>문서 버전:</strong> v1.0.0-ENTERPRISE</div>
-                <div class="meta-item"><strong>작성일자:</strong> 2026년 8월 9일</div>
-                <div class="meta-item"><strong>대상:</strong> 시스템 관리자, Security/DevOps</div>
-                <div class="meta-item"><strong>분류:</strong> 공식 관리자 & 운영 매뉴얼</div>
+                <div class="meta-item"><strong>문서 버전:</strong> v1.6.0-ENTERPRISE</div>
+                <div class="meta-item"><strong>작성일자:</strong> 2026년 8월 11일</div>
+                <div class="meta-item"><strong>대상 사용자:</strong> 시스템 관리자, Security/DevOps</div>
+                <div class="meta-item"><strong>구분:</strong> 공식 엔터프라이즈 문서</div>
             </div>
         </div>
+        <h1>Relio 엔터프라이즈 관리자 운영 가이드 (Enterprise Administrator Guide)</h1>
 
-        <h2>1. 시스템 부트스트랩</h2>
-        <pre><code>POSTGRES_DSN=postgres://relio:Secr3tPass@10.10.50.5:5432/relio?sslmode=disable
+<ul>
+<li><strong>문서 버전</strong>: v1.6.0-ENTERPRISE</li>
+<li><strong>작성일자</strong>: 2026년 8월 11일</li>
+<li><strong>대상</strong>: 시스템 관리자, Security & Infrastructure 엔지니어, CISO, DBA</li>
+<li><strong>문서 개요</strong>: Relio 단일 컨테이너 부트스트랩, Keycloak OIDC SSO, Break Glass 계정, Master Key 봉인 영속성, HMAC Key 회전, Command Center 및 감사 로그 운영</li>
+</ul>
+
+<hr>
+
+<h2>1. 시스템 부트스트랩 및 환경변수 명세 (Bootstrap Specification)</h2>
+
+<p>Relio는 사내 폐쇄망(Air-gapped) 환경에서 <strong>3개의 필수 환경변수</strong>만으로 시스템 부트스트랩을 완료합니다. 자격증명 영속성을 위해 <strong>선택 환경변수 1개</strong>를 추가할 수 있습니다.</p>
+
+<p><pre><code class="bash"># 필수 환경변수 3개
+POSTGRES_DSN=postgres://relio:Secr3tPass123@10.10.50.5:5432/relio?sslmode=disable
 BOOTSTRAP_ADMIN=admin
-BOOTSTRAP_ADMIN_PASSWORD=SuperSecretAdminPassword123!</code></pre>
+BOOTSTRAP_ADMIN_PASSWORD=SuperAdminPassword2026!
 
-        <h2>2. Keycloak OIDC SSO 및 Break Glass 계정</h2>
-        <p>Break Glass 계정을 통한 비상 접근권 확보 및 Keycloak OIDC PKCE 인증을 연동합니다.</p>
+# 선택 환경변수 1개 (자격증명 영속성 보장)
+# openssl rand -hex 32 로 최초 1회 생성 후 비밀번호 관리 도구에 보존
+ENCRYPTION_KEY=3f9c1d8e2a4b7f90e...64자리16진수
+</code></pre></p>
 
-        <h2>3. HMAC Digest 보안 & 감사 로그</h2>
-        <p>Personal Key HMAC Digest 처리, 7일 Grace Period 회전 및 무결성 감사 로그(Audit Log)를 보관합니다.</p>
+<blockquote><strong>ENCRYPTION_KEY 권장 이유</strong>:</blockquote>
+<blockquote><code>ENCRYPTION_KEY</code>를 지정하지 않으면 SSO Client Secret 및 API Key를 암호화하는 Master Key가 <code>/var/lib/relio/secrets/master.key</code> 파일로만 존재합니다. 컨테이너 Volume이 재생성되면 기존 암호화 데이터를 복구할 수 없습니다. <code>ENCRYPTION_KEY</code>를 주입하면 Volume을 완전히 새로 생성하거나 컨테이너를 이관해도 동일 키로 자격증명이 완전하게 복원됩니다.</blockquote>
+
+<blockquote><strong>Break Glass 계정 원칙</strong>:</blockquote>
+<blockquote><code>BOOTSTRAP_ADMIN</code> 계정은 시스템 최초 기동 시 DB에 계정이 없을 때만 자동 생성되는 <strong>비상 수퍼관리자 계정</strong>입니다. 1회 생성 후 환경변수를 다르게 지정하더라도 기존 비밀번호나 계정을 덮어쓰지 않으므로 안심하고 운영할 수 있습니다.</blockquote>
+
+<hr>
+
+<h2>2. 볼륨 마운트 및 Master Key 무결성 검증 (<code>/var/lib/relio</code>)</h2>
+
+<h3>2.1 컨테이너 실행 명령</h3>
+<p><pre><code class="bash">docker run -d \
+  --name relio \
+  -p 8080:8080 \
+  -e POSTGRES_DSN="postgres://relio:password@postgres:5432/relio" \
+  -e BOOTSTRAP_ADMIN="admin" \
+  -e BOOTSTRAP_ADMIN_PASSWORD="StrongAdminPassword123!" \
+  -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
+  -v relio-data:/var/lib/relio \
+  relio:v1.6.0
+</code></pre></p>
+
+<h3>2.2 Master Key와 DB 연속성 검증 (Fail-Closed)</h3>
+<p>Relio는 Master Key 원문 대신 단방향 12자리 식별자(Key ID)를 계산하여 PostgreSQL의 <code>master_keys</code> 테이블에 등록합니다. 만약 DB에 활성 자격증명이 존재하는데 올바르지 않은 <code>ENCRYPTION_KEY</code> 또는 비어있는 Volume이 연결되면 어플리케이션은 새 키를 생성하지 않고 <code>instance encryption key integrity check failed</code> 오류와 함께 기동을 멈추어 데이터 손상을 방지합니다.</p>
+
+<hr>
+
+<h2>3. Operations Command Center & 진단 7종 (<code>/admin/operations</code>)</h2>
+
+<p>운영 관리자는 Operations Command Center에서 7대 핵심 요소에 대해 자동 상태 진단을 수행합니다.</p>
+
+<p>1. <strong>PostgreSQL Connection</strong>: DB 연결 응답 속도 및 커넥션 풀 유효성.</p>
+<p>2. <strong>Database Schema Migration</strong>: embed SQL 마이그레이션 적용 및 버전 무결성.</p>
+<p>3. <strong>Master Key Protection</strong>: Envelope Key 봉인 상태 (<code>ENCRYPTION_KEY</code> 활성화 여부).</p>
+<p>4. <strong>Storage Access</strong>: <code>/var/lib/relio</code> 디렉토리 쓰기 권한 검사.</p>
+<p>5. <strong>OIDC Provider Health</strong>: Keycloak Issuer Discovery 및 JWKS 엔드포인트 응답성.</p>
+<p>6. <strong>REST API & MCP Readiness</strong>: <code>/api/v1</code> 및 <code>/mcp</code> 어댑터 가용성.</p>
+<p>7. <strong>Background Job Loop</strong>: 일별 Forecast Snapshot 및 유예기간 만료 런너 동작 여부.</p>
+
+<hr>
+
+<h2>4. Keycloak OIDC SSO 및 3중 권한 교집합 (RBAC & Data Scope)</h2>
+
+<h3>4.1 Keycloak OIDC 설정 (<code>/admin/security/oidc</code>)</h3>
+<ul>
+<li><strong>Issuer URL</strong>: <code>https://sso.company.internal/realms/enterprise</code></li>
+<li><strong>Client ID</strong>: <code>relio-crm</code></li>
+<li><strong>Client Secret</strong>: <code>••••••••••••••••</code></li>
+<li><strong>Redirect URI</strong>: <code>https://relio.company.internal/api/v1/auth/oidc/callback</code></li>
+</ul>
+
+<h3>4.2 3중 권한 교집합 적용 (Triple Intersection Authorization)</h3>
+<p>Relio는 사용자 요청 시 <strong>Function Permission</strong>(기능 권한) ∩ <strong>Data Scope</strong>(SELF/TEAM/ALL) ∩ <strong>Personal Key Scope</strong>의 교집합만을 엄격하게 허용합니다.</p>
+
+<hr>
+
+<h2>5. Personal API Key HMAC Digest & 7일 Grace Period 회전</h2>
+
+<ul>
+<li><strong>HMAC Digest 저장</strong>: Raw Key는 DB에 보관되지 않으며 <code>HMAC-SHA256</code> Digest만을 저장하여 DB 유출 시에도 안전합니다.</li>
+<li><strong>7일 Grace Period 무중단 회전</strong>: 키 회전(Rotate) 수행 시 기존 키는 7일간 Dual-Active 상태로 유지되어 서비스 중단 없이 시스템 키를 교체할 수 있습니다.</li>
+</ul>
+
+<hr>
+
+<h2>6. Configuration Bundle Diff & Non-Destructive Upsert (<code>/admin/system/config-bundle</code>)</h2>
+
+<ul>
+<li><strong>Configuration Export</strong>: Pipeline, Playbook, Exit Criteria, Coaching Rule, 승인 정책 등 시스템 설정을 JSON으로 묶어 Export합니다.</li>
+<li><strong>Diff & Non-Destructive Upsert</strong>: Import 시 현재 환경과의 차이점을 <code>CREATE</code> / <code>UPDATE</code> / <code>NO_CHANGE</code>로 진단하고 확인 후 비파괴 Upsert로 안전하게 반영합니다.</li>
+</ul>
+
+<hr>
+
+<h2>7. Audit Trail 및 DB 백업 절차</h2>
+
+<ul>
+<li><strong>Audit Log (<code>/admin/audit</code>)</strong>: OIDC 설정 변경, 파이프라인 수정, 승인 처리 등 모든 관리자 액션을 사용자 ID, IP, 시각, 변경 전후 DTO Snapshot과 함께 보존합니다.</li>
+<li><strong>DB 백업 명령</strong>:</li>
+</ul>
+<p><pre><code class="bash">pg_dump -U relio -h 10.10.50.5 relio | gzip &gt; /backup/relio_db_$(date +%Y%m%d).sql.gz
+</code></pre></p>
+
     </div>
 </body>
 </html>
