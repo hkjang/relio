@@ -25,11 +25,50 @@ function Frame({children,title,subtitle,actions,...props}:Props&{children:React.
 const baseOpportunityAmount=(o:Opportunity)=>o.baseExpectedAmount??o.expectedAmount
 const baseOpportunityWeighted=(o:Opportunity)=>o.baseWeightedAmount??o.weightedAmount
 
-function Dashboard(props:Props){const [metrics,setMetrics]=useState<Record<string,number>|null>(null);const [opps,setOpps]=useState<Opportunity[]>([]);const [activities,setActivities]=useState<Activity[]>([]);useEffect(()=>{Promise.all([api<Record<string,number>>('/api/v1/dashboard'),api<{items:Opportunity[]}>('/api/v1/opportunities?limit=6'),api<{items:Activity[]}>('/api/v1/activities?limit=6')]).then(([m,o,a])=>{setMetrics(m);setOpps(o.items);setActivities(a.items)}).catch(e=>props.notify(errorMessage(e),true))},[]);return <Frame {...props} title={`${props.user.displayName}님, 좋은 하루예요`} subtitle="영업 현황과 오늘 집중할 일을 한눈에 확인하세요." actions={<><span className="date-chip">{new Intl.DateTimeFormat('ko-KR',{year:'numeric',month:'long',day:'numeric',weekday:'short'}).format(new Date())}</span></>}>
+function Dashboard(props:Props){const [metrics,setMetrics]=useState<Record<string,number>|null>(null);const [opps,setOpps]=useState<Opportunity[]>([]);const [activities,setActivities]=useState<Activity[]>([]);const [today,setToday]=useState<TodayFeed|null>(null);useEffect(()=>{Promise.all([api<Record<string,number>>('/api/v1/dashboard'),api<{items:Opportunity[]}>('/api/v1/opportunities?limit=6'),api<{items:Activity[]}>('/api/v1/activities?limit=6')]).then(([m,o,a])=>{setMetrics(m);setOpps(o.items);setActivities(a.items)}).catch(e=>props.notify(errorMessage(e),true));api<TodayFeed>('/api/v1/today').then(setToday).catch(()=>{})},[]);return <Frame {...props} title={`${props.user.displayName}님, 좋은 하루예요`} subtitle="영업 현황과 오늘 집중할 일을 한눈에 확인하세요." actions={<><span className="date-chip">{new Intl.DateTimeFormat('ko-KR',{year:'numeric',month:'long',day:'numeric',weekday:'short'}).format(new Date())}</span></>}>
     {!metrics?<Spinner/>:<><div className="kpi-grid"><KPI label="전체 고객" value={number(metrics.customerCount)} foot="내 데이터 범위" tone="blue" icon="◫"/><KPI label="진행 영업기회" value={number(metrics.openOpportunities)} foot={`${metrics.staleOpportunities||0}건 점검 필요`} tone="violet" icon="◆"/><KPI label="파이프라인 금액" value={money(metrics.pipelineAmount)} foot={`가중 ${money(metrics.weightedAmount)}`} tone="teal" icon="↗"/><KPI label="이번 달 수주" value={money(metrics.wonThisMonth)} foot={`${metrics.dueActions||0}개 후속 작업`} tone="amber" icon="✓"/></div>
+    <TodayQueue feed={today}/>
     <div className="dashboard-grid"><section className="panel span-2"><div className="panel-head"><div><h2>진행 중인 영업기회</h2><p>최근 수정 순 · 원화 기준</p></div><Link to="/app/pipeline">파이프라인 전체보기 →</Link></div>{opps.length?<div className="deal-list">{opps.map(o=><button key={o.id} className="deal-row" onClick={()=>navigate('/app/opportunities')}><span className="customer-logo">{initials(o.customerName, 2)}</span><span className="deal-name"><b>{o.name}</b><small>{o.customerName} · {o.ownerName}</small></span><span><Status value={o.forecastCategory}/></span><span className="deal-amount"><b>{currencyMoney(o.expectedAmount,o.currencyCode||'KRW')}</b><small>기준 {money(baseOpportunityAmount(o))}</small></span><span className="stage-pill" style={{'--stage':o.stageColor} as React.CSSProperties}>{o.stageName}</span></button>)}</div>:<Empty title="진행 영업건이 없습니다" description="첫 Opportunity를 생성해 Pipeline을 시작하세요." action={<button className="btn btn-primary" onClick={()=>navigate('/app/opportunities?new=1')}>영업기회 생성</button>}/>}</section>
     <section className="panel"><div className="panel-head"><div><h2>최근 활동</h2><p>팀의 고객 접점</p></div><Link to="/app/activities">전체보기</Link></div>{activities.length?<div className="timeline compact">{activities.map(a=><div className="timeline-item" key={a.id}><span className={`timeline-dot type-${a.activityType.toLowerCase()}`}>{activityIcon(a.activityType)}</span><div><b>{a.subject}</b><p>{a.ownerName} · {relative(a.occurredAt)}</p></div></div>)}</div>:<Empty icon="◷" title="최근 활동이 없습니다" description="미팅이나 통화를 기록해보세요."/>}</section></div></>}
   </Frame>}
+type TodayItem={kind:string;severity:string;title:string;subtitle:string;route:string;dueAt?:string}
+type CustomerRiskFactor={code:string;label:string;detail:string;points:number;route?:string}
+type CustomerRiskSummary={customerId:string;customerName:string;score:number;level:string;factors:CustomerRiskFactor[];recommendedAction?:string}
+type TodayFeed={items:TodayItem[];counts:Record<string,number>;risks:CustomerRiskSummary[]}
+const kindIcon:Record<string,string>={VOICE_OVERDUE:'!',NEXT_ACTION_DUE:'◷',DEAL_STALLED:'◆',RENEWAL_NOT_STARTED:'▤',APPROVAL_PENDING:'✓'}
+const kindLabel:Record<string,string>={VOICE_OVERDUE:'고객 요청 기한 초과',NEXT_ACTION_DUE:'다음 행동 기한',DEAL_STALLED:'영업기회 정체',RENEWAL_NOT_STARTED:'갱신 미착수',APPROVAL_PENDING:'검토 대기'}
+
+/** TodayQueue answers "무엇부터 하지?" — one ranked list across every subsystem
+ *  that generates work, instead of leaving the user to infer it from metrics. */
+function TodayQueue({feed}:{feed:TodayFeed|null}){
+  if(!feed)return null
+  const urgent=(feed.counts.CRITICAL||0)+(feed.counts.HIGH||0)
+  return <div className="today-grid">
+    <section className="panel today-panel">
+      <div className="panel-head"><div><h2>오늘 먼저 할 일</h2><p>{feed.items.length?`${feed.items.length}건 · 즉시 대응 ${urgent}건`:'지금 밀린 일이 없습니다'}</p></div>
+        {urgent>0&&<span className="count-badge danger">{urgent}</span>}</div>
+      {feed.items.length?<div className="today-list">{feed.items.slice(0,8).map((item,i)=>
+        <button key={i} onClick={()=>navigate(item.route)}>
+          <span className={`today-mark sev-${item.severity.toLowerCase()}`}>{kindIcon[item.kind]||'·'}</span>
+          <span className="today-copy"><b>{item.title}</b><small>{item.subtitle}</small></span>
+          <span className="today-meta"><em>{kindLabel[item.kind]||item.kind}</em>{item.dueAt&&<small>{date(item.dueAt)}</small>}</span>
+        </button>)}</div>
+        :<Empty icon="✓" title="밀린 일이 없습니다" description="기한을 넘긴 고객 요청, 정체된 영업기회, 미착수 갱신이 모두 없습니다."/>}
+    </section>
+    <section className="panel risk-panel">
+      <div className="panel-head"><div><h2>이탈 위험 고객</h2><p>요청·갱신·접점을 합산한 신호</p></div>
+        <button onClick={()=>navigate('/app/voices')}>고객의 목소리 →</button></div>
+      {feed.risks.length?<div className="risk-list">{feed.risks.map(r=>
+        <button key={r.customerId} onClick={()=>navigate('/app/customers/'+r.customerId)}>
+          <span className={`risk-score level-${r.level.toLowerCase()}`}>{r.score}</span>
+          <span className="risk-copy"><b>{r.customerName}</b><small>{r.factors.slice(0,2).map(f=>f.label).join(' · ')}</small></span>
+          <Status value={r.level}/>
+        </button>)}</div>
+        :<Empty icon="♡" title="위험 신호가 없습니다" description="미해결 요청, 임박한 갱신, 접점 공백이 발견되지 않았습니다."/>}
+    </section>
+  </div>
+}
+
 function KPI({label,value,foot,tone,icon}:{label:string;value:string;foot:string;tone:string;icon:string}){return <article className={`kpi-card tone-${tone}`}><div className="kpi-top"><span className="kpi-icon">{icon}</span><span className="trend">실시간</span></div><p>{label}</p><strong>{value}</strong><small>{foot}</small></article>}
 
 function Customers(props:Props){
@@ -86,6 +125,19 @@ function CustomerModal({customer,onClose,onSaved,notify}:{customer?:Customer;onC
 }
 
 
+/** CustomerRiskBand shows why a customer is at risk, not just that they are. */
+function CustomerRiskBand({customerId}:{customerId:string}){
+  const [risk,setRisk]=useState<CustomerRiskSummary|null>(null)
+  useEffect(()=>{api<CustomerRiskSummary>(`/api/v1/customers/${customerId}/risk`).then(setRisk).catch(()=>{})},[customerId])
+  if(!risk||!risk.factors.length)return null
+  return <section className={`panel risk-band level-${risk.level.toLowerCase()}`}>
+    <div className="risk-band-score"><strong>{risk.score}</strong><small>이탈 위험도</small><Status value={risk.level}/></div>
+    <div className="risk-band-factors">{risk.factors.map(f=><div key={f.code}>
+      <b>{f.label}</b><small>{f.detail}</small><em>+{f.points}</em></div>)}</div>
+    {risk.recommendedAction&&<div className="risk-band-action"><b>권장 행동</b><p>{risk.recommendedAction}</p></div>}
+  </section>
+}
+
 function Metric({label,value}:{label:string;value:string}){return <div><small>{label}</small><b>{value}</b></div>}
 
 function Opportunities(props:Props){
@@ -113,7 +165,7 @@ function Activities(props:Props){
     <div className="activity-layout">
       <aside className="panel activity-filter"><h3>활동 유형</h3>{activityTypes.map(([value,label,glyph])=><button className={type===value?'active':''} key={label} onClick={()=>choose(value)}><span>{glyph}</span>{label}<em>{type===value?items.length:''}</em></button>)}</aside>
       <section className="panel"><div className="panel-head"><div><h2>활동 타임라인</h2><p>{type?`${activityTypes.find(x=>x[0]===type)?.[1]} 활동만 표시합니다`:'최신 활동부터 표시합니다'}</p></div></div>
-        {loading?<Spinner/>:items.length?<div className="timeline large">{items.map(a=><div className="timeline-item" key={a.id}><span className={`timeline-dot type-${a.activityType.toLowerCase()}`}>{activityIcon(a.activityType)}</span><div className="timeline-card"><header><div><Status value={a.activityType}/><b>{a.subject}</b></div><time>{date(a.occurredAt)}</time></header>{a.description&&<p>{a.description}</p>}<footer><span className="avatar tiny">{initials(a.ownerName, 1)}</span>{a.ownerName}{a.nextAction&&<span className="next-action">→ {a.nextAction} · {date(a.nextActionDate)}</span>}</footer></div></div>)}</div>
+        {loading?<Spinner/>:items.length?<div className="timeline large">{items.map(a=><div className="timeline-item" key={a.id}><span className={`timeline-dot type-${a.activityType.toLowerCase()}`}>{activityIcon(a.activityType)}</span><div className="timeline-card"><header><div><Status value={a.activityType}/><b>{a.subject}</b></div><time>{date(a.occurredAt)}</time></header>{a.description&&<p>{a.description}</p>}<footer><span className="avatar tiny">{initials(a.ownerName, 1)}</span>{a.ownerName}{a.nextAction&&<span className="next-action">→ {a.nextAction} · {date(a.nextActionDate)}</span>}{a.customerId&&<button className="activity-to-voice" title="이 접점에서 불만이나 요청이 나왔다면 바로 접수합니다" onClick={()=>navigate(`/app/voices?new=1&customerId=${a.customerId}&title=${encodeURIComponent(a.subject)}&body=${encodeURIComponent(a.description||'')}`)}>고객 요청으로 접수 →</button>}</footer></div></div>)}</div>
         :<Empty title={type?'해당 유형의 활동이 없습니다':'기록된 활동이 없습니다'} description={type?'다른 유형을 선택하거나 새 활동을 기록하세요.':'첫 고객 접점을 기록하세요.'}/>}</section>
     </div>
     {modal&&<ActivityModal onClose={()=>setModal(false)} onSaved={()=>{setModal(false);void load()}} notify={props.notify}/>}
@@ -179,6 +231,7 @@ function CustomerDetailV12(props:Props&{id:string}){
   const c:Customer=data.customer
   return <Frame {...props} title={c.name} subtitle={`${c.industry||'산업 미지정'} · 담당 ${c.ownerName}`} actions={<><button className="btn btn-secondary" onClick={()=>setEditing(true)}>편집</button>{approval?.enabled&&approval.canRequest&&<button className="btn btn-primary" onClick={async()=>{try{await api('/api/v1/approvals',{method:'POST',body:JSON.stringify({entityType:'CUSTOMER',entityId:c.id})});props.notify('검토 요청을 보냈습니다.')}catch(e){props.notify(errorMessage(e),true)}}}>검토 요청</button>}</>}>
     <div className="customer-hero"><span className="customer-logo xl">{initials(c.name, 2)}</span><div><div className="hero-tags"><Status value={c.customerType}/>{c.grade&&<span className="grade">{c.grade}등급</span>}<Status value={c.health}/></div><p>{c.address||'주소 정보 없음'} · {c.phone||'전화 정보 없음'}</p></div><div className="customer-metrics"><Metric label="누적 매출" value={money(data.metrics.cumulativeRevenue)}/><Metric label="진행 파이프라인" value={money(data.metrics.openPipeline)}/><Metric label="관계 점수" value={`${graph.metrics.relationshipScore}/100`}/><Metric label="지지자" value={`${graph.metrics.champions}명`}/></div></div>
+    <CustomerRiskBand customerId={props.id}/>
     <div className="relationship-grid"><section className="panel relationship-panel"><div className="panel-head"><div><h2>의사결정 관계도</h2><p>의사결정 구조와 영향 관계</p></div><span className="date-chip">담당자 {graph.metrics.contacts}명 · 평균 관계강도 {graph.metrics.averageStrength}</span></div><RelationshipGraphView graph={graph}/>{graph.edges.length>0&&<div className="relationship-edge-list">{graph.edges.map((x:any)=><div key={x.id}><span><b>{x.sourceName}</b> <Status value={x.relationshipType}/> <b>{x.targetName}</b></span><small>{x.description||`관계 강도 ${x.strength}`}</small><button className="danger" onClick={()=>removeRelationship(x)}>삭제</button></div>)}</div>}<form className="relationship-form" onSubmit={addRelationship}><select name="source" required defaultValue=""><option value="">시작 담당자</option>{graph.nodes.map((x:any)=><option key={x.id} value={x.id}>{x.name}</option>)}</select><select name="type">{relationshipTypes.map(x=><option key={x} value={x}>{label(x)}</option>)}</select><select name="target" required defaultValue=""><option value="">대상 담당자</option>{graph.nodes.map((x:any)=><option key={x.id} value={x.id}>{x.name}</option>)}</select><input name="strength" type="number" min="0" max="100" defaultValue="50" aria-label="관계 강도"/><input name="description" placeholder="관계 설명"/><button className="btn btn-secondary">관계 연결</button></form></section>
     <section className="panel relationship-metrics"><div className="panel-head"><div><h2>관계 분석</h2><p>고객 내부 지지 기반</p></div></div><div className="relationship-score"><strong>{graph.metrics.relationshipScore}</strong><span>/ 100</span></div><div className="info-list"><div><span>의사결정자</span><b>{graph.metrics.decisionMakers}명</b></div><div><span>지지자</span><b>{graph.metrics.champions}명</b></div><div><span>우호 / 반대</span><b>{graph.metrics.supporters} / {graph.metrics.opponents}</b></div><div><span>등록된 관계</span><b>{graph.edges.length}개</b></div></div></section></div>
     <form className="panel account-plan form" onSubmit={savePlan}><div className="panel-head"><div><h2>전략 고객 계획</h2><p>고객 목표, 공략 전략과 미판매 영역을 연간 단위로 관리합니다.</p></div><div className="account-plan-controls"><input name="planYear" type="number" min="2000" max="2200" value={plan.planYear} onChange={e=>setPlan({...plan,planYear:Number(e.target.value)})}/><select name="status" value={plan.status} onChange={e=>setPlan({...plan,status:e.target.value})}>{['DRAFT','ACTIVE','ARCHIVED'].map(x=><option key={x} value={x}>{label(x)}</option>)}</select><button className="btn btn-primary">계획 저장</button></div></div><div className="form-grid"><label className="span-2">고객 공략 전략<textarea name="strategy" rows={4} value={plan.strategy||''} onChange={e=>setPlan({...plan,strategy:e.target.value})} placeholder="고객의 전략 과제와 우리가 만들 사업 가치를 기술합니다."/></label><label>고객 목표 · 줄바꿈 구분<textarea name="customerGoals" rows={4} value={plan.customerGoals.join('\n')} onChange={e=>setPlan({...plan,customerGoals:lines(e.target.value)})}/></label><label>전략 과제 · 줄바꿈 구분<textarea name="strategicInitiatives" rows={4} value={plan.strategicInitiatives.join('\n')} onChange={e=>setPlan({...plan,strategicInitiatives:lines(e.target.value)})}/></label><label>우리의 목표 · 줄바꿈 구분<textarea name="ourObjectives" rows={4} value={plan.ourObjectives.join('\n')} onChange={e=>setPlan({...plan,ourObjectives:lines(e.target.value)})}/></label><label>경쟁사 · 줄바꿈 구분<textarea name="competitors" rows={4} value={plan.competitors.join('\n')} onChange={e=>setPlan({...plan,competitors:lines(e.target.value)})}/></label><label>위험 요인 · 줄바꿈 구분<textarea name="risks" rows={4} value={plan.risks.join('\n')} onChange={e=>setPlan({...plan,risks:lines(e.target.value)})}/></label><label>연간 목표 매출<input name="targetRevenue" type="number" min="0" value={plan.targetRevenue} onChange={e=>setPlan({...plan,targetRevenue:Number(e.target.value)})}/></label><label>잠재 매출<input name="potentialRevenue" type="number" min="0" value={plan.potentialRevenue} onChange={e=>setPlan({...plan,potentialRevenue:Number(e.target.value)})}/></label></div><div className="white-space-head"><div><h3>미판매 영역 분석</h3><p>아직 제안하지 않은 상품과 교차판매 가능성을 찾아냅니다.</p></div><button type="button" className="btn btn-secondary btn-sm" onClick={addWhiteSpace}>＋ 상품 기회</button></div><div className="white-space-list">{plan.whiteSpaces.map((x:any,i:number)=><div className="white-space-row" key={x.id||i}><input value={x.productName} onChange={e=>updateWhiteSpace(i,'productName',e.target.value)} placeholder="상품 · 서비스" required/><select value={x.status} onChange={e=>updateWhiteSpace(i,'status',e.target.value)}>{whiteSpaceStatuses.map(s=><option key={s} value={s}>{label(s)}</option>)}</select><input type="number" min="0" value={x.potentialAmount} onChange={e=>updateWhiteSpace(i,'potentialAmount',Number(e.target.value))} placeholder="잠재 금액"/><input value={x.notes||''} onChange={e=>updateWhiteSpace(i,'notes',e.target.value)} placeholder="발견 내용과 다음 행동"/><button type="button" className="danger" onClick={()=>removeWhiteSpace(i)}>×</button></div>)}{!plan.whiteSpaces.length&&<Empty title="미판매 영역이 없습니다" description="미제안 상품을 추가하면 Cross-sell MCP가 안전하게 탐색합니다."/>}</div></form>

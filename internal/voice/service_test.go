@@ -182,3 +182,71 @@ func TestVoiceTypeCoverageMatchesTheSchema(t *testing.T) {
 		t.Fatalf("service knows %d voice types, schema allows %d", len(voiceTypes), len(strings.Fields(schema)))
 	}
 }
+
+func TestRiskLevelBandsAndScoreCap(t *testing.T) {
+	for score, want := range map[int]string{0: "HEALTHY", 19: "HEALTHY", 20: "WATCH", 44: "WATCH", 45: "HIGH", 69: "HIGH", 70: "CRITICAL", 100: "CRITICAL"} {
+		if got := riskLevel(score); got != want {
+			t.Fatalf("score %d produced %q, expected %q", score, got, want)
+		}
+	}
+}
+
+func TestRecommendAdaptsToTheLeadingFactor(t *testing.T) {
+	// A churn signal on an account with live pipeline needs a different move
+	// than one with nothing in flight.
+	withPipeline := recommend("CHURN_SIGNAL", 500_000_000)
+	withoutPipeline := recommend("CHURN_SIGNAL", 0)
+	if withPipeline == withoutPipeline {
+		t.Fatal("open pipeline must change the recommended action")
+	}
+	for _, code := range []string{"VOICE_OVERDUE", "OPEN_COMPLAINT", "LOW_SATISFACTION", "RENEWAL_NOT_STARTED", "CONTACT_GAP", "NO_ACTIVITY"} {
+		if recommend(code, 0) == "" {
+			t.Fatalf("%s must carry a recommended action", code)
+		}
+	}
+	if recommend("SOMETHING_NEW", 0) != "" {
+		t.Fatal("an unmapped factor must not invent advice")
+	}
+}
+
+func TestCSVCellNeutralisesFormulasAndQuotes(t *testing.T) {
+	// A complaint body is customer-authored text, so a leading = or + would be
+	// evaluated by Excel when the export is opened.
+	for _, dangerous := range []string{"=cmd()", "+1+1", "-1", "@SUM(A1)"} {
+		if got := csvCell(dangerous); got[0] != '\'' {
+			t.Fatalf("%q must be prefixed to stop formula evaluation, got %q", dangerous, got)
+		}
+	}
+	if got := csvCell(`납기 "지연", 재발`); got != `"납기 ""지연"", 재발"` {
+		t.Fatalf("quotes and commas must be escaped, got %s", got)
+	}
+	if got := csvCell("첫 줄\n둘째 줄"); got != "첫 줄 둘째 줄" {
+		t.Fatalf("newlines must not break the row, got %q", got)
+	}
+	if csvCell("정상 값") != "정상 값" {
+		t.Fatal("a plain value must pass through unchanged")
+	}
+}
+
+func TestCSVLabelsCoverEveryCodeTheExportEmits(t *testing.T) {
+	for kind := range voiceTypes {
+		if csvLabel(kind) == kind {
+			t.Fatalf("voice type %q has no Korean label for the export", kind)
+		}
+	}
+	for status := range statuses {
+		if csvLabel(status) == status {
+			t.Fatalf("status %q has no Korean label for the export", status)
+		}
+	}
+	for severity := range severities {
+		if csvLabel(severity) == severity {
+			t.Fatalf("severity %q has no Korean label for the export", severity)
+		}
+	}
+	for channel := range channels {
+		if csvLabel(channel) == channel {
+			t.Fatalf("channel %q has no Korean label for the export", channel)
+		}
+	}
+}

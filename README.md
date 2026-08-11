@@ -28,6 +28,11 @@ Relio는 인터넷이 차단된 기업 환경에서 단일 Docker Image로 운�
 - Bootstrap Admin은 삭제되지 않는 Break Glass 계정이며 최초 생성 후 환경변수로 덮어쓰지 않습니다.
 - Keycloak OIDC는 관리자 화면에서 Issuer, Client ID, Client Secret을 저장하고 Discovery, TLS, JWKS, Callback을 검사합니다.
 - Function Permission, Data Scope, Personal Key Scope의 교집합을 Web, REST, MCP, Dashboard에 동일하게 적용합니다.
+- 고객의 목소리(VOC)로 불만·요청·문의·이탈 징후를 접수부터 해결, 원인 분석, 재발 방지, 만족도까지 관리합니다.
+- 요청 유형별 응답·해결 SLA를 관리자가 정의하고 심각도에 따라 자동 단축하며 기한 초과를 한 곳에서 판정합니다.
+- 기한 초과 요청, 기한 도래 다음 행동, 정체 영업기회, 미착수 갱신, 검토 대기를 하나의 우선순위 큐로 제시합니다.
+- 이탈 징후·미해결 불만·미착수 갱신·접점 공백을 합산해 고객 이탈 위험도를 근거와 권장 행동과 함께 표시합니다.
+- 화면 용어는 한국어를 기준으로 하며 API는 안정적인 코드를 유지합니다.
 - Customer 360, 중복 탐지·병합, 설명 가능한 Deal Health, Deal Inspection과 팀장 Sales Coaching을 제공합니다.
 - Customer 360의 Relationship Map으로 Decision Maker, Champion, 영향력·지지 성향과 담당자 간 연결 관계를 시각화합니다.
 - Strategic Account Plan에서 고객 목표, 경쟁사, 위험, 연간 매출 목표와 White Space Cross-sell 기회를 관리합니다.
@@ -75,7 +80,7 @@ docker run -d \
   -e BOOTSTRAP_ADMIN_PASSWORD="ChangeMe-To-A-Strong-Password" \
   -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -v relio-data:/var/lib/relio \
-  relio:v1.6.0
+  relio:v1.7.0
 ```
 
 ### 자격증명 영속성 (ENCRYPTION_KEY)
@@ -100,8 +105,8 @@ Relio는 Data Key의 단방향 ID를 PostgreSQL에 등록합니다. SSO Secret �
 GitHub Release에서 파일 하나만 반입합니다.
 
 ```bash
-gunzip -c relio-v1.6.0.tar.gz | docker load
-docker image inspect relio:v1.6.0
+gunzip -c relio-v1.7.0.tar.gz | docker load
+docker image inspect relio:v1.7.0
 ```
 
 SHA-256은 Release 본문에 기록되며 별도 Checksum Asset은 배포하지 않습니다.
@@ -142,7 +147,7 @@ Sales Intelligence MCP는 `find_deals_at_risk`, `explain_deal_risk`, `recommend_
 ```bash
 make test
 make build
-make docker VERSION=1.6.0
+make docker VERSION=1.7.0
 ```
 
 검증 항목:
@@ -150,8 +155,8 @@ make docker VERSION=1.6.0
 ```bash
 ./scripts/check-env-contract.sh
 ./scripts/check-static-assets.sh
-./scripts/run-offline-container-test.sh relio:v1.6.0
-./scripts/run-upgrade-container-test.sh relio:v1.5.0 relio:v1.6.0
+./scripts/run-offline-container-test.sh relio:v1.7.0
+./scripts/run-upgrade-container-test.sh relio:v1.6.0 relio:v1.7.0
 ```
 
 오프라인 테스트는 Docker internal network에서 PostgreSQL과 Relio를 시작하고 Migration, Bootstrap 로그인, CRM/영업 기능, REST Personal Key, MCP, Admin Operations, Data Quality, Configuration Bundle 왕복, Support Bundle/Audit 검색과 외부 정적 자산 부재를 검사합니다. Container 교체 후 SSO Secret·Personal Key 유지와 잘못된 Volume의 Fail-Closed 동작도 검증합니다.
@@ -161,14 +166,14 @@ make docker VERSION=1.6.0
 SemVer Tag를 push하면 `.github/workflows/release.yml`이 테스트, 이미지 빌드, 오프라인 검증, `docker save`, gzip 압축과 GitHub Release를 수행합니다.
 
 ```bash
-git tag v1.6.0
-git push origin v1.6.0
+git tag v1.7.0
+git push origin v1.7.0
 ```
 
 Relio가 Release Asset으로 직접 업로드하는 파일은 다음 하나뿐입니다.
 
 ```text
-relio-v1.6.0.tar.gz
+relio-v1.7.0.tar.gz
 ```
 
 ## 설계 문서

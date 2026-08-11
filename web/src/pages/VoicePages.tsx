@@ -40,6 +40,17 @@ const nextStatuses: Record<string, string[]> = {
   REJECTED: ['IN_PROGRESS'],
 }
 
+// The export must reflect exactly what the user is looking at.
+const exportQuery = (f: { voiceType: string; severity: string; status: string; view: string }) => {
+  const q = new URLSearchParams({ limit: '200' })
+  if (f.voiceType) q.set('voiceType', f.voiceType)
+  if (f.severity) q.set('severity', f.severity)
+  if (f.status) q.set('status', f.status)
+  if (f.view === 'open') q.set('open', 'true')
+  if (f.view === 'overdue') q.set('overdue', 'true')
+  return q.toString()
+}
+
 const dueLabel = (value?: string) => {
   if (!value) return '기한 없음'
   const hours = Math.round((new Date(value).getTime() - Date.now()) / 3600000)
@@ -49,6 +60,8 @@ const dueLabel = (value?: string) => {
 }
 
 export default function VoicePages(props: Props) {
+  const params = new URLSearchParams(location.search)
+  const prefill = { customerId: params.get('customerId') || '', title: params.get('title') || '', body: params.get('body') || '' }
   const [items, setItems] = useState<Voice[] | null>(null)
   const [summary, setSummary] = useState<VoiceSummary | null>(null)
   const [categories, setCategories] = useState<Category[]>([])
@@ -80,7 +93,10 @@ export default function VoicePages(props: Props) {
   const canWrite = props.user.isBootstrap || (props.user.permissions || []).some(p => p === 'admin:*' || p === 'voice:write')
 
   return <Layout area="app" {...props} title="고객의 목소리" subtitle="불만, 요청, 문의와 이탈 징후를 접수부터 해결·만족도까지 추적합니다."
-    actions={canWrite ? <button className="btn btn-primary" onClick={() => setModal(true)}>＋ 요청 접수</button> : undefined}>
+    actions={<>
+      <a className="btn btn-secondary" href={'/api/v1/voices/export?' + exportQuery(filter)} download>CSV 내보내기</a>
+      {canWrite && <button className="btn btn-primary" onClick={() => setModal(true)}>＋ 요청 접수</button>}
+    </>}>
     {!items || !summary ? <Spinner /> : <>
       <div className="voice-kpi-grid">
         <button className={filter.view === 'open' ? 'active' : ''} onClick={() => change({ view: 'open', status: '' })}>
@@ -128,17 +144,17 @@ export default function VoicePages(props: Props) {
             action={canWrite ? <button className="btn btn-primary" onClick={() => setModal(true)}>첫 요청 접수</button> : undefined} />}
       </section>
     </>}
-    {modal && <VoiceModal categories={categories} customers={customers} onClose={() => setModal(false)}
+    {modal && <VoiceModal prefill={prefill} categories={categories} customers={customers} onClose={() => setModal(false)}
       onSaved={() => { setModal(false); void load() }} notify={props.notify} />}
     {selected && <VoiceDrawer voice={selected} categories={categories} canWrite={canWrite}
       onClose={() => setSelected(null)} onSaved={() => { setSelected(null); void load() }} notify={props.notify} />}
   </Layout>
 }
 
-function VoiceModal({ categories, customers, onClose, onSaved, notify }: { categories: Category[]; customers: Customer[]; onClose: () => void; onSaved: () => void; notify: Props['notify'] }) {
+function VoiceModal({ prefill, categories, customers, onClose, onSaved, notify }: { prefill?: { customerId: string; title: string; body: string }; categories: Category[]; customers: Customer[]; onClose: () => void; onSaved: () => void; notify: Props['notify'] }) {
   const [busy, setBusy] = useState(false)
   const [voiceType, setVoiceType] = useState('COMPLAINT')
-  const [customerId, setCustomerId] = useState('')
+  const [customerId, setCustomerId] = useState(prefill?.customerId || '')
   const [contacts, setContacts] = useState<{ id: string; name: string; title?: string }[]>([])
   const matching = categories.filter(c => c.voiceType === voiceType)
   useEffect(() => {
@@ -171,8 +187,8 @@ function VoiceModal({ categories, customers, onClose, onSaved, notify }: { categ
       <label>접수 경로<select name="channel">{channelTypes.map(x => <option key={x} value={x}>{label(x)}</option>)}</select></label>
       <label>심각도<select name="severity" defaultValue="NORMAL">{severityTypes.map(x => <option key={x} value={x}>{label(x)}</option>)}</select>
         <small>긴급·높음은 기한이 더 짧게 적용됩니다.</small></label>
-      <label className="span-2">제목 *<input name="title" required autoFocus placeholder="예: 3차 납품 지연으로 생산 라인 중단" /></label>
-      <label className="span-2">고객이 말한 내용<textarea name="body" rows={4} placeholder="고객의 표현을 그대로 남기면 이후 원인 분석에 도움이 됩니다." /></label>
+      <label className="span-2">제목 *<input name="title" required autoFocus defaultValue={prefill?.title || ''} placeholder="예: 3차 납품 지연으로 생산 라인 중단" /></label>
+      <label className="span-2">고객이 말한 내용<textarea name="body" rows={4} defaultValue={prefill?.body || ''} placeholder="고객의 표현을 그대로 남기면 이후 원인 분석에 도움이 됩니다." /></label>
     </div>
     <div className="modal-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>취소</button>
       <button className="btn btn-primary" disabled={busy}>{busy ? '접수 중…' : '접수'}</button></div>

@@ -3,7 +3,9 @@ package server
 import (
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/hkjang/relio/internal/audit"
 	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/hkjang/relio/internal/voice"
 )
@@ -224,4 +226,39 @@ func (s *Server) deleteVoiceCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auditAdmin(r, p, "VOICE_CATEGORY_DELETE", "voice_category", id, map[string]any{"name": name}, nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// exportVoices honours the administrator export policy and audits every download,
+// because a VOC extract contains customer complaints verbatim.
+func (s *Server) exportVoices(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !s.policyEnabled(r.Context(), "security", "export_enabled", true) {
+		httpx.ErrorJSON(w, r, http.StatusForbidden, "export_disabled", "관리자 정책으로 내보내기가 비활성화되어 있습니다.", nil)
+		return
+	}
+	q := r.URL.Query()
+	body, count, err := s.Voices.CSV(r.Context(), p, voice.Query{
+		CustomerID: q.Get("customerId"),
+		Status:     q.Get("status"),
+		VoiceType:  q.Get("voiceType"),
+		Severity:   q.Get("severity"),
+		OwnerID:    q.Get("ownerId"),
+		Overdue:    q.Get("overdue") == "true",
+		OpenOnly:   q.Get("open") == "true",
+		Limit:      httpx.IntQuery(r, "limit", 200, 1, 200),
+	})
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	s.Audit.Record(r.Context(), audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "WEB",
+		Action: "VOICE_EXPORT", Resource: "customer_voice",
+		After: map[string]any{"rows": count, "filters": r.URL.RawQuery},
+		IP:    httpx.ClientIP(r), RequestID: httpx.RequestID(r.Context()), UserAgent: r.UserAgent()})
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="relio-voices-`+time.Now().Format("20060102")+`.csv"`)
+	w.WriteHeader(http.StatusOK)
+	// Excel needs the BOM to read UTF-8 Korean correctly.
+	_, _ = w.Write([]byte("\xef\xbb\xbf"))
+	_, _ = w.Write([]byte(body))
 }

@@ -207,6 +207,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/notifications", s.requireAuth(http.HandlerFunc(s.listNotifications), false))
 	mux.Handle("POST /api/v1/notifications/{id}/read", s.requireAuth(http.HandlerFunc(s.readNotification), false))
 	// 고객의 목소리(VOC): 불만, 요청, 문의와 이탈 징후의 전체 수명주기.
+	mux.Handle("GET /api/v1/today", s.requireAuth(http.HandlerFunc(s.today), false))
+	mux.Handle("GET /api/v1/customers/{id}/risk", s.requireAuth(http.HandlerFunc(s.customerRisk), false))
+	mux.Handle("GET /api/v1/voices/export", s.requireAuth(http.HandlerFunc(s.exportVoices), false))
 	mux.Handle("GET /api/v1/voices", s.requireAuth(http.HandlerFunc(s.listVoices), false))
 	mux.Handle("POST /api/v1/voices", s.requireAuth(http.HandlerFunc(s.createVoice), false))
 	mux.Handle("GET /api/v1/voices/summary", s.requireAuth(http.HandlerFunc(s.voiceSummary), false))
