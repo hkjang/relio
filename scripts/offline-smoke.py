@@ -372,12 +372,17 @@ coaching = request("/api/v1/deal-intelligence/coaching")
 assert coaching["owners"] and coaching["owners"][0]["openDeals"] >= 1
 approval_status = request("/api/v1/approvals/status")
 assert approval_status["enabled"] is False
+key_capabilities = request("/api/v1/me/keys")
+catalog = {tool["name"]: tool for tool in key_capabilities["mcpTools"]}
+assert catalog["create_customer"]["requiredScopes"] == ["customer:read", "customer:write"]
+assert {"create_customer", "update_customer", "delete_customer", "create_contact", "list_leads", "list_products", "list_quotations", "create_contract", "list_sales", "list_targets", "list_notifications"}.issubset(catalog)
+assert {"voice:read", "voice:write", "forecast:write"}.issubset(key_capabilities["allowedScopes"])
 key = request(
     "/api/v1/me/keys",
     "POST",
     {
         "name": "Offline MCP Verification",
-        "scopes": ["mcp:use", "customer:read", "contact:read", "opportunity:read", "activity:read", "forecast:read", "approval:request", "approval:approve"],
+        "scopes": ["mcp:use", "customer:read", "customer:write", "customer:delete", "contact:read", "opportunity:read", "activity:read", "forecast:read", "approval:request", "approval:approve"],
         "channels": ["REST", "MCP"],
     },
     csrf_header,
@@ -397,7 +402,7 @@ restored_key = request(
     "PUT",
     {
         "version": limited_key["version"],
-        "scopes": ["mcp:use", "customer:read", "contact:read", "opportunity:read", "activity:read", "forecast:read", "approval:request", "approval:approve"],
+        "scopes": ["mcp:use", "customer:read", "customer:write", "customer:delete", "contact:read", "opportunity:read", "activity:read", "forecast:read", "approval:request", "approval:approve"],
         "channels": ["REST", "MCP"],
     },
     csrf_header,
@@ -440,6 +445,7 @@ tool_list = request(
 tool_names = {tool["name"] for tool in tool_list["result"]["tools"]}
 assert all(tool["inputSchema"].get("required") is not None for tool in tool_list["result"]["tools"] if "required" in tool["inputSchema"])
 assert "submit_approval" not in tool_names
+assert {"create_customer", "update_customer", "delete_customer"}.issubset(tool_names)
 assert {"find_deals_at_risk", "explain_deal_risk", "explain_forecast_change", "get_sales_coaching_insights"}.issubset(tool_names)
 assert {"get_account_brief", "get_account_relationships", "get_account_plan", "find_cross_sell_opportunities", "get_opportunity_team"}.issubset(tool_names)
 tool_result = request(
@@ -449,6 +455,32 @@ tool_result = request(
     {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
 )
 assert tool_result["result"]["isError"] is False
+mcp_customer_result = request(
+    "/mcp",
+    "POST",
+    {"jsonrpc": "2.0", "id": 30, "method": "tools/call", "params": {"name": "create_customer", "arguments": {"name": "Qwen MCP 등록 검증 고객", "industry": "Software", "email": "qwen-mcp@relio.invalid"}}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert mcp_customer_result["result"]["isError"] is False, mcp_customer_result
+mcp_customer = mcp_customer_result["result"]["structuredContent"]
+assert mcp_customer["name"] == "Qwen MCP 등록 검증 고객" and mcp_customer["version"] == 1
+mcp_customer_updated_result = request(
+    "/mcp",
+    "POST",
+    {"jsonrpc": "2.0", "id": 301, "method": "tools/call", "params": {"name": "update_customer", "arguments": {"id": mcp_customer["id"], "version": mcp_customer["version"], "name": "Qwen MCP 수정 검증 고객"}}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert mcp_customer_updated_result["result"]["structuredContent"]["name"] == "Qwen MCP 수정 검증 고객"
+# Partial MCP updates must preserve omitted CRM fields instead of clearing them.
+assert mcp_customer_updated_result["result"]["structuredContent"]["industry"] == "Software"
+assert mcp_customer_updated_result["result"]["structuredContent"]["email"] == "qwen-mcp@relio.invalid"
+mcp_customer_deleted_result = request(
+    "/mcp",
+    "POST",
+    {"jsonrpc": "2.0", "id": 302, "method": "tools/call", "params": {"name": "delete_customer", "arguments": {"id": mcp_customer["id"]}}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert mcp_customer_deleted_result["result"]["structuredContent"]["deleted"] is True
 deal_risk_result = request(
     "/mcp",
     "POST",

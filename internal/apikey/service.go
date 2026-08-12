@@ -15,7 +15,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var AllowedScopes = []string{"customer:read", "customer:write", "customer:delete", "intelligence:read", "intelligence:write", "contact:read", "contact:write", "lead:read", "lead:write", "opportunity:read", "opportunity:write", "activity:read", "activity:write", "product:read", "product:write", "quotation:read", "quotation:write", "contract:read", "contract:write", "sales:read", "sales:write", "target:read", "target:write", "forecast:read", "notification:read", "notification:write", "report:read", "approval:request", "approval:approve", "mcp:use"}
+// AllowedScopes is the complete set of non-administrative permissions that a
+// user may delegate to a personal REST/MCP key. Keep this aligned with the
+// assignable sales permissions: omitting a permission here makes the feature
+// unreachable through an otherwise valid key.
+var AllowedScopes = []string{"customer:read", "customer:write", "customer:delete", "intelligence:read", "intelligence:write", "contact:read", "contact:write", "lead:read", "lead:write", "opportunity:read", "opportunity:write", "activity:read", "activity:write", "product:read", "product:write", "quotation:read", "quotation:write", "contract:read", "contract:write", "sales:read", "sales:write", "target:read", "target:write", "forecast:read", "forecast:write", "notification:read", "notification:write", "report:read", "voice:read", "voice:write", "approval:request", "approval:approve", "mcp:use"}
 
 type Key struct {
 	ID             string     `json:"id"`

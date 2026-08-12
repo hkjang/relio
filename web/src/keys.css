@@ -44,6 +44,9 @@
 .scope-item span { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
 .scope-item b { font-size: 13px; font-weight: 600; color: #40566d; }
 .scope-item code { font-size: 11px; color: #93a2b1; }
+.scope-item em { margin-left: auto; white-space: nowrap; font-size: 10px; font-style: normal; padding: 2px 5px; border-radius: 10px; }
+.scope-mcp-count { color: #256b62; background: #e5f4f0; }
+.scope-rest-only { color: #8190a0; background: #edf1f5; }
 /* A scope that can change data is marked, because "등록·수정" and "조회" read
    almost the same at a glance. */
 .scope-item.is-write b { color: #a5551f; }
@@ -54,6 +57,8 @@
 }
 .scope-summary b { font-size: 14px; color: #24384e; }
 .scope-summary span { font-size: 13px; color: #5d7085; }
+.scope-summary strong { margin-left: auto; color: #256b62; font-size: 13px; }
+.mcp-tool-count { color: #256b62 !important; font-weight: 650; }
 
 /* MCP guide */
 .mcp-guide .guide-tabs { margin-bottom: 18px; }

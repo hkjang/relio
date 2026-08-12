@@ -76,11 +76,22 @@ type rpcError struct {
 	Data    any    `json:"data,omitempty"`
 }
 type tool struct {
-	Name        string         `json:"name"`
-	Title       string         `json:"title,omitempty"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
-	Annotations map[string]any `json:"annotations,omitempty"`
+	Name           string         `json:"name"`
+	Title          string         `json:"title,omitempty"`
+	Description    string         `json:"description"`
+	InputSchema    map[string]any `json:"inputSchema"`
+	Annotations    map[string]any `json:"annotations,omitempty"`
+	RequiredScopes []string       `json:"-"`
+}
+
+// ToolCatalogItem is the server-authoritative bridge between key scopes and
+// tools/list. The key screen uses it to show what a selected scope combination
+// will actually expose instead of guessing from scope names.
+type ToolCatalogItem struct {
+	Name           string   `json:"name"`
+	Title          string   `json:"title"`
+	RequiredScopes []string `json:"requiredScopes"`
+	ReadOnly       bool     `json:"readOnly"`
 }
 type toolCall struct {
 	Name      string         `json:"name"`
@@ -105,6 +116,9 @@ func number(description string) map[string]any {
 }
 func integer(description string) map[string]any {
 	return map[string]any{"type": "integer", "description": description}
+}
+func boolean(description string) map[string]any {
+	return map[string]any{"type": "boolean", "description": description}
 }
 
 func (s *Server) allowedOrigin(ctx context.Context, r *http.Request) bool {
@@ -396,34 +410,35 @@ func (s *Server) approvalsEnabled(ctx context.Context) bool {
 	return enabled
 }
 
-func (s *Server) toolAllowed(ctx context.Context, name string) bool {
+func (s *Server) toolAllowlist(ctx context.Context) (map[string]bool, bool) {
 	var raw []byte
 	if err := s.DB.QueryRow(ctx, `SELECT value FROM system_settings WHERE namespace='mcp' AND key='tool_allowlist'`).Scan(&raw); err != nil {
-		return true
+		return nil, false
 	}
 	var allowed []string
 	if err := json.Unmarshal(raw, &allowed); err != nil || len(allowed) == 0 {
-		return true
+		return nil, false
 	}
+	result := make(map[string]bool, len(allowed))
 	for _, item := range allowed {
-		if item == name {
-			return true
-		}
+		result[item] = true
 	}
-	return false
+	return result, true
 }
 
 func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	out := []tool{}
+	allowlist, restricted := s.toolAllowlist(ctx)
 	add := func(permission, name, title, description string, input map[string]any, readOnly, dangerous bool) {
+		requiredScopes := strings.Fields(permission)
 		permitted := true
-		for _, required := range strings.Fields(permission) {
+		for _, required := range requiredScopes {
 			if !p.Has(required) {
 				permitted = false
 				break
 			}
 		}
-		if permitted && s.toolAllowed(ctx, name) {
+		if permitted && (!restricted || allowlist[name]) {
 			riskLevel := "READ"
 			if !readOnly {
 				riskLevel = "WRITE"
@@ -434,35 +449,69 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 			if name == "approve_request" || name == "reject_request" {
 				riskLevel = "APPROVAL"
 			}
-			out = append(out, tool{Name: name, Title: title, Description: description, InputSchema: input, Annotations: map[string]any{"readOnlyHint": readOnly, "destructiveHint": dangerous, "idempotentHint": readOnly, "relio/riskLevel": riskLevel}})
+			out = append(out, tool{Name: name, Title: title, Description: description, InputSchema: input, Annotations: map[string]any{"readOnlyHint": readOnly, "destructiveHint": dangerous, "idempotentHint": readOnly, "relio/riskLevel": riskLevel}, RequiredScopes: requiredScopes})
 		}
 	}
 	qprops := map[string]any{"query": str("검색어"), "limit": integer("최대 결과 수")}
 	add("customer:read", "search_customers", "고객 검색", "이름 또는 사업자번호로 접근 가능한 고객을 검색합니다.", schema(nil, qprops), true, false)
 	add("customer:read", "get_customer", "고객 상세", "고객 기본 정보를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
 	add("customer:read", "get_customer_360", "Customer 360", "담당자, 영업기회, 활동, 계약, 누적매출을 함께 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
+	customerProps := map[string]any{"name": str("고객명"), "registrationNo": str("사업자등록번호"), "customerType": str("PROSPECT, CUSTOMER, PARTNER"), "grade": str("고객 등급"), "industry": str("산업군"), "website": str("웹사이트"), "phone": str("대표 전화"), "email": str("대표 이메일"), "address": str("주소"), "health": str("NORMAL, ATTENTION, RISK"), "annualRevenue": number("연 매출"), "employeeCount": integer("직원 수"), "customFields": map[string]any{"type": "object", "description": "사용자 정의 필드", "additionalProperties": true}}
+	add("customer:read customer:write", "create_customer", "고객 등록", "새 고객을 CRM에 등록하고 생성된 고객 ID와 버전을 반환합니다. 고객명만 필수이며 나머지는 선택입니다.", schema([]string{"name"}, customerProps), false, false)
+	updateCustomerProps := map[string]any{"id": str("고객 ID"), "version": integer("get_customer에서 확인한 현재 버전")}
+	for key, value := range customerProps {
+		updateCustomerProps[key] = value
+	}
+	add("customer:read customer:write", "update_customer", "고객 수정", "고객을 버전 검사와 함께 부분 수정합니다. 보내지 않은 필드는 기존 값을 유지합니다.", schema([]string{"id", "version"}, updateCustomerProps), false, false)
+	add("customer:read customer:delete", "delete_customer", "고객 삭제 또는 비활성화", "이력이 없는 고객은 삭제하고, 영업 이력이 있으면 감사 기록 보존을 위해 비활성화합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), false, true)
 	add("contact:read", "search_contacts", "담당자 검색", "고객 담당자를 검색합니다.", schema(nil, map[string]any{"query": str("검색어"), "customerId": str("고객 ID"), "limit": integer("최대 결과 수")}), true, false)
+	add("customer:read contact:read", "get_contact", "담당자 상세", "접근 가능한 고객의 담당자 한 명을 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("담당자 ID")}), true, false)
+	contactProps := map[string]any{"customerId": str("고객 ID"), "name": str("담당자명"), "title": str("직함"), "department": str("부서"), "email": str("이메일"), "phone": str("전화"), "mobile": str("휴대전화"), "decisionMaker": boolean("의사결정권자 여부"), "primaryContact": boolean("주 담당자 여부"), "relationshipRole": str("DECISION_MAKER, CHAMPION, INFLUENCER, USER, PROCUREMENT"), "influence": str("HIGH, MEDIUM, LOW"), "sentiment": str("SUPPORT, NEUTRAL, OPPOSE"), "relationshipStrength": integer("관계 강도 0~100"), "decisionPower": integer("의사결정 영향력 0~100")}
+	add("customer:read contact:read contact:write", "create_contact", "담당자 등록", "고객사 담당자를 등록하고 관계 역할과 영향력을 함께 기록합니다.", schema([]string{"customerId", "name"}, contactProps), false, false)
+	updateContactProps := map[string]any{"id": str("담당자 ID")}
+	for key, value := range contactProps {
+		updateContactProps[key] = value
+	}
+	add("customer:read contact:read contact:write", "update_contact", "담당자 수정", "담당자 정보를 부분 수정합니다. 보내지 않은 필드는 기존 값을 유지합니다.", schema([]string{"id"}, updateContactProps), false, false)
+	add("customer:read contact:read contact:write", "delete_contact", "담당자 삭제", "고객 요청 이력이 없는 담당자와 관계 연결을 삭제합니다.", schema([]string{"id"}, map[string]any{"id": str("담당자 ID")}), false, true)
+	add("lead:read", "list_leads", "Lead 조회", "접근 가능한 잠재고객 Lead를 검색합니다.", schema(nil, qprops), true, false)
+	add("lead:write", "create_lead", "Lead 등록", "초기 잠재고객 Lead를 등록합니다.", schema([]string{"name"}, map[string]any{"name": str("Lead 이름"), "company": str("회사명"), "email": str("이메일"), "phone": str("전화"), "source": str("유입 경로"), "status": str("NEW 등 Lead 상태"), "customFields": map[string]any{"type": "object", "additionalProperties": true}}), false, false)
+	add("product:read", "list_products", "상품 조회", "활성 여부를 포함한 상품·서비스 카탈로그를 검색합니다.", schema(nil, qprops), true, false)
+	add("product:write", "create_product", "상품 등록", "견적과 영업에 사용할 상품·서비스를 등록합니다.", schema([]string{"code", "name", "unitPrice"}, map[string]any{"code": str("상품 코드"), "name": str("상품명"), "description": str("설명"), "unitPrice": number("단가"), "active": boolean("활성 여부")}), false, false)
 	add("opportunity:read", "list_opportunities", "영업기회 조회", "접근 가능한 영업기회를 조회합니다.", schema(nil, map[string]any{"query": str("검색어"), "customerId": str("고객 ID"), "status": str("OPEN, WON, LOST"), "limit": integer("최대 결과 수")}), true, false)
 	add("opportunity:read", "get_opportunity", "영업기회 상세", "영업기회와 자동 Health 신호를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("영업기회 ID")}), true, false)
 	oppProps := map[string]any{"name": str("영업기회명"), "customerId": str("고객 ID"), "stageId": str("Stage ID"), "expectedAmount": number("예상 금액"), "expectedCloseDate": str("YYYY-MM-DD"), "nextAction": str("다음 행동"), "nextActionDate": str("YYYY-MM-DD")}
-	add("opportunity:write", "create_opportunity", "영업기회 생성", "새 영업기회를 생성합니다.", schema([]string{"name", "customerId"}, oppProps), false, false)
+	add("customer:read opportunity:read opportunity:write", "create_opportunity", "영업기회 생성", "새 영업기회를 생성합니다.", schema([]string{"name", "customerId"}, oppProps), false, false)
 	updateProps := map[string]any{"id": str("영업기회 ID"), "version": integer("낙관적 잠금 버전")}
 	for k, v := range oppProps {
 		updateProps[k] = v
 	}
-	add("opportunity:write", "update_opportunity", "영업기회 수정", "버전 검사를 적용해 영업기회를 수정합니다.", schema([]string{"id", "version"}, updateProps), false, false)
-	add("opportunity:write", "change_opportunity_stage", "Stage 변경", "영업기회의 Stage를 변경하고 이력을 남깁니다.", schema([]string{"id", "stageId", "version"}, map[string]any{"id": str("영업기회 ID"), "stageId": str("Stage ID"), "version": integer("현재 버전")}), false, false)
+	add("opportunity:read opportunity:write", "update_opportunity", "영업기회 수정", "버전 검사를 적용해 영업기회를 수정합니다.", schema([]string{"id", "version"}, updateProps), false, false)
+	add("opportunity:read opportunity:write", "change_opportunity_stage", "Stage 변경", "영업기회의 Stage를 변경하고 이력을 남깁니다.", schema([]string{"id", "stageId", "version"}, map[string]any{"id": str("영업기회 ID"), "stageId": str("Stage ID"), "version": integer("현재 버전")}), false, false)
 	add("activity:write", "add_activity", "영업활동 등록", "통화, 미팅, 이메일 등 활동을 등록합니다.", schema([]string{"activityType", "subject"}, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "activityType": str("활동 유형"), "subject": str("제목"), "description": str("설명"), "nextAction": str("후속 행동"), "nextActionDate": str("YYYY-MM-DD")}), false, false)
 	add("activity:read", "list_activities", "활동 이력", "고객 또는 영업기회의 최근 활동을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "limit": integer("최대 결과 수")}), true, false)
 	add("opportunity:read", "get_pipeline", "Pipeline 조회", "설정된 Pipeline과 Stage를 조회합니다.", schema(nil, map[string]any{}), true, false)
 	add("forecast:read", "get_forecast", "Forecast 조회", "Commit, Best Case, Pipeline 금액을 조회합니다.", schema(nil, map[string]any{}), true, false)
-	add("sales:read", "get_sales_kpi", "영업 KPI", "매출, 목표 달성률과 Forecast를 조회합니다.", schema(nil, map[string]any{}), true, false)
+	add("sales:read forecast:read", "get_sales_kpi", "영업 KPI", "매출, 목표 달성률과 Forecast를 조회합니다.", schema(nil, map[string]any{}), true, false)
 	add("activity:read", "get_due_actions", "후속활동 조회", "기한이 다가온 후속 작업을 조회합니다.", schema(nil, map[string]any{"days": integer("조회할 일수"), "limit": integer("최대 결과 수")}), true, false)
 	add("opportunity:read", "get_stale_opportunities", "장기 미활동 조회", "30일 이상 활동이 없는 영업기회를 조회합니다.", schema(nil, map[string]any{"limit": integer("최대 결과 수")}), true, false)
 	add("contract:read", "get_contracts", "계약 조회", "접근 가능한 계약을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "limit": integer("최대 결과 수")}), true, false)
+	add("contract:read", "get_contract", "계약 상세", "계약 한 건의 금액, 기간, 갱신 상태와 버전을 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("계약 ID")}), true, false)
 	add("contract:read", "get_expiring_contracts", "만료 계약 조회", "지정 기간 안에 만료되는 계약을 조회합니다.", schema(nil, map[string]any{"days": integer("만료까지의 일수"), "limit": integer("최대 결과 수")}), true, false)
 	add("contract:read", "get_renewal_pipeline", "갱신 영업 조회", "자동 갱신 또는 갱신 대상 계약을 조회합니다.", schema(nil, map[string]any{"days": integer("만료까지의 일수"), "limit": integer("최대 결과 수")}), true, false)
+	add("customer:read contract:read contract:write", "create_contract", "계약 등록", "고객 계약을 DRAFT 또는 ACTIVE 상태로 등록합니다. 영업기회를 연결하면 opportunity:read도 필요합니다.", schema([]string{"customerId", "title", "amount"}, map[string]any{"contractNo": str("계약 번호 · 비우면 자동 생성"), "customerId": str("고객 ID"), "opportunityId": str("연결할 영업기회 ID"), "title": str("계약명"), "amount": number("계약 금액"), "currencyCode": str("ISO 통화 코드 · 기본 KRW"), "exchangeRate": number("KRW 환율"), "startDate": str("YYYY-MM-DD"), "endDate": str("YYYY-MM-DD"), "status": str("DRAFT, ACTIVE"), "autoRenew": boolean("자동 갱신"), "revenueScheduleType": str("ONE_TIME, MONTHLY, QUARTERLY, ANNUAL"), "renewalNoticeDays": integer("갱신 사전 알림 일수"), "renewalAction": str("갱신 계획")}), false, false)
+	add("contract:read contract:write", "activate_contract", "계약 활성화", "DRAFT 계약을 활성화하고 매출 인식 일정을 생성합니다.", schema([]string{"id", "version"}, map[string]any{"id": str("계약 ID"), "version": integer("현재 버전")}), false, false)
+	add("contract:read contract:write", "update_contract_renewal", "계약 갱신 진행 수정", "계약의 갱신 상태와 다음 행동을 버전 검사와 함께 갱신합니다.", schema([]string{"id", "version"}, map[string]any{"id": str("계약 ID"), "renewalStatus": str("NOT_STARTED, PLANNED, IN_PROGRESS, RENEWED, CHURNED"), "renewalAction": str("갱신 다음 행동"), "version": integer("현재 버전")}), false, false)
+	add("contract:read", "list_contract_revenue_schedules", "계약 매출 일정", "계약의 예정·인식 매출 일정을 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("계약 ID")}), true, false)
 	add("forecast:read", "get_win_loss_analysis", "성공·실패 분석", "기간별 Win/Loss 건수, 금액, 승률을 조회합니다.", schema(nil, map[string]any{"months": integer("분석 개월 수")}), true, false)
+	add("opportunity:read forecast:write", "set_forecast_override", "Forecast 조정", "영업기회 담당자의 팀장이 Forecast 범주, 확률 또는 금액을 근거와 함께 조정합니다.", schema([]string{"id", "reason", "version"}, map[string]any{"id": str("영업기회 ID"), "forecastCategory": str("COMMIT, BEST_CASE, PIPELINE, CLOSED"), "probability": number("조정 확률 0~100"), "amount": number("조정 금액"), "reason": str("조정 근거"), "version": integer("기존 조정이 없으면 0")}), false, false)
+	add("report:read opportunity:read forecast:read", "get_sales_report", "영업 종합 보고서", "Dashboard, Forecast, Win/Loss를 한 번에 조회합니다.", schema(nil, map[string]any{"months": integer("Win/Loss 분석 개월 수")}), true, false)
+	add("sales:read", "list_sales", "매출 조회", "인식된 매출 내역을 최신순으로 조회합니다.", schema(nil, map[string]any{"limit": integer("최대 결과 수")}), true, false)
+	add("customer:read sales:write", "create_sale", "매출 등록", "고객의 인식 매출을 날짜와 통화 기준으로 등록합니다.", schema([]string{"customerId", "amount", "recognizedDate"}, map[string]any{"customerId": str("고객 ID"), "contractId": str("계약 ID"), "amount": number("매출 금액"), "currencyCode": str("ISO 통화 코드 · 기본 KRW"), "exchangeRate": number("KRW 환율"), "recognizedDate": str("YYYY-MM-DD"), "description": str("설명")}), false, false)
+	add("target:read", "list_targets", "영업목표 조회", "사용자의 데이터 범위에 해당하는 기간별 영업목표를 조회합니다.", schema(nil, map[string]any{}), true, false)
+	add("target:write", "create_target", "영업목표 등록", "사용자 또는 조직의 기간별 영업목표를 등록합니다.", schema([]string{"periodStart", "periodEnd", "amount"}, map[string]any{"userId": str("대상 사용자 ID · 비우면 본인"), "organizationId": str("대상 조직 ID"), "periodStart": str("YYYY-MM-DD"), "periodEnd": str("YYYY-MM-DD"), "amount": number("목표 금액")}), false, false)
+	add("notification:read", "list_notifications", "알림 조회", "본인의 알림을 읽지 않은 항목만 또는 전체로 조회합니다.", schema(nil, map[string]any{"unreadOnly": boolean("읽지 않은 알림만 조회"), "limit": integer("최대 결과 수")}), true, false)
+	add("notification:write", "mark_notification_read", "알림 읽음 처리", "본인의 알림 한 건을 읽음 처리합니다.", schema([]string{"id"}, map[string]any{"id": str("알림 ID")}), false, false)
 	voiceProps := map[string]any{"customerId": str("고객 ID"), "status": str("RECEIVED, IN_REVIEW, IN_PROGRESS, PENDING_CUSTOMER, RESOLVED, CLOSED, REJECTED"), "voiceType": str("COMPLAINT, REQUEST, INQUIRY, DEFECT, PRAISE, CHURN_RISK"), "severity": str("LOW, NORMAL, HIGH, CRITICAL"), "open": str("true면 미해결 건만"), "overdue": str("true면 응답·해결 기한 초과 건만"), "limit": integer("최대 결과 수")}
 	add("voice:read", "list_customer_voices", "고객 요청 조회", "불만, 요청, 문의와 이탈 징후를 조건으로 조회합니다. 기한 초과 여부가 함께 계산됩니다.", schema(nil, voiceProps), true, false)
 	add("voice:read", "get_customer_voice", "고객 요청 상세", "고객 요청 한 건과 전체 처리 이력을 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 요청 ID")}), true, false)
@@ -470,24 +519,24 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	add("voice:read", "get_overdue_voices", "기한 초과 요청", "응답 또는 해결 기한을 넘긴 미해결 요청만 조회합니다.", schema(nil, map[string]any{"limit": integer("최대 결과 수")}), true, false)
 	add("voice:read", "get_customer_churn_risk", "고객 이탈 위험도", "이탈 징후, 미해결 불만, 미착수 갱신, 접점 공백을 합산한 위험도와 근거를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
 	add("voice:read", "get_top_churn_risks", "이탈 위험 고객 순위", "담당 범위에서 이탈 위험이 높은 고객을 근거와 함께 조회합니다.", schema(nil, map[string]any{"limit": integer("최대 결과 수")}), true, false)
-	add("voice:write", "file_customer_voice", "고객 요청 접수", "고객이 제기한 불만, 요청, 문의를 접수합니다. 유형과 심각도에 따라 응답·해결 기한이 자동 설정됩니다.", schema([]string{"customerId", "voiceType", "title"}, map[string]any{"customerId": str("고객 ID"), "contactId": str("요청 담당자 ID"), "categoryId": str("세부 분류 ID"), "voiceType": str("COMPLAINT, REQUEST, INQUIRY, DEFECT, PRAISE, CHURN_RISK"), "channel": str("PHONE, EMAIL, VISIT, PORTAL, CHAT, PARTNER, OTHER"), "title": str("제목"), "body": str("고객이 말한 내용"), "severity": str("LOW, NORMAL, HIGH, CRITICAL")}), false, false)
-	add("voice:write", "record_voice_response", "고객 응대 기록", "고객에게 안내한 내용이나 내부 확인 사항을 처리 이력에 남깁니다. 고객 응대로 기록하면 응답 기한이 충족됩니다.", schema([]string{"id", "note"}, map[string]any{"id": str("고객 요청 ID"), "note": str("기록할 내용"), "eventType": str("CUSTOMER_CONTACT, COMMENT, ESCALATED")}), false, false)
-	add("voice:write", "progress_customer_voice", "고객 요청 상태 변경", "요청 상태를 진행, 해결 등으로 변경합니다. 해결로 변경할 때는 해결 내용이 반드시 필요합니다.", schema([]string{"id", "status", "version"}, map[string]any{"id": str("고객 요청 ID"), "status": str("IN_REVIEW, IN_PROGRESS, PENDING_CUSTOMER, RESOLVED, CLOSED, REJECTED"), "version": integer("현재 버전"), "resolution": str("해결 내용 · RESOLVED로 변경할 때 필수"), "rootCause": str("근본 원인"), "preventiveAction": str("재발 방지 조치"), "note": str("변경 사유")}), false, false)
+	add("customer:read voice:read voice:write", "file_customer_voice", "고객 요청 접수", "고객이 제기한 불만, 요청, 문의를 접수합니다. 유형과 심각도에 따라 응답·해결 기한이 자동 설정됩니다.", schema([]string{"customerId", "voiceType", "title"}, map[string]any{"customerId": str("고객 ID"), "contactId": str("요청 담당자 ID"), "categoryId": str("세부 분류 ID"), "voiceType": str("COMPLAINT, REQUEST, INQUIRY, DEFECT, PRAISE, CHURN_RISK"), "channel": str("PHONE, EMAIL, VISIT, PORTAL, CHAT, PARTNER, OTHER"), "title": str("제목"), "body": str("고객이 말한 내용"), "severity": str("LOW, NORMAL, HIGH, CRITICAL")}), false, false)
+	add("voice:read voice:write", "record_voice_response", "고객 응대 기록", "고객에게 안내한 내용이나 내부 확인 사항을 처리 이력에 남깁니다. 고객 응대로 기록하면 응답 기한이 충족됩니다.", schema([]string{"id", "note"}, map[string]any{"id": str("고객 요청 ID"), "note": str("기록할 내용"), "eventType": str("CUSTOMER_CONTACT, COMMENT, ESCALATED")}), false, false)
+	add("voice:read voice:write", "progress_customer_voice", "고객 요청 상태 변경", "요청 상태를 진행, 해결 등으로 변경합니다. 해결로 변경할 때는 해결 내용이 반드시 필요합니다.", schema([]string{"id", "status", "version"}, map[string]any{"id": str("고객 요청 ID"), "status": str("IN_REVIEW, IN_PROGRESS, PENDING_CUSTOMER, RESOLVED, CLOSED, REJECTED"), "version": integer("현재 버전"), "resolution": str("해결 내용 · RESOLVED로 변경할 때 필수"), "rootCause": str("근본 원인"), "preventiveAction": str("재발 방지 조치"), "note": str("변경 사유")}), false, false)
 	add("voice:read", "get_voice_categories", "요청 유형 조회", "접수 가능한 요청 유형과 응답·해결 목표 시간을 조회합니다.", schema(nil, map[string]any{}), true, false)
 	add("intelligence:read", "get_customer_signals", "고객 Signal 조회", "고객에게서 감지된 변화(접촉 공백, 정체, 만료 임박, 긍정 신호)를 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID · 비우면 담당 범위 전체"), "severity": str("LOW, MEDIUM, HIGH, CRITICAL"), "sentiment": str("POSITIVE, NEGATIVE, NEUTRAL"), "signalType": str("NO_CONTACT, DEAL_STALLED, CRITICAL_VOC, CONTRACT_EXPIRING, DECISION_MAKER_MISSING, ENGAGEMENT_INCREASE, QUOTE_REQUESTED, CLOSE_DATE_PASSED"), "limit": integer("최대 결과 수")}), true, false)
 	add("intelligence:read", "get_customer_risks", "고객 Risk 조회", "0~100 점수로 정량화된 관계, 갱신, VOC, Deal 위험을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID · 비우면 담당 범위 전체"), "riskType": str("RELATIONSHIP_RISK, RENEWAL_RISK, VOC_RISK, DEAL_RISK"), "minScore": integer("최소 위험 점수"), "limit": integer("최대 결과 수")}), true, false)
 	add("intelligence:read", "get_deal_insights", "Deal Insight 조회", "여러 신호를 묶어 사람이 읽을 수 있게 요약한 분석을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "limit": integer("최대 결과 수")}), true, false)
 	add("intelligence:read", "get_recommendations", "추천 행동 조회", "위험과 신호에서 도출된 다음 행동 추천을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "mine": str("true면 본인에게 배정된 추천만"), "priority": str("LOW, MEDIUM, HIGH"), "status": str("OPEN, ACCEPTED, DISMISSED, COMPLETED, ALL"), "limit": integer("최대 결과 수")}), true, false)
 	add("intelligence:read", "explain_risk", "Risk 근거 설명", "위험 점수를 구성한 요인과 점수 배분, 관련 Signal을 설명합니다.", schema([]string{"id"}, map[string]any{"id": str("Risk ID")}), true, false)
-	add("intelligence:write", "accept_recommendation", "추천 수락", "추천을 수락해 담당자와 기한이 있는 Task로 전환합니다.", schema([]string{"id"}, map[string]any{"id": str("추천 ID"), "assigneeId": str("담당자 ID · 비우면 고객 담당자"), "dueDate": str("YYYY-MM-DD")}), false, false)
-	add("intelligence:write", "dismiss_recommendation", "추천 무시", "추천이 적절하지 않은 이유를 남기고 무시 처리합니다.", schema([]string{"id", "reason"}, map[string]any{"id": str("추천 ID"), "reason": str("무시 사유")}), false, false)
+	add("intelligence:read intelligence:write", "accept_recommendation", "추천 수락", "추천을 수락해 담당자와 기한이 있는 Task로 전환합니다.", schema([]string{"id"}, map[string]any{"id": str("추천 ID"), "assigneeId": str("담당자 ID · 비우면 고객 담당자"), "dueDate": str("YYYY-MM-DD")}), false, false)
+	add("intelligence:read intelligence:write", "dismiss_recommendation", "추천 무시", "추천이 적절하지 않은 이유를 남기고 무시 처리합니다.", schema([]string{"id", "reason"}, map[string]any{"id": str("추천 ID"), "reason": str("무시 사유")}), false, false)
 	add("customer:read contact:read opportunity:read activity:read", "get_account_brief", "고객 종합 브리핑", "Customer 360, 관계망, 전략 Account Plan을 미팅 준비용 브리핑으로 제공합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID"), "year": integer("Account Plan 연도")}), true, false)
 	add("customer:read contact:read", "get_account_relationships", "고객 관계망", "고객 담당자의 의사결정 역할, 영향력과 연결 관계를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
 	add("customer:read", "get_account_plan", "Account Plan", "전략 고객의 목표, 전략, 경쟁사, 위험과 White Space를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID"), "year": integer("계획 연도")}), true, false)
 	add("customer:read", "find_cross_sell_opportunities", "Cross-sell 기회", "Account Plan의 미제안 또는 탐색 중 White Space를 찾습니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID"), "year": integer("계획 연도")}), true, false)
-	add("customer:write", "build_account_plan", "Account Plan 저장", "전략 고객 목표, 영업 전략과 White Space 계획을 생성하거나 갱신합니다.", schema([]string{"id", "planYear", "status", "version"}, map[string]any{"id": str("고객 ID"), "planYear": integer("계획 연도"), "status": str("DRAFT, ACTIVE, ARCHIVED"), "strategy": str("영업 전략"), "customerGoals": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "strategicInitiatives": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "ourObjectives": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "whiteSpaces": map[string]any{"type": "array", "items": map[string]any{"type": "object"}}, "competitors": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "risks": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "targetRevenue": number("목표 매출"), "potentialRevenue": number("잠재 매출"), "version": integer("낙관적 잠금 버전")}), false, false)
+	add("customer:read customer:write", "build_account_plan", "Account Plan 저장", "전략 고객 목표, 영업 전략과 White Space 계획을 생성하거나 갱신합니다.", schema([]string{"id", "planYear", "status", "version"}, map[string]any{"id": str("고객 ID"), "planYear": integer("계획 연도"), "status": str("DRAFT, ACTIVE, ARCHIVED"), "strategy": str("영업 전략"), "customerGoals": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "strategicInitiatives": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "ourObjectives": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "whiteSpaces": map[string]any{"type": "array", "items": map[string]any{"type": "object"}}, "competitors": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "risks": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "targetRevenue": number("목표 매출"), "potentialRevenue": number("잠재 매출"), "version": integer("낙관적 잠금 버전")}), false, false)
 	add("opportunity:read", "get_opportunity_team", "Opportunity Team", "Owner 이외의 Presales, Manager, Legal 등 협업 구성원을 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("Opportunity ID")}), true, false)
-	add("opportunity:write", "add_opportunity_member", "Opportunity Team 구성", "관리자 정책에 허용된 역할로 협업 구성원을 추가하거나 갱신합니다.", schema([]string{"id", "userId", "role", "version"}, map[string]any{"id": str("Opportunity ID"), "userId": str("사용자 ID"), "role": str("협업 역할"), "responsibility": str("담당 책임"), "version": integer("낙관적 잠금 버전")}), false, false)
+	add("opportunity:read opportunity:write", "add_opportunity_member", "Opportunity Team 구성", "관리자 정책에 허용된 역할로 협업 구성원을 추가하거나 갱신합니다.", schema([]string{"id", "userId", "role", "version"}, map[string]any{"id": str("Opportunity ID"), "userId": str("사용자 ID"), "role": str("협업 역할"), "responsibility": str("담당 책임"), "version": integer("낙관적 잠금 버전")}), false, false)
 	add("opportunity:read", "find_deals_at_risk", "위험 Deal 탐지", "설명 가능한 규칙으로 위험 점수 이상의 영업건을 찾습니다.", schema(nil, map[string]any{"minimum": integer("최소 위험 점수"), "limit": integer("최대 결과 수")}), true, false)
 	add("opportunity:read", "explain_deal_risk", "Deal 위험 설명", "위험 점수, 근거, 권장 행동과 최근 변화를 설명합니다.", schema([]string{"id"}, map[string]any{"id": str("Opportunity ID"), "days": integer("변화 분석 기간")}), true, false)
 	add("opportunity:read", "recommend_next_actions", "다음 행동 추천", "Deal Health와 Stage Playbook을 결합해 다음 행동을 추천합니다.", schema([]string{"id"}, map[string]any{"id": str("Opportunity ID")}), true, false)
@@ -495,12 +544,26 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	add("forecast:read", "explain_forecast_change", "Forecast 변화 설명", "Snapshot을 비교해 신규, Lost, 금액 증감과 Slippage를 설명합니다.", schema(nil, map[string]any{"days": integer("비교 기간")}), true, false)
 	add("opportunity:read", "get_sales_coaching_insights", "영업 Coaching", "담당자별 위험 Deal과 실행 공백을 팀장 Coaching 관점으로 제공합니다.", schema(nil, map[string]any{}), true, false)
 	add("opportunity:read", "get_manager_review_queue", "팀장 검토 Queue", "위험도가 높은 영업건을 우선순위 순으로 제공합니다.", schema(nil, map[string]any{"minimum": integer("최소 위험 점수"), "limit": integer("최대 결과 수")}), true, false)
-	add("quotation:write", "create_quotation", "견적 생성", "고객 또는 영업기회에 견적 초안을 생성합니다.", schema([]string{"customerId", "title", "amount"}, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "title": str("견적 제목"), "amount": number("견적 금액"), "discountPercent": number("할인율"), "validUntil": str("YYYY-MM-DD")}), false, false)
+	add("quotation:read", "list_quotations", "견적 조회", "고객별 또는 전체 견적을 최신순으로 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "limit": integer("최대 결과 수")}), true, false)
+	add("customer:read quotation:write", "create_quotation", "견적 생성", "고객 또는 영업기회에 견적 초안을 생성합니다.", schema([]string{"customerId", "title", "amount"}, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "title": str("견적 제목"), "amount": number("견적 금액"), "currencyCode": str("ISO 통화 코드 · 기본 KRW"), "exchangeRate": number("KRW 환율"), "discountPercent": number("할인율"), "validUntil": str("YYYY-MM-DD")}), false, false)
 	if s.approvalsEnabled(ctx) {
 		add("approval:request", "submit_approval", "승인 요청", "적용되는 정책에 따라 팀장 승인을 요청합니다.", schema([]string{"entityType", "entityId"}, map[string]any{"entityType": str("OPPORTUNITY, QUOTATION, CONTRACT, CUSTOMER"), "entityId": str("대상 ID"), "reason": str("요청 사유")}), false, false)
 		add("approval:request", "get_approval_status", "승인 상태", "승인 요청 상태를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("승인 요청 ID")}), true, false)
 		add("approval:approve", "approve_request", "승인", "고위험 권한으로 승인 요청을 승인합니다.", schema([]string{"id", "version"}, map[string]any{"id": str("승인 요청 ID"), "version": integer("현재 버전"), "comment": str("검토 의견")}), false, true)
 		add("approval:approve", "reject_request", "반려", "고위험 권한으로 승인 요청을 반려합니다.", schema([]string{"id", "version", "comment"}, map[string]any{"id": str("승인 요청 ID"), "version": integer("현재 버전"), "comment": str("반려 사유")}), false, true)
+	}
+	return out
+}
+
+// ToolCatalog returns the exact tool set available under the current user's
+// permissions and the administrator allowlist. A key's own scopes are applied
+// by the UI (and again by authentication when tools/list is called).
+func (s *Server) ToolCatalog(ctx context.Context, p *auth.Principal) []ToolCatalogItem {
+	items := s.tools(ctx, p)
+	out := make([]ToolCatalogItem, 0, len(items))
+	for _, item := range items {
+		readOnly, _ := item.Annotations["readOnlyHint"].(bool)
+		out = append(out, ToolCatalogItem{Name: item.Name, Title: item.Title, RequiredScopes: item.RequiredScopes, ReadOnly: readOnly})
 	}
 	return out
 }
@@ -519,6 +582,13 @@ func intArg(args map[string]any, key string, fallback int) int {
 	return fallback
 }
 func strArg(args map[string]any, key string) string { v, _ := args[key].(string); return v }
+func boolArg(args map[string]any, key string, fallback bool) bool {
+	v, ok := args[key].(bool)
+	if !ok {
+		return fallback
+	}
+	return v
+}
 func toolResult(v any) map[string]any {
 	b, _ := json.Marshal(v)
 	return map[string]any{"content": []map[string]any{{"type": "text", "text": string(b)}}, "structuredContent": v, "isError": false}
@@ -545,7 +615,14 @@ func toolFailure(err error) map[string]any {
 	}
 }
 func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall, r *http.Request) (any, error) {
-	if !s.toolAllowed(ctx, call.Name) {
+	permitted := false
+	for _, available := range s.tools(ctx, p) {
+		if available.Name == call.Name {
+			permitted = true
+			break
+		}
+	}
+	if !permitted {
 		return nil, fmt.Errorf("%w: %s", errUnknownTool, call.Name)
 	}
 	a := call.Arguments
@@ -559,8 +636,63 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 		v, err = s.CRM.GetCustomer(ctx, p, strArg(a, "id"))
 	case "get_customer_360":
 		v, err = s.CRM.Customer360(ctx, p, strArg(a, "id"))
+	case "create_customer":
+		var in crm.CustomerInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.CreateCustomer(ctx, p, in, meta)
+		}
+	case "update_customer":
+		var before crm.Customer
+		before, err = s.CRM.GetCustomer(ctx, p, strArg(a, "id"))
+		if err == nil {
+			in := crm.CustomerInput{Name: before.Name, RegistrationNo: before.RegistrationNo, CustomerType: before.CustomerType, Grade: before.Grade, Industry: before.Industry, Website: before.Website, Phone: before.Phone, Email: before.Email, Address: before.Address, OwnerID: before.OwnerID, Health: before.Health, AnnualRevenue: before.AnnualRevenue, EmployeeCount: before.EmployeeCount, CustomFields: before.CustomFields, Version: before.Version}
+			err = decodeArgs(a, &in)
+			if err == nil {
+				v, err = s.CRM.UpdateCustomer(ctx, p, before.ID, in, meta)
+			}
+		}
+	case "delete_customer":
+		v, err = s.CRM.DeleteCustomer(ctx, p, strArg(a, "id"), meta)
 	case "search_contacts":
 		v, err = s.CRM.SearchContacts(ctx, p, strArg(a, "query"), strArg(a, "customerId"), intArg(a, "limit", 50))
+	case "get_contact":
+		v, err = s.CRM.GetContact(ctx, p, strArg(a, "id"))
+	case "create_contact":
+		var in crm.ContactInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.CreateContact(ctx, p, in, meta)
+		}
+	case "update_contact":
+		var before crm.Contact
+		before, err = s.CRM.GetContact(ctx, p, strArg(a, "id"))
+		if err == nil {
+			strength, power := before.RelationshipStrength, before.DecisionPower
+			in := crm.ContactInput{CustomerID: before.CustomerID, Name: before.Name, Title: before.Title, Department: before.Department, Email: before.Email, Phone: before.Phone, Mobile: before.Mobile, DecisionMaker: before.DecisionMaker, PrimaryContact: before.PrimaryContact, RelationshipRole: before.RelationshipRole, Influence: before.Influence, Sentiment: before.Sentiment, RelationshipStrength: &strength, DecisionPower: &power}
+			err = decodeArgs(a, &in)
+			if err == nil {
+				v, err = s.CRM.UpdateContact(ctx, p, before.ID, in, meta)
+			}
+		}
+	case "delete_contact":
+		v, err = s.CRM.DeleteContact(ctx, p, strArg(a, "id"), meta)
+	case "list_leads":
+		v, err = s.CRM.ListLeads(ctx, p, strArg(a, "query"), intArg(a, "limit", 50))
+	case "create_lead":
+		var in crm.LeadInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.CreateLead(ctx, p, in, meta)
+		}
+	case "list_products":
+		v, err = s.CRM.ListProducts(ctx, p, strArg(a, "query"), intArg(a, "limit", 100))
+	case "create_product":
+		var in crm.ProductInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.CreateProduct(ctx, p, in, meta)
+		}
 	case "list_opportunities":
 		v, err = s.CRM.ListOpportunities(ctx, p, crm.OpportunityFilter{Query: strArg(a, "query"), CustomerID: strArg(a, "customerId"), Status: strArg(a, "status"), Limit: intArg(a, "limit", 50)})
 	case "get_opportunity":
@@ -599,12 +731,67 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 		v, err = s.CRM.ListOpportunities(ctx, p, crm.OpportunityFilter{StaleOnly: true, Limit: intArg(a, "limit", 50)})
 	case "get_contracts":
 		v, err = s.CRM.Contracts(ctx, p, strArg(a, "customerId"), 0, false, intArg(a, "limit", 50))
+	case "get_contract":
+		v, err = s.CRM.GetContract(ctx, p, strArg(a, "id"))
 	case "get_expiring_contracts":
 		v, err = s.CRM.Contracts(ctx, p, "", intArg(a, "days", 90), false, intArg(a, "limit", 50))
 	case "get_renewal_pipeline":
 		v, err = s.CRM.Contracts(ctx, p, "", intArg(a, "days", 180), true, intArg(a, "limit", 50))
+	case "create_contract":
+		var in crm.ContractInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.CreateContract(ctx, p, in, meta)
+		}
+	case "activate_contract":
+		v, err = s.CRM.ActivateContract(ctx, p, strArg(a, "id"), intArg(a, "version", 0), meta)
+	case "update_contract_renewal":
+		v, err = s.CRM.UpdateContractRenewal(ctx, p, strArg(a, "id"), strArg(a, "renewalStatus"), strArg(a, "renewalAction"), intArg(a, "version", 0), meta)
+	case "list_contract_revenue_schedules":
+		v, err = s.CRM.ListRevenueSchedules(ctx, p, strArg(a, "id"))
 	case "get_win_loss_analysis":
 		v, err = s.CRM.WinLossAnalysis(ctx, p, intArg(a, "months", 12))
+	case "set_forecast_override":
+		var in intelligence.ForecastOverrideInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.Intelligence.SaveForecastOverride(ctx, p, strArg(a, "id"), in, meta)
+		}
+	case "get_sales_report":
+		var dashboard, forecast, winLoss any
+		dashboard, err = s.CRM.Dashboard(ctx, p)
+		if err == nil {
+			forecast, err = s.CRM.Forecast(ctx, p)
+		}
+		if err == nil {
+			winLoss, err = s.CRM.WinLossAnalysis(ctx, p, intArg(a, "months", 12))
+		}
+		if err == nil {
+			v = map[string]any{"dashboard": dashboard, "forecast": forecast, "winLoss": winLoss}
+		}
+	case "list_sales":
+		v, err = s.CRM.ListSales(ctx, p, intArg(a, "limit", 100))
+	case "create_sale":
+		var in crm.SaleInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.CreateSale(ctx, p, in, meta)
+		}
+	case "list_targets":
+		v, err = s.CRM.ListTargets(ctx, p)
+	case "create_target":
+		var in crm.TargetInput
+		err = decodeArgs(a, &in)
+		if err == nil {
+			v, err = s.CRM.CreateTarget(ctx, p, in, meta)
+		}
+	case "list_notifications":
+		v, err = s.CRM.Notifications(ctx, p, boolArg(a, "unreadOnly", false), intArg(a, "limit", 100))
+	case "mark_notification_read":
+		err = s.CRM.ReadNotification(ctx, p, strArg(a, "id"), meta)
+		if err == nil {
+			v = map[string]any{"id": strArg(a, "id"), "read": true}
+		}
 	case "list_customer_voices":
 		v, err = s.Voices.List(ctx, p, voice.Query{CustomerID: strArg(a, "customerId"), Status: strArg(a, "status"),
 			VoiceType: strArg(a, "voiceType"), Severity: strArg(a, "severity"),
@@ -724,6 +911,8 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 		if err == nil {
 			v, err = s.CRM.CreateQuotation(ctx, p, in, meta)
 		}
+	case "list_quotations":
+		v, err = s.CRM.ListQuotations(ctx, p, strArg(a, "customerId"), intArg(a, "limit", 50))
 	case "submit_approval":
 		v, err = s.Approvals.Submit(ctx, p, strArg(a, "entityType"), strArg(a, "entityId"), strArg(a, "reason"), meta.IP, meta.RequestID, meta.UserAgent)
 	case "get_approval_status":

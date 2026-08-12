@@ -26,3 +26,11 @@ func TestAllowedScopesForBootstrapIncludesMCP(t *testing.T) {
 		t.Fatalf("bootstrap scopes were unexpectedly filtered: %#v", scopes)
 	}
 }
+
+func TestAllowedScopesIncludeAllPersonalKeyCRMCapabilities(t *testing.T) {
+	for _, scope := range []string{"forecast:write", "voice:read", "voice:write"} {
+		if !includes(AllowedScopes, scope) {
+			t.Fatalf("%s must be delegable to a personal key", scope)
+		}
+	}
+}

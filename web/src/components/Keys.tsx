@@ -12,6 +12,13 @@ import type { PersonalKey } from '../types'
 
 type Notify = (m: string, e?: boolean) => void
 
+export type McpToolCatalog = {
+  name: string
+  title: string
+  requiredScopes: string[]
+  readOnly: boolean
+}
+
 const domainNames: Record<string, string> = {
   customer: '고객', contact: '담당자', lead: 'Lead', opportunity: '영업기회',
   activity: '영업활동', product: '상품', quotation: '견적', contract: '계약',
@@ -51,8 +58,8 @@ const presets = [
   { key: 'minimal', label: '최소 권한', hint: '고객 조회만 허용합니다', pick: (all: string[]) => all.filter(s => s === 'customer:read') },
 ]
 
-export function KeyModal({ scopes, onClose, onCreated, onUpdated, notify, editing }: {
-  scopes: string[]; onClose: () => void; onCreated?: (secret: string) => void; onUpdated?: () => void; notify: Notify; editing?: PersonalKey
+export function KeyModal({ scopes, tools, onClose, onCreated, onUpdated, notify, editing }: {
+  scopes: string[]; tools: McpToolCatalog[]; onClose: () => void; onCreated?: (secret: string) => void; onUpdated?: () => void; notify: Notify; editing?: PersonalKey
 }) {
   const defaultScopes = ['customer:read', 'opportunity:read', 'activity:read', 'forecast:read', CHANNEL_SCOPE]
   const editableInitial = editing?.scopes.filter(scope => scopes.includes(scope))
@@ -85,6 +92,7 @@ export function KeyModal({ scopes, onClose, onCreated, onUpdated, notify, editin
   const writable = dataScopes.filter(isWriteScope)
   const chosenData = selected.filter(s => s !== CHANNEL_SCOPE)
   const writeCount = chosenData.filter(isWriteScope).length
+  const selectedMcpTools = mcp ? tools.filter(tool => tool.requiredScopes.every(has)) : []
   const missingChannelScope = mcp && !has(CHANNEL_SCOPE)
   const unavailableCount = editing ? editing.scopes.filter(scope => !scopes.includes(scope)).length : 0
 
@@ -170,10 +178,14 @@ export function KeyModal({ scopes, onClose, onCreated, onUpdated, notify, editin
                 <small>{list.filter(has).length}/{list.length}</small>
               </div>
               <div className="scope-items">
-                {list.map(scope => <label key={scope} className={`scope-item ${isWriteScope(scope) ? 'is-write' : ''}`}>
+                {list.map(scope => {
+                  const linkedTools = tools.filter(tool => tool.requiredScopes.includes(scope)).length
+                  return <label key={scope} className={`scope-item ${isWriteScope(scope) ? 'is-write' : ''}`}>
                   <input type="checkbox" checked={has(scope)} onChange={e => toggle(scope, e.target.checked)} />
-                  <span><b>{actionNames[scopeAction(scope)] || scopeAction(scope)}</b><code>{scope}</code></span>
-                </label>)}
+                  <span><b>{actionNames[scopeAction(scope)] || scopeAction(scope)}</b><code>{scope}</code>
+                    <em className={linkedTools ? 'scope-mcp-count' : 'scope-rest-only'}>{linkedTools ? `MCP 연계 ${linkedTools}` : 'REST 전용'}</em>
+                  </span>
+                </label>})}
               </div>
             </div>
           })}
@@ -182,7 +194,11 @@ export function KeyModal({ scopes, onClose, onCreated, onUpdated, notify, editin
         <div className="scope-summary">
           <b>{chosenData.length}개 선택됨</b>
           <span>{writeCount > 0 ? `이 중 ${writeCount}개는 데이터를 변경할 수 있습니다.` : '조회 전용입니다. 데이터를 변경할 수 없습니다.'}</span>
+          {mcp && <strong>MCP 도구 {selectedMcpTools.length}개 노출</strong>}
         </div>
+        {mcp && selectedMcpTools.length === 0 && <p className="field-note warn">
+          현재 선택 조합으로 노출되는 MCP 도구가 없습니다. 각 도구에 필요한 Scope를 함께 선택하거나 관리자 Tool 허용목록을 확인하세요.
+        </p>}
         {missingChannelScope && <p className="field-note warn">
           MCP 채널을 사용하려면 <code>mcp:use</code>가 필요합니다. 발급 시 자동으로 포함됩니다.
         </p>}
@@ -293,7 +309,7 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
         <p className="muted-copy">노출되는 도구는 <b>키 Scope</b> ∩ <b>사용자 권한</b> ∩ <b>관리자 Tool 허용목록</b>입니다. 세 가지 중 하나라도 빠지면 도구 목록에 나타나지 않으며, 호출해도 거부됩니다.</p>
         <div className="info-list">
           <div><span>조회 도구</span><b>고객, 담당자, 영업기회, 활동, 계약, Forecast, 고객의 목소리, 위험 분석</b></div>
-          <div><span>기록 도구</span><b>영업기회 생성·수정, 활동 등록, 견적 생성, 요청 접수, 추천 수락</b></div>
+          <div><span>기록 도구</span><b>고객·담당자·Lead·영업기회·활동·견적·계약·매출·목표 등록 및 업무 상태 수정</b></div>
           <div><span>데이터 범위</span><b>화면과 동일하게 적용됩니다. MCP로 넓어지지 않습니다.</b></div>
         </div>
         <p className="muted-copy">모든 호출은 감사 로그와 MCP 요청 로그에 남습니다.</p>

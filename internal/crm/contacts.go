@@ -163,6 +163,16 @@ func (s *Service) contact(ctx context.Context, p *auth.Principal, id string) (Co
 	return Contact{}, errors.New("contact not found")
 }
 
+// GetContact exposes the same scoped lookup used by update/delete to API and
+// MCP adapters. Keeping one lookup path prevents an agent from seeing a contact
+// that the interactive CRM would hide.
+func (s *Service) GetContact(ctx context.Context, p *auth.Principal, id string) (Contact, error) {
+	if err := auth.Require(p, "contact:read"); err != nil {
+		return Contact{}, err
+	}
+	return s.contact(ctx, p, id)
+}
+
 // DeleteCustomer removes a customer that has no history, and deactivates one
 // that does. Opportunities, contracts and requests are the record of what
 // happened with an account, so they are never silently discarded.

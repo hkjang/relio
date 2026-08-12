@@ -3,7 +3,7 @@ import { api, date, money, number, relative } from '../api'
 import { initials, label } from '../labels'
 import { Activity, PersonalKey, User, Version } from '../types'
 import Layout, { Empty, Modal, Spinner, Status, navigate } from '../components/Layout'
-import { KeyModal, McpGuideModal } from '../components/Keys'
+import { KeyModal, McpGuideModal, McpToolCatalog } from '../components/Keys'
 import { errorMessage } from '../App'
 import { SavedView } from '../components/SavedViews'
 import { activityIcon } from '../labels'
@@ -19,12 +19,13 @@ function Profile(props:Props){return <Frame {...props} title="내 프로필" sub
 function Keys(props: Props) {
   const [items, setItems] = useState<PersonalKey[]>([])
   const [scopes, setScopes] = useState<string[]>([])
+  const [mcpTools, setMcpTools] = useState<McpToolCatalog[]>([])
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<PersonalKey | null>(null)
   const [guide, setGuide] = useState(false)
   const [secret, setSecret] = useState('')
-  const load = () => api<{items: PersonalKey[]; allowedScopes: string[]}>('/api/v1/me/keys')
-    .then(v => { setItems(v.items); setScopes(v.allowedScopes) })
+  const load = () => api<{items: PersonalKey[]; allowedScopes: string[]; mcpTools: McpToolCatalog[]}>('/api/v1/me/keys')
+    .then(v => { setItems(v.items); setScopes(v.allowedScopes); setMcpTools(v.mcpTools || []) })
     .catch(e => props.notify(errorMessage(e), true))
   useEffect(() => { void load() }, [])
 
@@ -50,10 +51,10 @@ function Keys(props: Props) {
     actions={<><button className="btn btn-secondary" onClick={() => setGuide(true)}>MCP 사용 안내</button><button className="btn btn-primary" onClick={() => setModal(true)}>＋ 새 키 발급</button></>}>
     <div className="key-security"><span>⌁</span><div><b>Secret은 그대로 두고 권한만 변경할 수 있습니다</b><p>원본 Secret은 발급 직후 한 번만 표시되며, 권한 변경은 다음 API·MCP 요청부터 즉시 적용됩니다.</p></div></div>
     <section className="panel table-panel">{items.length ? <table><thead><tr><th>이름 · 키 ID</th><th>채널</th><th>범위</th><th>상태</th><th>만료일</th><th>최근 사용</th><th/></tr></thead><tbody>
-      {items.map(k => <tr key={k.id}><td><b>{k.name}</b><code className="key-id">relio_{k.keyId}_••••••</code></td><td>{k.channels.map(c => <Status key={c} value={c}/>)}</td><td title={k.scopes.join(', ')}><span className="scope-count">{k.scopes.length} scopes</span><small className="table-sub scope-preview">{k.scopes.slice(0, 2).join(', ')}</small></td><td><Status value={k.status}/>{k.graceExpiresAt && <small className="table-sub">Grace {date(k.graceExpiresAt)}</small>}</td><td>{date(k.expiresAt)}</td><td>{k.lastUsedAt ? <>{relative(k.lastUsedAt)}<small className="table-sub">{k.lastUsedIp}</small></> : '사용 안 함'}</td><td><div className="row-menu"><button onClick={() => setEditing(k)} disabled={k.status !== 'ACTIVE'}>권한</button><button onClick={() => rotate(k.id)} disabled={k.status !== 'ACTIVE'}>회전</button><button className="danger" onClick={() => revoke(k.id)} disabled={k.status === 'REVOKED'}>폐기</button></div></td></tr>)}
+      {items.map(k => { const toolCount = k.channels.includes('MCP') ? mcpTools.filter(tool => tool.requiredScopes.every(scope => k.scopes.includes(scope))).length : 0; return <tr key={k.id}><td><b>{k.name}</b><code className="key-id">relio_{k.keyId}_••••••</code></td><td>{k.channels.map(c => <Status key={c} value={c}/>)}</td><td title={k.scopes.join(', ')}><span className="scope-count">{k.scopes.length} scopes</span>{k.channels.includes('MCP') && <small className="table-sub mcp-tool-count">MCP 도구 {toolCount}개</small>}<small className="table-sub scope-preview">{k.scopes.slice(0, 2).join(', ')}</small></td><td><Status value={k.status}/>{k.graceExpiresAt && <small className="table-sub">Grace {date(k.graceExpiresAt)}</small>}</td><td>{date(k.expiresAt)}</td><td>{k.lastUsedAt ? <>{relative(k.lastUsedAt)}<small className="table-sub">{k.lastUsedIp}</small></> : '사용 안 함'}</td><td><div className="row-menu"><button onClick={() => setEditing(k)} disabled={k.status !== 'ACTIVE'}>권한</button><button onClick={() => rotate(k.id)} disabled={k.status !== 'ACTIVE'}>회전</button><button className="danger" onClick={() => revoke(k.id)} disabled={k.status === 'REVOKED'}>폐기</button></div></td></tr> })}
     </tbody></table> : <Empty icon="⌁" title="발급된 개인 키가 없습니다" description="REST API 또는 MCP에서 사용할 첫 키를 발급하세요." action={<button className="btn btn-primary" onClick={() => setModal(true)}>키 발급</button>}/>}</section>
-    {modal && <KeyModal scopes={scopes} onClose={() => setModal(false)} onCreated={v => { setModal(false); setSecret(v); load() }} notify={props.notify}/>}
-    {editing && <KeyModal scopes={scopes} editing={editing} onClose={() => setEditing(null)} onUpdated={() => { setEditing(null); load() }} notify={props.notify}/>}
+    {modal && <KeyModal scopes={scopes} tools={mcpTools} onClose={() => setModal(false)} onCreated={v => { setModal(false); setSecret(v); load() }} notify={props.notify}/>}
+    {editing && <KeyModal scopes={scopes} tools={mcpTools} editing={editing} onClose={() => setEditing(null)} onUpdated={() => { setEditing(null); load() }} notify={props.notify}/>}
     {secret && <SecretModal secret={secret} onClose={() => setSecret('')} notify={props.notify}/>}
     {guide && <McpGuideModal onClose={() => setGuide(false)}/>}
   </Frame>

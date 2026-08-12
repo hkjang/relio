@@ -14,7 +14,11 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 		s.serviceError(w, r, err)
 		return
 	}
-	httpx.JSON(w, 200, map[string]any{"items": v, "allowedScopes": apikey.AllowedScopesFor(principal(r))})
+	httpx.JSON(w, 200, map[string]any{
+		"items":         v,
+		"allowedScopes": apikey.AllowedScopesFor(principal(r)),
+		"mcpTools":      s.MCP.ToolCatalog(r.Context(), principal(r)),
+	})
 }
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	var in apikey.CreateInput
