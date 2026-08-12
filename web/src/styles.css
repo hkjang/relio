@@ -135,3 +135,17 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .timeline.compact .timeline-item{padding-bottom:14px}
 .timeline.compact .timeline-item b{font-size:14px}
 .waterfall{display:grid;gap:8px;margin-top:12px}
+
+/* Overlay surfaces have to scroll inside themselves. A drawer is a flex column
+   whose body was `flex:0 1 auto` with the default `min-height:auto`, so it
+   refused to shrink below its content: the surface grew past the viewport and
+   everything below the fold was unreachable, with no scrollbar to reach it. The
+   backdrop's implicit grid row also sized to content, letting the surface grow
+   past `inset:0`. Both are clamped here. */
+.drawer-backdrop{grid-template-rows:minmax(0,1fr);grid-template-columns:minmax(0,1fr)}
+.drawer{max-height:100%;min-height:0}
+.drawer-head,.drawer-actions{flex:none}
+.drawer-body{flex:1 1 auto;min-height:0;overscroll-behavior:contain}
+/* A long form scrolled its own title out of view, so the head stays put. */
+.modal{overscroll-behavior:contain}
+.modal-head{position:sticky;top:0;z-index:2;background:#fff;border-radius:15px 15px 0 0}

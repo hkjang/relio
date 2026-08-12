@@ -14,6 +14,9 @@ type Runner struct {
 	Log        *slog.Logger
 	InstanceID string
 	Snapshot   func(context.Context) error
+	// Analyze rebuilds signals, risks and recommendations. It throttles itself
+	// on the last completed run, so calling it every tick is safe.
+	Analyze func(context.Context) error
 }
 
 func New(db *pgxpool.Pool, log *slog.Logger) *Runner {
@@ -52,6 +55,11 @@ func (r *Runner) maintenance(ctx context.Context) {
 	if r.Snapshot != nil {
 		if err := r.Snapshot(ctx); err != nil {
 			r.Log.Error("capture forecast snapshot", "error", err)
+		}
+	}
+	if r.Analyze != nil {
+		if err := r.Analyze(ctx); err != nil {
+			r.Log.Error("run intelligence analysis", "error", err)
 		}
 	}
 }

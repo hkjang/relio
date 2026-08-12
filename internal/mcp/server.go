@@ -310,6 +310,13 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	add("voice:write", "record_voice_response", "고객 응대 기록", "고객에게 안내한 내용이나 내부 확인 사항을 처리 이력에 남깁니다. 고객 응대로 기록하면 응답 기한이 충족됩니다.", schema([]string{"id", "note"}, map[string]any{"id": str("고객 요청 ID"), "note": str("기록할 내용"), "eventType": str("CUSTOMER_CONTACT, COMMENT, ESCALATED")}), false, false)
 	add("voice:write", "progress_customer_voice", "고객 요청 상태 변경", "요청 상태를 진행, 해결 등으로 변경합니다. 해결로 변경할 때는 해결 내용이 반드시 필요합니다.", schema([]string{"id", "status", "version"}, map[string]any{"id": str("고객 요청 ID"), "status": str("IN_REVIEW, IN_PROGRESS, PENDING_CUSTOMER, RESOLVED, CLOSED, REJECTED"), "version": integer("현재 버전"), "resolution": str("해결 내용 · RESOLVED로 변경할 때 필수"), "rootCause": str("근본 원인"), "preventiveAction": str("재발 방지 조치"), "note": str("변경 사유")}), false, false)
 	add("voice:read", "get_voice_categories", "요청 유형 조회", "접수 가능한 요청 유형과 응답·해결 목표 시간을 조회합니다.", schema(nil, map[string]any{}), true, false)
+	add("intelligence:read", "get_customer_signals", "고객 Signal 조회", "고객에게서 감지된 변화(접촉 공백, 정체, 만료 임박, 긍정 신호)를 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID · 비우면 담당 범위 전체"), "severity": str("LOW, MEDIUM, HIGH, CRITICAL"), "sentiment": str("POSITIVE, NEGATIVE, NEUTRAL"), "signalType": str("NO_CONTACT, DEAL_STALLED, CRITICAL_VOC, CONTRACT_EXPIRING, DECISION_MAKER_MISSING, ENGAGEMENT_INCREASE, QUOTE_REQUESTED, CLOSE_DATE_PASSED"), "limit": integer("최대 결과 수")}), true, false)
+	add("intelligence:read", "get_customer_risks", "고객 Risk 조회", "0~100 점수로 정량화된 관계, 갱신, VOC, Deal 위험을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID · 비우면 담당 범위 전체"), "riskType": str("RELATIONSHIP_RISK, RENEWAL_RISK, VOC_RISK, DEAL_RISK"), "minScore": integer("최소 위험 점수"), "limit": integer("최대 결과 수")}), true, false)
+	add("intelligence:read", "get_deal_insights", "Deal Insight 조회", "여러 신호를 묶어 사람이 읽을 수 있게 요약한 분석을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "limit": integer("최대 결과 수")}), true, false)
+	add("intelligence:read", "get_recommendations", "추천 행동 조회", "위험과 신호에서 도출된 다음 행동 추천을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "mine": str("true면 본인에게 배정된 추천만"), "priority": str("LOW, MEDIUM, HIGH"), "status": str("OPEN, ACCEPTED, DISMISSED, COMPLETED, ALL"), "limit": integer("최대 결과 수")}), true, false)
+	add("intelligence:read", "explain_risk", "Risk 근거 설명", "위험 점수를 구성한 요인과 점수 배분, 관련 Signal을 설명합니다.", schema([]string{"id"}, map[string]any{"id": str("Risk ID")}), true, false)
+	add("intelligence:write", "accept_recommendation", "추천 수락", "추천을 수락해 담당자와 기한이 있는 Task로 전환합니다.", schema([]string{"id"}, map[string]any{"id": str("추천 ID"), "assigneeId": str("담당자 ID · 비우면 고객 담당자"), "dueDate": str("YYYY-MM-DD")}), false, false)
+	add("intelligence:write", "dismiss_recommendation", "추천 무시", "추천이 적절하지 않은 이유를 남기고 무시 처리합니다.", schema([]string{"id", "reason"}, map[string]any{"id": str("추천 ID"), "reason": str("무시 사유")}), false, false)
 	add("customer:read contact:read opportunity:read activity:read", "get_account_brief", "고객 종합 브리핑", "Customer 360, 관계망, 전략 Account Plan을 미팅 준비용 브리핑으로 제공합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID"), "year": integer("Account Plan 연도")}), true, false)
 	add("customer:read contact:read", "get_account_relationships", "고객 관계망", "고객 담당자의 의사결정 역할, 영향력과 연결 관계를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
 	add("customer:read", "get_account_plan", "Account Plan", "전략 고객의 목표, 전략, 경쟁사, 위험과 White Space를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID"), "year": integer("계획 연도")}), true, false)
@@ -428,6 +435,36 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 		v, err = s.Voices.Summary(ctx, p, strArg(a, "customerId"))
 	case "get_overdue_voices":
 		v, err = s.Voices.List(ctx, p, voice.Query{Overdue: true, OpenOnly: true, Limit: intArg(a, "limit", 25)})
+	case "get_customer_signals":
+		v, err = s.Intelligence.ListSignals(ctx, p, intelligence.SignalFilter{AccountID: strArg(a, "customerId"),
+			Severity: strArg(a, "severity"), Sentiment: strArg(a, "sentiment"), SignalType: strArg(a, "signalType"),
+			Limit: intArg(a, "limit", 25)})
+	case "get_customer_risks":
+		v, err = s.Intelligence.ListRisks(ctx, p, intelligence.RiskFilter{AccountID: strArg(a, "customerId"),
+			RiskType: strArg(a, "riskType"), MinScore: intArg(a, "minScore", 0), Limit: intArg(a, "limit", 25)})
+	case "get_deal_insights":
+		v, err = s.Intelligence.ListInsights(ctx, p, intelligence.InsightFilter{AccountID: strArg(a, "customerId"),
+			OpportunityID: strArg(a, "opportunityId"), Limit: intArg(a, "limit", 25)})
+	case "get_recommendations":
+		v, err = s.Intelligence.ListRecommendations(ctx, p, intelligence.RecommendationFilter{AccountID: strArg(a, "customerId"),
+			Mine: strArg(a, "mine") == "true", Priority: strArg(a, "priority"), Status: strArg(a, "status"),
+			Limit: intArg(a, "limit", 25)})
+	case "explain_risk":
+		v, err = s.Intelligence.ExplainRisk(ctx, p, strArg(a, "id"))
+	case "accept_recommendation":
+		var due *time.Time
+		if date := strings.TrimSpace(strArg(a, "dueDate")); date != "" {
+			var parsed time.Time
+			parsed, err = time.Parse("2006-01-02", date)
+			if err == nil {
+				due = &parsed
+			}
+		}
+		if err == nil {
+			v, err = s.Intelligence.AcceptRecommendation(ctx, p, strArg(a, "id"), strArg(a, "assigneeId"), due, meta)
+		}
+	case "dismiss_recommendation":
+		v, err = s.Intelligence.DismissRecommendation(ctx, p, strArg(a, "id"), strArg(a, "reason"), meta)
 	case "get_customer_churn_risk":
 		v, err = s.Voices.Risk(ctx, p, strArg(a, "id"))
 	case "get_top_churn_risks":

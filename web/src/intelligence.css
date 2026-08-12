@@ -1,0 +1,153 @@
+/* Intelligence surfaces. Severity is the organising idea, so one tone scale is
+   defined once and reused by the gauge, the score pill, the signal dot and the
+   risk row border. A colour must always mean the same thing. */
+:root {
+  --tone-critical: #c43c52;
+  --tone-critical-soft: #fdf0f2;
+  --tone-high: #cf6a26;
+  --tone-high-soft: #fff4ea;
+  --tone-medium: #b18a24;
+  --tone-medium-soft: #fffaea;
+  --tone-low: #168166;
+  --tone-low-soft: #eef8f4;
+}
+.tone-critical { --tone: var(--tone-critical); --tone-soft: var(--tone-critical-soft); }
+.tone-high { --tone: var(--tone-high); --tone-soft: var(--tone-high-soft); }
+.tone-medium { --tone: var(--tone-medium); --tone-soft: var(--tone-medium-soft); }
+.tone-low { --tone: var(--tone-low); --tone-soft: var(--tone-low-soft); }
+
+.intelligence-panel { margin-bottom: 18px; }
+.intelligence-panel .panel-head { align-items: flex-start; }
+.intel-block { margin-top: 20px; }
+.intel-block:first-of-type { margin-top: 8px; }
+.intel-block h3 { font-size: 15px; color: #35506e; margin: 0 0 9px; }
+.intel-block h3 em { font-style: normal; font-weight: 500; color: var(--muted); margin-left: 5px; font-size: 14px; }
+
+.risk-gauge {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: var(--tone-soft, #f4f7fa);
+  color: var(--tone, #35506e);
+  white-space: nowrap;
+}
+.risk-gauge strong { font-size: 34px; line-height: 1; font-weight: 800; }
+.risk-gauge span { font-size: 13px; opacity: .75; }
+.risk-gauge .status { margin-left: 4px; }
+
+.risk-list { display: grid; gap: 7px; }
+.risk-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--tone, #cfdae9);
+  border-radius: 10px;
+  background: #fff;
+}
+.risk-score {
+  display: grid;
+  place-items: center;
+  width: 42px; height: 42px;
+  border-radius: 11px;
+  background: var(--tone-soft, #f4f7fa);
+  color: var(--tone, #35506e);
+  font-weight: 800; font-size: 17px;
+}
+.risk-copy b { display: block; font-size: 15px; color: #1d3752; }
+.risk-copy small { display: block; font-size: 13px; color: var(--muted); margin-top: 3px; }
+.accepted-tag { display: block; font-style: normal; font-size: 12px; color: #6b7c90; margin-top: 5px; }
+
+.signal-list { display: grid; gap: 4px; }
+.signal-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 11px;
+  align-items: center;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+.signal-row.sentiment-positive { background: #f1f9f5; }
+.signal-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--tone, #8496b2); flex: none; }
+.signal-copy b { display: block; font-size: 14px; color: #24384e; font-weight: 650; }
+.signal-copy small { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; }
+.signal-meta { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.signal-meta small { font-size: 12px; color: #8493a3; }
+
+.insight-card {
+  border: 1px solid #d6e3f0;
+  background: linear-gradient(135deg, #f8fbff, #f2f7fd);
+  border-radius: 12px;
+  padding: 15px 17px;
+}
+.insight-card b { font-size: 15px; color: #1d3752; }
+.insight-card p { font-size: 14px; color: #4a6076; margin: 7px 0 0; line-height: 1.55; }
+.insight-card ul { margin: 10px 0 0; padding-left: 18px; }
+.insight-card li { font-size: 13px; color: #5d7085; line-height: 1.7; }
+.insight-card > small { display: block; font-size: 12px; color: #8493a3; margin-top: 10px; }
+
+.recommendation-list { display: grid; gap: 9px; }
+.recommendation-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.recommendation-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #fff;
+  border-top: 3px solid #cfdae9;
+}
+.recommendation-card.priority-high { border-top-color: var(--tone-critical); }
+.recommendation-card.priority-medium { border-top-color: var(--tone-medium); }
+.recommendation-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 9px; }
+.recommendation-head small { font-size: 12px; color: #8493a3; margin-left: auto; }
+.recommendation-card > b { display: block; font-size: 15px; color: #1d3752; }
+.recommendation-card > p { font-size: 13px; color: var(--muted); margin: 6px 0 0; line-height: 1.55; }
+.recommendation-actions { display: flex; gap: 7px; margin-top: 13px; }
+.decided-note { display: block; font-size: 12px; color: #6b7c90; margin-top: 10px; }
+.recommendation-preview {
+  background: #f6f9fc; border: 1px solid var(--line); border-radius: 10px;
+  padding: 13px; margin-bottom: 16px;
+}
+.recommendation-preview b { font-size: 15px; }
+.recommendation-preview p { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+.recommendation-preview small { display: block; font-size: 12px; color: #8493a3; margin-top: 7px; }
+
+.explain-head { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+.explain-head b { font-size: 16px; color: #1d3752; }
+.explain-head p { font-size: 13px; color: var(--muted); margin: 4px 0 0; }
+.factor-list { display: grid; gap: 5px; margin: 10px 0 14px; }
+.factor {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 10px 13px; border-radius: 9px; background: #f8fafc; font-size: 14px; color: #40566d;
+}
+.factor b { color: #b1502f; font-size: 14px; white-space: nowrap; }
+.factor.negative-points b { color: var(--tone-low); }
+.factor.total { background: #eef3f8; font-weight: 700; color: #24384e; }
+.factor.total b { color: #1d3752; }
+.accept-form { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 16px; }
+
+.score-pill {
+  display: inline-grid; place-items: center; min-width: 40px; padding: 5px 9px;
+  border-radius: 8px; background: var(--tone-soft, #f4f7fa); color: var(--tone, #35506e);
+  font-weight: 800; font-size: 15px;
+}
+.intel-kpi b { color: var(--tone, #1d3852); }
+.intel-summary { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.intel-summary b { font-size: 15px; }
+.intel-summary span { font-size: 13px; color: var(--muted); }
+
+@media (max-width: 900px) {
+  .risk-row { grid-template-columns: auto minmax(0, 1fr); row-gap: 10px; }
+  .risk-row .btn { grid-column: 1 / 3; justify-self: start; }
+  .signal-row { grid-template-columns: auto minmax(0, 1fr); }
+  .signal-row .signal-meta,.signal-row .link-button { grid-column: 2; justify-self: start; }
+  .recommendation-grid { grid-template-columns: 1fr; }
+}
+
+.recommendation-strip { margin-bottom: 16px; }
+.recommendation-strip .panel-head { margin-bottom: 12px; }
+.panel-head-actions { display: flex; align-items: center; gap: 10px; }

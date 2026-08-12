@@ -32,6 +32,10 @@ Relio는 인터넷이 차단된 기업 환경에서 단일 Docker Image로 운�
 - 요청 유형별 응답·해결 SLA를 관리자가 정의하고 심각도에 따라 자동 단축하며 기한 초과를 한 곳에서 판정합니다.
 - 기한 초과 요청, 기한 도래 다음 행동, 정체 영업기회, 미착수 갱신, 검토 대기를 하나의 우선순위 큐로 제시합니다.
 - 이탈 징후·미해결 불만·미착수 갱신·접점 공백을 합산해 고객 이탈 위험도를 근거와 권장 행동과 함께 표시합니다.
+- CRM 데이터에서 Signal을 자동 감지하고 0~100 Risk Score로 정량화하며, 임계값을 넘으면 다음 행동을 추천합니다.
+- 모든 Risk 점수는 이를 만든 요인과 배점을 그대로 보여주며, 조건이 해소되면 Signal·Risk·추천이 자동으로 회수됩니다.
+- 추천을 수락하면 담당자와 기한이 있는 Task로 전환되어 기존 오늘 할 일 큐에 나타나고, 무시할 때는 사유를 남깁니다.
+- 감수한 Risk와 무시한 추천은 규칙 엔진이 되살리지 않습니다. 사람의 판단이 자동 분석보다 우선합니다.
 - 화면 용어는 한국어를 기준으로 하며 API는 안정적인 코드를 유지합니다.
 - 목록의 모든 행을 Tab으로 이동해 Enter로 열 수 있고, 모달과 Drawer는 포커스를 가두며 Escape로 닫힙니다.
 - 자주 쓰는 검색 조건을 이름 붙여 저장하고, 고객·영업기회·요청·계약에 즐겨찾기를 답니다.
@@ -88,7 +92,7 @@ docker run -d \
   -e BOOTSTRAP_ADMIN_PASSWORD="ChangeMe-To-A-Strong-Password" \
   -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -v relio-data:/var/lib/relio \
-  relio:v1.10.0
+  relio:v1.11.0
 ```
 
 ### 자격증명 영속성 (ENCRYPTION_KEY)
@@ -113,8 +117,8 @@ Relio는 Data Key의 단방향 ID를 PostgreSQL에 등록합니다. SSO Secret �
 GitHub Release에서 파일 하나만 반입합니다.
 
 ```bash
-gunzip -c relio-v1.10.0.tar.gz | docker load
-docker image inspect relio:v1.10.0
+gunzip -c relio-v1.11.0.tar.gz | docker load
+docker image inspect relio:v1.11.0
 ```
 
 SHA-256은 Release 본문에 기록되며 별도 Checksum Asset은 배포하지 않습니다.
@@ -146,7 +150,7 @@ Authorization: Bearer relio_4f30d2a1b7c9_xxxxxxxxxxxxxxxxx
 
 MCP Client는 `Accept: application/json, text/event-stream`과 협상된 `MCP-Protocol-Version`을 전송해야 합니다. 서버는 Origin, 인증 Channel, `mcp:use`, Tool별 Scope, 사용자 Permission, Data Scope를 순서대로 검사합니다. AI Agent에 직접 SQL 권한을 제공하지 않습니다.
 
-Sales Intelligence MCP는 `find_deals_at_risk`, `explain_deal_risk`, `recommend_next_actions`, `get_stage_readiness`, `explain_forecast_change`, `get_sales_coaching_insights`를 제공합니다. v1.2 Relationship Intelligence는 `get_account_brief`, `get_account_relationships`, `get_account_plan`, `find_cross_sell_opportunities`, `build_account_plan`, `get_opportunity_team`, `add_opportunity_member`를 추가합니다. Tool에는 `READ`, `ANALYZE`, `WRITE`, `APPROVAL` Risk Level Annotation이 포함됩니다.
+Sales Intelligence MCP는 `find_deals_at_risk`, `explain_deal_risk`, `recommend_next_actions`, `get_stage_readiness`, `explain_forecast_change`, `get_sales_coaching_insights`를 제공합니다. CRM Intelligence는 `get_customer_signals`, `get_customer_risks`, `get_deal_insights`, `get_recommendations`, `explain_risk`, `accept_recommendation`, `dismiss_recommendation`을 추가하며 REST와 동일한 권한을 요구합니다. v1.2 Relationship Intelligence는 `get_account_brief`, `get_account_relationships`, `get_account_plan`, `find_cross_sell_opportunities`, `build_account_plan`, `get_opportunity_team`, `add_opportunity_member`를 추가합니다. Tool에는 `READ`, `ANALYZE`, `WRITE`, `APPROVAL` Risk Level Annotation이 포함됩니다.
 
 ## 개발
 
@@ -155,7 +159,7 @@ Sales Intelligence MCP는 `find_deals_at_risk`, `explain_deal_risk`, `recommend_
 ```bash
 make test
 make build
-make docker VERSION=1.10.0
+make docker VERSION=1.11.0
 ```
 
 검증 항목:
@@ -163,8 +167,8 @@ make docker VERSION=1.10.0
 ```bash
 ./scripts/check-env-contract.sh
 ./scripts/check-static-assets.sh
-./scripts/run-offline-container-test.sh relio:v1.10.0
-./scripts/run-upgrade-container-test.sh relio:v1.9.0 relio:v1.10.0
+./scripts/run-offline-container-test.sh relio:v1.11.0
+./scripts/run-upgrade-container-test.sh relio:v1.10.0 relio:v1.11.0
 ```
 
 오프라인 테스트는 Docker internal network에서 PostgreSQL과 Relio를 시작하고 Migration, Bootstrap 로그인, CRM/영업 기능, REST Personal Key, MCP, Admin Operations, Data Quality, Configuration Bundle 왕복, Support Bundle/Audit 검색과 외부 정적 자산 부재를 검사합니다. Container 교체 후 SSO Secret·Personal Key 유지와 잘못된 Volume의 Fail-Closed 동작도 검증합니다.
@@ -174,14 +178,14 @@ make docker VERSION=1.10.0
 SemVer Tag를 push하면 `.github/workflows/release.yml`이 테스트, 이미지 빌드, 오프라인 검증, `docker save`, gzip 압축과 GitHub Release를 수행합니다.
 
 ```bash
-git tag v1.10.0
-git push origin v1.10.0
+git tag v1.11.0
+git push origin v1.11.0
 ```
 
 Relio가 Release Asset으로 직접 업로드하는 파일은 다음 하나뿐입니다.
 
 ```text
-relio-v1.10.0.tar.gz
+relio-v1.11.0.tar.gz
 ```
 
 ## 설계 문서

@@ -79,6 +79,17 @@ const dictionary: Record<string, string> = {
   // 조직 유형
   QUOTATION: '견적', CONTRACT: '계약',
 
+  // Intelligence — Signal, Risk, Recommendation
+  NO_CONTACT: '접촉 공백', DEAL_STALLED: '단계 정체', CRITICAL_VOC: '긴급 요청',
+  CONTRACT_EXPIRING: '계약 만료 임박', DECISION_MAKER_MISSING: '의사결정자 미확인',
+  ENGAGEMENT_INCREASE: '접점 증가', QUOTE_REQUESTED: '견적 발행',
+  RELATIONSHIP_RISK: '관계 위험', RENEWAL_RISK: '갱신 위험', VOC_RISK: '요청 위험',
+  DEAL_RISK: 'Deal 위험', PIPELINE_RISK: 'Pipeline 위험',
+  SCHEDULE_MEETING: '미팅 잡기', RESOLVE_VOC: '요청 해결', CREATE_RENEWAL: '갱신 준비',
+  ADVANCE_DEAL: 'Deal 진전', FOLLOW_UP_QUOTE: '견적 후속', ENGAGEMENT_DECLINE: '관계 약화',
+  POSITIVE: '긍정', NEGATIVE: '부정',
+  ACCEPTED: '수락함', DISMISSED: '무시함', IGNORED: '무시됨',
+
   // 고객의 목소리 (VOC)
   COMPLAINT: '불만', REQUEST: '요청', INQUIRY: '문의', DEFECT: '품질 이슈',
   PRAISE: '감사·칭찬', CHURN_RISK: '이탈 징후',

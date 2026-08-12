@@ -90,6 +90,7 @@ func main() {
 	app.EncryptionKeyConfigured = cfg.EncryptionKey != ""
 	runner := job.New(db, logger)
 	runner.Snapshot = intelligenceService.CaptureForecastSnapshots
+	runner.Analyze = intelligenceService.RunIfDue
 	go runner.Run(ctx)
 	httpServer := &http.Server{Addr: config.ListenAddress, Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
 	go func() {

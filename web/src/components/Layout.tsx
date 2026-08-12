@@ -11,7 +11,17 @@ type NavItem = { to:string; key:string; label:string; group?:string; keywords?:s
 type LayoutProps = { area: 'app'|'me'|'admin'; path: string; user: User; version: Version; approvalEnabled: boolean; onLogout: () => void; children: ReactNode; title: string; subtitle?: string; actions?: ReactNode }
 
 const appNav: NavItem[] = [
-  {to:'/app/dashboard',key:'dashboard',label:'영업 현황'}, {to:'/app/customers',key:'customers',label:'고객'}, {to:'/app/opportunities',key:'opportunities',label:'영업기회'}, {to:'/app/pipeline',key:'pipeline',label:'파이프라인'}, {to:'/app/intelligence',key:'intelligence',label:'영업기회 분석'}, {to:'/app/activities',key:'activities',label:'영업활동'}, {to:'/app/voices',key:'approvals',label:'고객의 목소리'}, {to:'/app/forecast',key:'forecast',label:'매출 전망'}, {to:'/app/contracts',key:'contracts',label:'계약'},
+  {to:'/app/dashboard',key:'dashboard',label:'영업 현황',group:'오늘'},
+  {to:'/app/recommendations',key:'security',label:'내 추천 행동',group:'오늘'},
+  {to:'/app/customers',key:'customers',label:'고객',group:'영업'},
+  {to:'/app/opportunities',key:'opportunities',label:'영업기회',group:'영업'},
+  {to:'/app/pipeline',key:'pipeline',label:'파이프라인',group:'영업'},
+  {to:'/app/activities',key:'activities',label:'영업활동',group:'영업'},
+  {to:'/app/intelligence-center',key:'intelligence',label:'Intelligence',group:'분석'},
+  {to:'/app/intelligence',key:'opportunities',label:'영업기회 분석',group:'분석'},
+  {to:'/app/forecast',key:'forecast',label:'매출 전망',group:'분석'},
+  {to:'/app/voices',key:'approvals',label:'고객의 목소리',group:'고객 관리'},
+  {to:'/app/contracts',key:'contracts',label:'계약',group:'고객 관리'},
 ]
 const meNav: NavItem[] = [
   {to:'/me/profile',key:'me',label:'내 프로필'}, {to:'/me/dashboard',key:'dashboard',label:'내 현황'}, {to:'/me/targets',key:'forecast',label:'내 영업목표'}, {to:'/me/calendar',key:'activities',label:'내 일정'}, {to:'/me/notifications',key:'approvals',label:'내 알림'}, {to:'/me/saved',key:'search',label:'저장된 검색'}, {to:'/me/favorites',key:'customers',label:'즐겨찾기'}, {to:'/me/keys',key:'pipeline',label:'개인 연동 키'}, {to:'/me/sessions',key:'me',label:'로그인 세션'}, {to:'/me/activity',key:'activities',label:'활동 기록'}, {to:'/me/about',key:'admin',label:'Relio 정보'},
@@ -56,7 +66,7 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
   useEffect(() => setMenuOpen(false), [path])
   const permissions = user.permissions || []
   const canAdmin = user.isBootstrap || permissions.includes('admin:*') || permissions.includes('admin:read')
-  const nav = area === 'app' ? [...appNav, ...(approvalEnabled ? [{to:'/app/approvals',key:'approvals',label:'검토 · 승인'}] : [])] : area === 'me' ? meNav : adminNav
+  const nav = area === 'app' ? [...appNav, ...(approvalEnabled ? [{to:'/app/approvals',key:'approvals',label:'검토 · 승인',group:'고객 관리'}] : [])] : area === 'me' ? meNav : adminNav
   const filteredNav = area !== 'admin' || !adminQuery.trim() ? nav : nav.filter(item => `${item.label} ${item.group || ''} ${item.keywords || ''}`.toLowerCase().includes(adminQuery.trim().toLowerCase()))
   const adminSearch = (value:string) => setAdminQuery(value)
   return <div className={`shell shell-${area}`}>
@@ -66,7 +76,7 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
       <Link to={area === 'app' ? '/app/dashboard' : area === 'me' ? '/me/profile' : '/admin/overview'} className="brand"><span className="brand-mark">R</span><span><b>Relio</b><small>{area === 'admin' ? 'Admin Console' : area === 'me' ? 'Personal' : 'Sales CRM'}</small></span></Link>
       {area === 'admin' && <label className="admin-nav-search"><span>⌕</span><input value={adminQuery} onChange={e=>adminSearch(e.target.value)} placeholder="설정 메뉴 찾기" aria-label="관리자 메뉴 검색"/></label>}
       <nav className="side-nav" onClick={() => setMenuOpen(false)}>
-        {filteredNav.map((item,index) => <Fragment key={item.to}>{area === 'admin' && item.group !== filteredNav[index-1]?.group && <p className="nav-group">{item.group}</p>}<Link to={item.to} className={path === item.to || path.startsWith(item.to + '/') ? 'active' : ''}><span className="nav-icon">{icon[item.key]}</span><span>{item.label}</span></Link></Fragment>)}
+        {filteredNav.map((item,index) => <Fragment key={item.to}>{item.group && item.group !== filteredNav[index-1]?.group && <p className="nav-group">{item.group}</p>}<Link to={item.to} className={path === item.to || path.startsWith(item.to + '/') ? 'active' : ''}><span className="nav-icon">{icon[item.key]}</span><span>{item.label}</span></Link></Fragment>)}
         {area === 'admin' && filteredNav.length === 0 && <p className="nav-empty">일치하는 설정 메뉴가 없습니다.</p>}
       </nav>
       <div className="side-footer">
@@ -150,12 +160,23 @@ export function Modal({ title, onClose, children, wide = false }: { title: strin
   </div>
 }
 
+// Dialogs nest — a contact form opens on top of a request form — so the page
+// behind them can only be unlocked once the last one closes.
+let openDialogs = 0
+function lockPageScroll() {
+  if (openDialogs++ === 0) document.body.style.overflow = 'hidden'
+  return () => { if (--openDialogs === 0) document.body.style.overflow = '' }
+}
+
 /** useDialog makes an overlay usable without a mouse: Escape closes it, Tab stays
  *  inside it, and focus returns to whatever opened it. Without this a keyboard
- *  user tabs straight out of the dialog into the page behind it. */
+ *  user tabs straight out of the dialog into the page behind it. It also freezes
+ *  the page underneath, so a scroll gesture moves the dialog and not the list
+ *  the user is about to come back to. */
 export function useDialog(onClose: () => void) {
   const surface = useRef<HTMLDivElement>(null)
   useEffect(() => {
+    const unlock = lockPageScroll()
     const opener = document.activeElement as HTMLElement | null
     const focusable = () => Array.from(
       surface.current?.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') ?? []
@@ -171,7 +192,7 @@ export function useDialog(onClose: () => void) {
       else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
     }
     document.addEventListener('keydown', onKey, true)
-    return () => { document.removeEventListener('keydown', onKey, true); opener?.focus?.() }
+    return () => { document.removeEventListener('keydown', onKey, true); unlock(); opener?.focus?.() }
   }, [onClose])
   return surface
 }
