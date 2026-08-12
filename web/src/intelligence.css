@@ -151,3 +151,36 @@
 .recommendation-strip { margin-bottom: 16px; }
 .recommendation-strip .panel-head { margin-bottom: 12px; }
 .panel-head-actions { display: flex; align-items: center; gap: 10px; }
+
+/* Two five-column tables side by side clipped the primary one — the 권장 행동
+   column was cut off at the panel edge while the coaching table sat half empty.
+   They stack instead, each with the full width its columns need. */
+.intelligence-stack { display: grid; gap: 16px; margin-bottom: 18px; }
+
+/* The risk and signal tables carry one long sentence plus five short columns.
+   Without explicit widths the sentence starved the rest, wrapping the headers
+   onto two lines and squeezing the chips. */
+.intel-table { min-width: 900px; }
+.intel-table th,.intel-table td { white-space: nowrap; }
+.intel-table .col-score { width: 76px; }
+.intel-table .col-severity { width: 96px; }
+.intel-table .col-account { width: 190px; }
+.intel-table .col-type { width: 130px; }
+.intel-table .col-when { width: 110px; }
+/* Title and description were both inline, so they ran together into one line. */
+.intel-cell { white-space: normal; min-width: 320px; }
+.intel-cell b { display: block; font-size: 14px; color: #1d3752; }
+.intel-cell small { display: block; font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+
+/* A native select dropped into the page heading inherited nothing. */
+.heading-select {
+  height: 38px;
+  padding: 0 32px 0 12px;
+  border: 1px solid #dbe3ec;
+  border-radius: 9px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7c90' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 12px center;
+  color: #33475e;
+  font-size: 15px;
+  appearance: none;
+}
+.heading-select:focus { outline: 0; border-color: #2794a8; box-shadow: 0 0 0 3px #1d99aa1f; }

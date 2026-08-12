@@ -149,3 +149,66 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 /* A long form scrolled its own title out of view, so the head stays put. */
 .modal{overscroll-behavior:contain}
 .modal-head{position:sticky;top:0;z-index:2;background:#fff;border-radius:15px 15px 0 0}
+
+/* The sidebar scroll bar was the browser default: a bright grey track cutting
+   down the navy panel. It belongs to the menu, so it is drawn in the menu's own
+   colours and stays out of the way until the pointer is over the list. */
+.side-nav { scrollbar-width: thin; scrollbar-color: #ffffff26 transparent; }
+.side-nav::-webkit-scrollbar { width: 6px; }
+.side-nav::-webkit-scrollbar-track { background: transparent; }
+.side-nav::-webkit-scrollbar-thumb { background: #ffffff1f; border-radius: 3px; }
+.side-nav:hover { scrollbar-color: #ffffff45 transparent; }
+.side-nav:hover::-webkit-scrollbar-thumb { background: #ffffff45; }
+.side-nav::-webkit-scrollbar-thumb:hover { background: #5fe1d766; }
+/* Scroll panes on the light side of the app get the same treatment so a
+   scrollbar never reads as a border. */
+.drawer-body,.modal,.page,.kanban,.stage-selector,.table-panel { scrollbar-width: thin; scrollbar-color: #c8d4e0 transparent; }
+.drawer-body::-webkit-scrollbar,.modal::-webkit-scrollbar,.kanban::-webkit-scrollbar,
+.stage-selector::-webkit-scrollbar,.table-panel::-webkit-scrollbar { width: 8px; height: 8px; }
+.drawer-body::-webkit-scrollbar-track,.modal::-webkit-scrollbar-track,.kanban::-webkit-scrollbar-track,
+.stage-selector::-webkit-scrollbar-track,.table-panel::-webkit-scrollbar-track { background: transparent; }
+.drawer-body::-webkit-scrollbar-thumb,.modal::-webkit-scrollbar-thumb,.kanban::-webkit-scrollbar-thumb,
+.stage-selector::-webkit-scrollbar-thumb,.table-panel::-webkit-scrollbar-thumb { background: #ccd8e4; border-radius: 4px; }
+.drawer-body::-webkit-scrollbar-thumb:hover,.modal::-webkit-scrollbar-thumb:hover,.kanban::-webkit-scrollbar-thumb:hover,
+.stage-selector::-webkit-scrollbar-thumb:hover,.table-panel::-webkit-scrollbar-thumb:hover { background: #a8bccd; }
+
+/* The command palette. It sits above everything, is reached with ⌘K from any
+   screen, and is driven entirely by the keyboard. */
+.global-search { border: 1px solid #e8edf3; cursor: pointer; text-align: left; }
+.global-search:hover { border-color: #cfdbe6; background: #eef3f8; }
+.global-search .global-search-copy { flex: 1; font-size: 15px; color: #8493a5; }
+.palette-backdrop {
+  position: fixed; inset: 0; z-index: 200; display: grid; justify-items: center;
+  align-content: start; padding: 12vh 20px 20px; background: #0a213c66; backdrop-filter: blur(4px);
+}
+.palette {
+  width: min(640px, 100%); max-height: 70vh; display: flex; flex-direction: column;
+  background: #fff; border-radius: 15px; box-shadow: 0 30px 90px #07192a5c; overflow: hidden;
+}
+.palette-input { display: flex; align-items: center; gap: 11px; padding: 0 17px; height: 58px; border-bottom: 1px solid var(--line); }
+.palette-input > span { color: #8493a5; font-size: 19px; }
+.palette-input input { flex: 1; border: 0; outline: 0; font-size: 16px; color: #213148; background: transparent; }
+.palette-list { overflow: auto; padding: 8px; min-height: 0; overscroll-behavior: contain; }
+.palette-group { font-size: 12px; color: #8b9aab; font-weight: 700; letter-spacing: .4px; padding: 11px 10px 5px; margin: 0; }
+.palette-row {
+  display: flex; align-items: center; gap: 11px; padding: 9px 10px;
+  border-radius: 9px; cursor: pointer;
+}
+.palette-row.active { background: #eaf4f8; }
+.palette-icon { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: #eef3f8; color: #52708d; font-size: 14px; flex: none; }
+.palette-row.active .palette-icon { background: #d5e9f0; color: #145d78; }
+.palette-copy { flex: 1; min-width: 0; }
+.palette-copy b { display: block; font-size: 15px; color: #24384e; font-weight: 600; }
+.palette-copy small { display: block; font-size: 13px; color: #8493a3; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-empty,.palette-searching { padding: 26px 12px; text-align: center; color: #8493a3; font-size: 14px; margin: 0; }
+.palette-searching { padding: 10px; font-size: 13px; }
+.palette-foot { display: flex; align-items: center; gap: 14px; padding: 11px 17px; border-top: 1px solid var(--line); background: #f8fafc; font-size: 12px; color: #7c8d9e; }
+.palette-hint { margin-left: auto; }
+.palette kbd,.global-search kbd { font-size: 12px; border: 1px solid #dbe3eb; background: #fff; border-radius: 5px; padding: 2px 6px; color: #8190a0; }
+@media (max-width: 720px) {
+  .palette-backdrop { padding: 6vh 12px 12px; }
+  .palette-foot .palette-hint { display: none; }
+  .global-search .global-search-copy { display: none; }
+}
+/* Two Korean syllables wrap inside a 24px avatar; the palette keeps them on one line. */
+.palette-row .avatar.tiny { font-size: 12px; white-space: nowrap; line-height: 1; }

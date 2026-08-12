@@ -98,7 +98,7 @@ export function IntelligencePanel({ customerId, opportunityId, canWrite, canRun,
   const nothing = !data.signals.length && !data.risks.length && !data.recommendations.length
   return <section className="panel intelligence-panel">
     <div className="panel-head">
-      <div><h2>Intelligence</h2>
+      <div><h2>위험 · 신호 분석</h2>
         <p>{data.analyzedAt ? `${relative(data.analyzedAt)} 분석 · 규칙 기반` : '아직 분석이 실행되지 않았습니다'}</p></div>
       <span className="panel-head-actions">
         {canRun && (!data.analyzedAt || nothing) && <button className="btn btn-sm btn-secondary" onClick={run} disabled={running}>{running ? '분석 중…' : '지금 분석'}</button>}

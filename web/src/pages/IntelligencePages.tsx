@@ -52,15 +52,15 @@ function IntelligenceCenter(props: Props) {
   })
   const riskCounts = counts(risks)
 
-  return <Layout area="app" {...props} title="Intelligence Center" subtitle="담당 범위에서 감지된 위험과 신호를 한곳에서 확인합니다."
+  return <Layout area="app" {...props} title="고객 위험 분석" subtitle="담당 범위에서 감지된 위험과 신호를 한곳에서 확인합니다."
     actions={<>{status?.finishedAt && <span className="date-chip">{relative(status.finishedAt)} 분석</span>}
       {canRun && <button className="btn btn-primary" onClick={run} disabled={running}>{running ? '분석 중…' : '지금 분석'}</button>}</>}>
 
     <div className="kpi-grid">
-      <IntelKPI label="긴급 위험" value={riskCounts.CRITICAL} tone="critical" foot="90점 이상" />
-      <IntelKPI label="높은 위험" value={riskCounts.HIGH} tone="high" foot="70점 이상" />
-      <IntelKPI label="감지된 신호" value={(signals || []).length} tone="medium" foot="활성 상태" />
-      <IntelKPI label="분석 고객" value={status?.accountsScanned ?? 0} tone="low" foot={status?.finishedAt ? date(status.finishedAt) : '미실행'} />
+      <IntelKPI label="긴급 위험" value={riskCounts.CRITICAL} tone="critical" foot="90점 이상" icon="!" />
+      <IntelKPI label="높은 위험" value={riskCounts.HIGH} tone="high" foot="70점 이상" icon="◆" />
+      <IntelKPI label="감지된 신호" value={(signals || []).length} tone="medium" foot="해소되지 않은 신호" icon="◇" />
+      <IntelKPI label="분석한 고객" value={status?.accountsScanned ?? 0} tone="low" foot={status?.finishedAt ? `${date(status.finishedAt)} 기준` : '아직 실행되지 않음'} icon="✓" />
     </div>
 
     <div className="toolbar">
@@ -76,13 +76,14 @@ function IntelligenceCenter(props: Props) {
 
     {tab === 'risks'
       ? (!risks ? <Spinner /> : risks.length
-        ? <section className="panel"><table className="data-table"><thead><tr>
-          <th>점수</th><th>심각도</th><th>위험</th><th>고객</th><th>유형</th><th>감지</th>
+        ? <section className="panel table-panel"><table className="intel-table"><thead><tr>
+          <th className="col-score">점수</th><th className="col-severity">심각도</th><th>위험</th>
+          <th className="col-account">고객</th><th className="col-type">유형</th><th className="col-when">감지</th>
         </tr></thead><tbody>
           {risks.map(risk => <tr key={risk.id} {...rowProps(() => navigate('/app/customers/' + risk.accountId))}>
             <td><span className={`score-pill tone-${severityTone(risk.severity)}`}>{risk.riskScore}</span></td>
             <td><Status value={risk.severity} /></td>
-            <td><b>{risk.title}</b><small>{risk.description}</small></td>
+            <td className="intel-cell"><b>{risk.title}</b><small>{risk.description}</small></td>
             <td>{risk.accountName}</td>
             <td><Status value={risk.riskType} /></td>
             <td>{relative(risk.detectedAt)}</td>
@@ -90,12 +91,13 @@ function IntelligenceCenter(props: Props) {
         </tbody></table></section>
         : <Empty icon="◇" title="감지된 위험이 없습니다" description={status ? '현재 담당 범위의 모든 고객이 정상 범위입니다.' : '아직 분석이 실행되지 않았습니다.'} />)
       : (!signals ? <Spinner /> : signals.length
-        ? <section className="panel"><table className="data-table"><thead><tr>
-          <th>심각도</th><th>신호</th><th>고객</th><th>유형</th><th>감지</th>
+        ? <section className="panel table-panel"><table className="intel-table"><thead><tr>
+          <th className="col-severity">심각도</th><th>신호</th><th className="col-account">고객</th>
+          <th className="col-type">유형</th><th className="col-when">감지</th>
         </tr></thead><tbody>
           {signals.map(signal => <tr key={signal.id} {...rowProps(() => navigate('/app/customers/' + signal.accountId))}>
             <td><Status value={signal.severity} /></td>
-            <td><b>{signal.title}</b><small>{signal.description}</small></td>
+            <td className="intel-cell"><b>{signal.title}</b><small>{signal.description}</small></td>
             <td>{signal.accountName}</td>
             <td><Status value={signal.signalType} /></td>
             <td>{relative(signal.detectedAt)}</td>
@@ -105,10 +107,11 @@ function IntelligenceCenter(props: Props) {
   </Layout>
 }
 
-function IntelKPI({ label: text, value, tone, foot }: { label: string; value: number; tone: string; foot: string }) {
-  return <div className={`kpi-card intel-kpi tone-${tone}`}>
-    <small>{text}</small><b>{value}</b><span>{foot}</span>
-  </div>
+function IntelKPI({ label: text, value, tone, foot, icon }: { label: string; value: number; tone: string; foot: string; icon: string }) {
+  return <article className={`kpi-card intel-kpi tone-${tone}`}>
+    <div className="kpi-top"><span className="kpi-icon">{icon}</span></div>
+    <p>{text}</p><strong>{value}건</strong><small>{foot}</small>
+  </article>
 }
 
 /** MyRecommendations is the personal work queue: what the analysis says this
@@ -126,7 +129,7 @@ function MyRecommendations(props: Props) {
   const overdue = open.filter(x => x.dueDate && new Date(x.dueDate) < new Date()).length
 
   return <Layout area="app" {...props} title="내 추천 행동" subtitle="분석이 나에게 제안하는 다음 행동입니다. 수락하면 할 일로 등록됩니다."
-    actions={<select value={status} onChange={e => setStatus(e.target.value)} aria-label="상태 필터">
+    actions={<select className="heading-select" value={status} onChange={e => setStatus(e.target.value)} aria-label="상태 필터">
       {[['OPEN', '처리 대기'], ['ACCEPTED', '수락함'], ['DISMISSED', '무시함'], ['ALL', '전체']].map(([v, t]) =>
         <option key={v} value={v}>{t}</option>)}
     </select>}>
