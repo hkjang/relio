@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,12 +20,35 @@ import (
 	"github.com/hkjang/relio/internal/platform/version"
 	"github.com/hkjang/relio/internal/relationship"
 	"github.com/hkjang/relio/internal/voice"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const ProtocolVersion = "2025-11-25"
 
-var supportedVersions = map[string]bool{"2025-11-25": true, "2025-06-18": true, "2025-03-26": true}
+// Every revision this server can speak, newest first. Nothing in the
+// implementation is version-specific — the differences that matter to us
+// (batching, the protocol header) are handled explicitly — so the list is the
+// set of clients we accept rather than a set of behaviours.
+var supportedVersionOrder = []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
+
+var supportedVersions = map[string]bool{}
+
+func init() {
+	for _, v := range supportedVersionOrder {
+		supportedVersions[v] = true
+	}
+}
+
+// negotiateVersion answers the version the client asked for when we speak it.
+// Replying with our own newest instead makes the client send a header we then
+// reject, which is how "auth works but tools/list fails" happens.
+func negotiateVersion(requested string) string {
+	if supportedVersions[strings.TrimSpace(requested)] {
+		return strings.TrimSpace(requested)
+	}
+	return ProtocolVersion
+}
 
 type Server struct {
 	DB            *pgxpool.Pool
@@ -102,8 +126,12 @@ func (s *Server) allowedOrigin(ctx context.Context, r *http.Request) bool {
 	return false
 }
 func acceptsMCP(r *http.Request) bool {
-	a := r.Header.Get("Accept")
-	return strings.Contains(a, "application/json") && strings.Contains(a, "text/event-stream")
+	a := strings.ToLower(r.Header.Get("Accept"))
+	if strings.TrimSpace(a) == "" {
+		return true
+	}
+	return strings.Contains(a, "application/json") || strings.Contains(a, "text/event-stream") ||
+		strings.Contains(a, "application/*") || strings.Contains(a, "*/*")
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
@@ -130,85 +158,214 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
+		// A server that does not offer a server-initiated stream answers 405.
 		w.Header().Set("Allow", "POST")
 		httpx.ErrorJSON(w, r, http.StatusMethodNotAllowed, "sse_not_supported", "이 서버는 서버 주도 SSE 스트림을 제공하지 않습니다.", nil)
 		return
 	}
+	if r.Method == http.MethodDelete {
+		// Sessions are not issued, so there is nothing to tear down. Answering
+		// 200 keeps clients that always send DELETE on shutdown quiet.
+		w.WriteHeader(http.StatusOK)
+		success = true
+		return
+	}
 	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "GET, POST")
+		w.Header().Set("Allow", "GET, POST, DELETE")
 		httpx.ErrorJSON(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST를 사용하세요.", nil)
 		return
 	}
 	if !acceptsMCP(r) {
-		httpx.ErrorJSON(w, r, http.StatusNotAcceptable, "accept_required", "Accept에 application/json과 text/event-stream을 모두 포함해야 합니다.", nil)
+		httpx.ErrorJSON(w, r, http.StatusNotAcceptable, "accept_required", "Accept에 application/json을 포함해야 합니다.", nil)
 		return
 	}
-	var req request
-	if !httpx.DecodeJSON(w, r, &req) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		s.writeError(w, nil, -32700, "Parse error", nil)
 		return
 	}
-	method = req.Method
-	if req.JSONRPC != "2.0" || method == "" {
-		s.writeError(w, req.ID, -32600, "Invalid Request", nil)
+	// Revisions before 2025-06-18 allow a JSON-RPC batch, and clients still send
+	// them. Rejecting an array as malformed JSON broke tools/list for those.
+	batch, requests, perr := parseRequests(body)
+	if perr != nil {
+		s.writeError(w, nil, -32700, "Parse error", map[string]any{"cause": perr.Error()})
 		return
 	}
-	if method != "initialize" {
-		v := r.Header.Get("MCP-Protocol-Version")
-		if v == "" {
-			v = "2025-03-26"
+	if len(requests) == 0 {
+		s.writeError(w, nil, -32600, "Invalid Request", nil)
+		return
+	}
+	methods := make([]string, 0, len(requests))
+	for _, req := range requests {
+		methods = append(methods, req.Method)
+	}
+	method = strings.Join(methods, ",")
+
+	// The negotiated version arrives as a header on every later request. It is
+	// checked once for the whole HTTP request, and reported as a JSON-RPC error
+	// so a client can read it the same way it reads everything else.
+	negotiated := ProtocolVersion
+	if header := strings.TrimSpace(r.Header.Get("MCP-Protocol-Version")); header != "" {
+		if !supportedVersions[header] {
+			onlyInitialize := true
+			for _, req := range requests {
+				if req.Method != "initialize" {
+					onlyInitialize = false
+					break
+				}
+			}
+			if !onlyInitialize {
+				s.writeError(w, firstID(requests), -32600,
+					"지원하지 않는 MCP 프로토콜 버전입니다: "+header,
+					map[string]any{"supported": supportedVersionOrder})
+				return
+			}
+		} else {
+			negotiated = header
 		}
-		if !supportedVersions[v] {
-			httpx.ErrorJSON(w, r, http.StatusBadRequest, "unsupported_protocol", "지원하지 않는 MCP 프로토콜 버전입니다.", map[string]any{"supported": keys(supportedVersions)})
-			return
-		}
 	}
-	if len(req.ID) == 0 || string(req.ID) == "null" {
+
+	out := make([]response, 0, len(requests))
+	for _, req := range requests {
+		if req.JSONRPC != "2.0" || req.Method == "" {
+			out = append(out, response{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32600, Message: "Invalid Request"}})
+			continue
+		}
+		if isNotification(req) {
+			// Notifications are acknowledged, never answered.
+			continue
+		}
+		result, callErr, tool := s.dispatch(r, p, req, negotiated)
+		if tool != "" {
+			toolName = tool
+		}
+		if callErr != nil {
+			out = append(out, response{JSONRPC: "2.0", ID: req.ID, Error: callErr})
+			continue
+		}
+		out = append(out, response{JSONRPC: "2.0", ID: req.ID, Result: result})
+	}
+
+	w.Header().Set("MCP-Protocol-Version", negotiated)
+	if len(out) == 0 {
+		// Every message was a notification; there is nothing to return.
 		w.WriteHeader(http.StatusAccepted)
 		success = true
 		return
 	}
-	var result any
-	var err error
-	switch method {
+	if batch {
+		httpx.JSON(w, http.StatusOK, out)
+	} else {
+		httpx.JSON(w, http.StatusOK, out[0])
+	}
+	// A tool that ran and failed returns a result, not a JSON-RPC error, so the
+	// request log has to look inside it or every failure would read as a success.
+	success = true
+	for _, item := range out {
+		if item.Error != nil {
+			success = false
+			continue
+		}
+		if m, ok := item.Result.(map[string]any); ok {
+			if failed, _ := m["isError"].(bool); failed {
+				success = false
+			}
+		}
+	}
+}
+
+// parseRequests accepts either one JSON-RPC message or a batch of them.
+func parseRequests(body []byte) (bool, []request, error) {
+	trimmed := strings.TrimSpace(string(body))
+	if strings.HasPrefix(trimmed, "[") {
+		var items []request
+		if err := json.Unmarshal(body, &items); err != nil {
+			return true, nil, err
+		}
+		return true, items, nil
+	}
+	var single request
+	if err := json.Unmarshal(body, &single); err != nil {
+		return false, nil, err
+	}
+	return false, []request{single}, nil
+}
+
+func isNotification(req request) bool {
+	return len(req.ID) == 0 || string(req.ID) == "null"
+}
+
+func firstID(requests []request) json.RawMessage {
+	for _, req := range requests {
+		if !isNotification(req) {
+			return req.ID
+		}
+	}
+	return nil
+}
+
+// dispatch runs one JSON-RPC method and returns its result, a JSON-RPC error, or
+// the tool name it invoked for the request log.
+func (s *Server) dispatch(r *http.Request, p *auth.Principal, req request, negotiated string) (any, *rpcError, string) {
+	switch req.Method {
 	case "initialize":
-		result = map[string]any{"protocolVersion": ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}, "resources": map[string]any{"subscribe": false, "listChanged": false}}, "serverInfo": map[string]any{"name": "Relio", "title": "Relio CRM MCP Server", "version": version.Current().Version}, "instructions": "Relio CRM data is filtered by the authenticated user's permissions, data scope, and key scopes."}
+		// Answer the version the client asked for when we speak it. Replying
+		// with our own newest regardless is what made the client send a header
+		// we then rejected.
+		var params struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(req.Params, &params)
+		return map[string]any{
+			"protocolVersion": negotiateVersion(params.ProtocolVersion),
+			"capabilities": map[string]any{
+				"tools":     map[string]any{"listChanged": false},
+				"resources": map[string]any{"subscribe": false, "listChanged": false},
+			},
+			"serverInfo":   map[string]any{"name": "Relio", "title": "Relio CRM MCP Server", "version": version.Current().Version},
+			"instructions": "Relio CRM data is filtered by the authenticated user's permissions, data scope, and key scopes.",
+		}, nil, ""
 	case "ping":
-		result = map[string]any{}
+		return map[string]any{}, nil, ""
 	case "tools/list":
-		result = map[string]any{"tools": s.tools(r.Context(), p)}
+		return map[string]any{"tools": s.tools(r.Context(), p)}, nil, ""
 	case "tools/call":
 		var call toolCall
-		if e := json.Unmarshal(req.Params, &call); e != nil {
-			err = e
-		} else {
-			toolName = call.Name
-			result, err = s.callTool(r.Context(), p, call, r)
+		if err := json.Unmarshal(req.Params, &call); err != nil {
+			return nil, &rpcError{Code: -32602, Message: "Invalid params: " + err.Error()}, ""
 		}
+		result, err := s.callTool(r.Context(), p, call, r)
+		if errors.Is(err, errUnknownTool) {
+			return nil, &rpcError{Code: -32602, Message: err.Error()}, call.Name
+		}
+		if err != nil {
+			return toolFailure(err), nil, call.Name
+		}
+		return result, nil, call.Name
 	case "resources/list":
-		result = map[string]any{"resources": s.resources(p)}
+		return map[string]any{"resources": s.resources(p)}, nil, ""
 	case "resources/templates/list":
-		result = map[string]any{"resourceTemplates": s.templates(p)}
+		return map[string]any{"resourceTemplates": s.templates(p)}, nil, ""
 	case "resources/read":
 		var params struct {
 			URI string `json:"uri"`
 		}
-		if e := json.Unmarshal(req.Params, &params); e != nil {
-			err = e
-		} else {
-			result, err = s.readResource(r.Context(), p, params.URI)
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, &rpcError{Code: -32602, Message: "Invalid params: " + err.Error()}, ""
 		}
-	default:
-		s.writeError(w, req.ID, -32601, "Method not found", nil)
-		return
+		result, err := s.readResource(r.Context(), p, params.URI)
+		if err != nil {
+			return nil, &rpcError{Code: -32000, Message: err.Error()}, ""
+		}
+		return result, nil, ""
+	// Clients send these after initialize and on shutdown; acknowledging them
+	// beats answering "Method not found".
+	case "notifications/initialized", "notifications/cancelled", "completion/complete":
+		return map[string]any{}, nil, ""
 	}
-	if err != nil {
-		s.writeError(w, req.ID, -32000, err.Error(), nil)
-		return
-	}
-	w.Header().Set("MCP-Protocol-Version", ProtocolVersion)
-	httpx.JSON(w, http.StatusOK, response{JSONRPC: "2.0", ID: req.ID, Result: result})
-	success = true
+	return nil, &rpcError{Code: -32601, Message: "Method not found: " + req.Method}, ""
 }
+
 func nullValue(v string) any {
 	if v == "" {
 		return nil
@@ -359,9 +516,30 @@ func toolResult(v any) map[string]any {
 	b, _ := json.Marshal(v)
 	return map[string]any{"content": []map[string]any{{"type": "text", "text": string(b)}}, "structuredContent": v, "isError": false}
 }
+
+// errUnknownTool separates "there is no such tool" — a protocol fault the client
+// must fix — from a tool that ran and failed, which the model should see.
+var errUnknownTool = errors.New("unknown or disallowed tool")
+
+// toolFailure reports a tool that ran and could not complete. The specification
+// asks for this to be a successful result carrying isError, not a JSON-RPC
+// error: a permission denial or a validation message is information the model
+// can act on, while a transport error usually just ends the conversation.
+func toolFailure(err error) map[string]any {
+	message := err.Error()
+	// An agent reading "no rows in result set" cannot tell a missing record from
+	// a broken server. Say which it is.
+	if errors.Is(err, pgx.ErrNoRows) || message == "no rows in result set" {
+		message = "요청한 데이터를 찾을 수 없거나 접근 권한이 없습니다."
+	}
+	return map[string]any{
+		"content": []map[string]any{{"type": "text", "text": message}},
+		"isError": true,
+	}
+}
 func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall, r *http.Request) (any, error) {
 	if !s.toolAllowed(ctx, call.Name) {
-		return nil, fmt.Errorf("MCP 도구가 관리자 정책에 의해 허용되지 않았습니다: %s", call.Name)
+		return nil, fmt.Errorf("%w: %s", errUnknownTool, call.Name)
 	}
 	a := call.Arguments
 	meta := crm.RequestMeta{Channel: "MCP", IP: httpx.ClientIP(r), RequestID: httpx.RequestID(ctx), UserAgent: r.UserAgent()}
@@ -548,7 +726,7 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 	case "reject_request":
 		v, err = s.Approvals.Decide(ctx, p, strArg(a, "id"), "REJECT", strArg(a, "comment"), intArg(a, "version", 0), meta.IP, meta.RequestID, meta.UserAgent)
 	default:
-		return nil, errors.New("unknown or disallowed tool")
+		return nil, errUnknownTool
 	}
 	if err != nil {
 		return nil, err

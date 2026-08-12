@@ -619,6 +619,10 @@ func (s *Server) serviceError(w http.ResponseWriter, r *http.Request, err error)
 	if errors.Is(err, pgx.ErrNoRows) || strings.Contains(msg, "not found") {
 		status = 404
 		code = "not_found"
+		if errors.Is(err, pgx.ErrNoRows) || msg == "no rows in result set" {
+			// The driver's phrasing reached API and MCP clients verbatim.
+			msg = "요청한 데이터를 찾을 수 없거나 접근 권한이 없습니다."
+		}
 	} else if strings.Contains(msg, "permission") || strings.Contains(msg, "access denied") || strings.Contains(msg, "designated approver") {
 		status = 403
 		code = "forbidden"

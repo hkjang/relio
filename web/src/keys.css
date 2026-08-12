@@ -1,0 +1,73 @@
+/* Issuing a key is a permission decision, so the form has to make the shape of
+   that decision visible: what is grouped with what, what can only read, and how
+   much has been granted so far. */
+.key-form fieldset { border: 0; padding: 0; margin: 20px 0 0; }
+.key-form legend { font-size: 14px; font-weight: 650; color: #526477; padding: 0; margin-bottom: 10px; }
+.key-form legend small { font-weight: 500; color: var(--muted); margin-left: 6px; }
+.field-note { font-size: 13px; color: var(--muted); margin: 9px 0 0; }
+.field-note.warn { color: #a5661f; background: #fff6e9; border: 1px solid #f0dcbb; border-radius: 8px; padding: 9px 11px; }
+
+.scope-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.preset-chip {
+  border: 1px solid #cfe0ec; background: #f2f8fb; color: #17607d;
+  border-radius: 999px; padding: 6px 13px; font-size: 13px; font-weight: 600;
+}
+.preset-chip:hover { background: #e4f1f7; border-color: #a9cfe1; }
+
+.scope-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+.scope-bulk button {
+  border: 1px solid var(--line); background: #fff; color: #52708d;
+  border-radius: 7px; padding: 5px 10px; font-size: 12px;
+}
+.scope-bulk button:hover { background: #f2f6f9; color: #155d78; }
+.scope-bulk-divider { width: 1px; height: 16px; background: var(--line); margin: 0 3px; }
+
+.scope-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 9px; }
+.scope-group { border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; background: #fbfcfd; }
+.scope-group-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.scope-group-toggle { flex: 1; min-width: 0; display: flex !important; flex-direction: row !important; align-items: center; gap: 7px !important; }
+/* Without this the group name is squeezed by the count beside it and wraps one
+   character per line: 고 / 객. */
+.scope-group-toggle b { white-space: nowrap; }
+.scope-group-head small { flex: none; }
+.scope-group-toggle b { font-size: 14px; color: #2e4358; }
+.scope-group-head small { font-size: 12px; color: #8b9aab; }
+.scope-items { display: grid; gap: 4px; }
+.scope-item { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px !important; padding: 5px 6px; border-radius: 6px; }
+.scope-item:hover { background: #eef4f8; }
+.scope-item input { width: auto; }
+.scope-item span { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.scope-item b { font-size: 13px; font-weight: 600; color: #40566d; }
+.scope-item code { font-size: 11px; color: #93a2b1; }
+/* A scope that can change data is marked, because "등록·수정" and "조회" read
+   almost the same at a glance. */
+.scope-item.is-write b { color: #a5551f; }
+
+.scope-summary {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin-top: 13px; padding: 11px 13px; border-radius: 9px; background: #f1f6fa;
+}
+.scope-summary b { font-size: 14px; color: #24384e; }
+.scope-summary span { font-size: 13px; color: #5d7085; }
+
+/* MCP guide */
+.mcp-guide .guide-tabs { margin-bottom: 18px; }
+.mcp-guide h3 { font-size: 14px; color: #35506e; margin: 18px 0 8px; }
+.mcp-guide h3:first-of-type { margin-top: 0; }
+.mcp-guide .muted-copy { font-size: 13px; line-height: 1.6; margin: 8px 0 0; }
+.mcp-guide code { background: #eef3f8; border-radius: 4px; padding: 1px 5px; font-size: 12px; color: #35506e; }
+.copy-block { position: relative; }
+.copy-block pre {
+  margin: 0; background: #132b43; color: #cfe8e4; border-radius: 9px;
+  padding: 13px 78px 13px 14px; font-size: 12.5px; line-height: 1.6;
+  overflow-x: auto; white-space: pre; scrollbar-width: thin;
+}
+.copy-block button { position: absolute; top: 9px; right: 9px; }
+.guide-trouble > div { align-items: flex-start; }
+.guide-trouble span { flex: none; width: 190px; }
+.guide-trouble b { font-weight: 500; text-align: left; flex: 1; }
+@media (max-width: 720px) {
+  .scope-groups { grid-template-columns: 1fr; }
+  .guide-trouble > div { flex-direction: column; gap: 4px; }
+  .guide-trouble span { width: auto; }
+}
