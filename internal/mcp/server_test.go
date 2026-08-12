@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 )
@@ -23,5 +24,27 @@ func TestAcceptHeaderRefusesOnlyClientsThatCannotTakeJSON(t *testing.T) {
 	r.Header.Set("Accept", "text/plain")
 	if acceptsMCP(r) {
 		t.Fatal("a client that accepts neither JSON nor a stream must be refused")
+	}
+}
+
+func TestSchemaOmitsRequiredWhenThereAreNoRequiredProperties(t *testing.T) {
+	value := schema(nil, map[string]any{"query": str("검색어")})
+	if _, exists := value["required"]; exists {
+		t.Fatal("required must be omitted instead of encoded as null")
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(encoded) {
+		t.Fatalf("tool schema is not valid JSON: %s", encoded)
+	}
+}
+
+func TestSchemaKeepsNonEmptyRequiredProperties(t *testing.T) {
+	value := schema([]string{"id"}, map[string]any{"id": str("고객 ID")})
+	required, ok := value["required"].([]string)
+	if !ok || len(required) != 1 || required[0] != "id" {
+		t.Fatalf("required property was lost: %#v", value["required"])
 	}
 }

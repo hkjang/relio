@@ -88,7 +88,14 @@ type toolCall struct {
 }
 
 func schema(required []string, properties map[string]any) map[string]any {
-	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
+	result := map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
+	// JSON Schema requires `required` to be an array when present. Encoding a
+	// nil Go slice produced `"required": null`; Qwen tolerated it, while
+	// OpenCode correctly rejected the entire tools/list response.
+	if len(required) > 0 {
+		result["required"] = required
+	}
+	return result
 }
 func str(description string) map[string]any {
 	return map[string]any{"type": "string", "description": description}

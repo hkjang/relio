@@ -24,6 +24,7 @@ type Key struct {
 	Scopes         []string   `json:"scopes"`
 	Channels       []string   `json:"channels"`
 	Status         string     `json:"status"`
+	Version        int        `json:"version"`
 	ExpiresAt      *time.Time `json:"expiresAt,omitempty"`
 	GraceExpiresAt *time.Time `json:"graceExpiresAt,omitempty"`
 	LastUsedAt     *time.Time `json:"lastUsedAt,omitempty"`
@@ -41,6 +42,11 @@ type CreateInput struct {
 	Scopes    []string   `json:"scopes"`
 	Channels  []string   `json:"channels"`
 	ExpiresAt *time.Time `json:"expiresAt"`
+}
+type UpdateAccessInput struct {
+	Scopes   []string `json:"scopes"`
+	Channels []string `json:"channels"`
+	Version  int      `json:"version"`
 }
 type Created struct {
 	Key     Key    `json:"key"`
@@ -87,6 +93,82 @@ func validChannels(channels []string) bool {
 	return true
 }
 
+func normalizeAccess(scopes, channels []string) ([]string, []string) {
+	normalizedScopes := make([]string, 0, len(scopes))
+	seenScopes := map[string]bool{}
+	for _, scope := range scopes {
+		scope = strings.TrimSpace(scope)
+		if scope != "" && !seenScopes[scope] {
+			seenScopes[scope] = true
+			normalizedScopes = append(normalizedScopes, scope)
+		}
+	}
+	normalizedChannels := make([]string, 0, len(channels))
+	seenChannels := map[string]bool{}
+	for _, channel := range channels {
+		channel = strings.ToUpper(strings.TrimSpace(channel))
+		if channel != "" && !seenChannels[channel] {
+			seenChannels[channel] = true
+			normalizedChannels = append(normalizedChannels, channel)
+		}
+	}
+	return normalizedScopes, normalizedChannels
+}
+
+func includes(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) validateAccess(ctx context.Context, p *auth.Principal, scopes, channels []string) error {
+	if !validChannels(channels) {
+		return errors.New("channels must contain REST and/or MCP")
+	}
+	for _, channel := range channels {
+		if channel == "REST" && !s.policyBool(ctx, "api_enabled", true) {
+			return errors.New("personal REST keys are disabled")
+		}
+		if channel == "MCP" && !s.policyBool(ctx, "mcp_enabled", true) {
+			return errors.New("personal MCP keys are disabled")
+		}
+	}
+	if len(scopes) == 0 {
+		return errors.New("at least one scope is required")
+	}
+	for _, scope := range scopes {
+		if !allowedScope(scope) {
+			return fmt.Errorf("scope %s is not allowed", scope)
+		}
+		if !p.IsBootstrap && !hasUserPermission(p, scope) {
+			return fmt.Errorf("scope %s exceeds user permission", scope)
+		}
+	}
+	if includes(channels, "MCP") && !includes(scopes, "mcp:use") {
+		return errors.New("MCP channel requires mcp:use scope")
+	}
+	if includes(scopes, "mcp:use") && !includes(channels, "MCP") {
+		return errors.New("mcp:use scope requires MCP channel")
+	}
+	return nil
+}
+
+// AllowedScopesFor exposes only permissions the current user can actually
+// delegate to a key. Showing unavailable checkboxes creates a form that can
+// only fail after submission.
+func AllowedScopesFor(p *auth.Principal) []string {
+	result := make([]string, 0, len(AllowedScopes))
+	for _, scope := range AllowedScopes {
+		if p.IsBootstrap || p.Has(scope) {
+			result = append(result, scope)
+		}
+	}
+	return result
+}
+
 func (s *Service) List(ctx context.Context, p *auth.Principal, userID string, admin bool) ([]Key, error) {
 	if userID == "" {
 		userID = p.UserID
@@ -94,7 +176,7 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, userID string, ad
 	if userID != p.UserID && !admin {
 		return nil, errors.New("access denied")
 	}
-	rows, err := s.DB.Query(ctx, `SELECT id,key_name,key_id,scopes,channels,status,expires_at,grace_expires_at,last_used_at,COALESCE(last_used_ip::text,''),created_at FROM personal_keys WHERE user_id=$1 ORDER BY created_at DESC`, userID)
+	rows, err := s.DB.Query(ctx, `SELECT id,key_name,key_id,scopes,channels,status,version,expires_at,grace_expires_at,last_used_at,COALESCE(last_used_ip::text,''),created_at FROM personal_keys WHERE user_id=$1 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +184,7 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, userID string, ad
 	out := []Key{}
 	for rows.Next() {
 		var k Key
-		if err = rows.Scan(&k.ID, &k.Name, &k.KeyID, &k.Scopes, &k.Channels, &k.Status, &k.ExpiresAt, &k.GraceExpiresAt, &k.LastUsedAt, &k.LastUsedIP, &k.CreatedAt); err != nil {
+		if err = rows.Scan(&k.ID, &k.Name, &k.KeyID, &k.Scopes, &k.Channels, &k.Status, &k.Version, &k.ExpiresAt, &k.GraceExpiresAt, &k.LastUsedAt, &k.LastUsedIP, &k.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, k)
@@ -114,7 +196,7 @@ func (s *Service) ListAll(ctx context.Context, p *auth.Principal, userID string)
 	if err := auth.Require(p, "admin:read"); err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT k.id,k.key_name,k.key_id,k.scopes,k.channels,k.status,k.expires_at,k.grace_expires_at,k.last_used_at,COALESCE(k.last_used_ip::text,''),k.created_at,u.id,u.username,u.display_name FROM personal_keys k JOIN users u ON u.id=k.user_id WHERE ($1='' OR u.id::text=$1) ORDER BY k.created_at DESC LIMIT 1000`, userID)
+	rows, err := s.DB.Query(ctx, `SELECT k.id,k.key_name,k.key_id,k.scopes,k.channels,k.status,k.version,k.expires_at,k.grace_expires_at,k.last_used_at,COALESCE(k.last_used_ip::text,''),k.created_at,u.id,u.username,u.display_name FROM personal_keys k JOIN users u ON u.id=k.user_id WHERE ($1='' OR u.id::text=$1) ORDER BY k.created_at DESC LIMIT 1000`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +204,7 @@ func (s *Service) ListAll(ctx context.Context, p *auth.Principal, userID string)
 	out := []AdminKey{}
 	for rows.Next() {
 		var item AdminKey
-		if err = rows.Scan(&item.ID, &item.Name, &item.KeyID, &item.Scopes, &item.Channels, &item.Status, &item.ExpiresAt, &item.GraceExpiresAt, &item.LastUsedAt, &item.LastUsedIP, &item.CreatedAt, &item.UserID, &item.Username, &item.DisplayName); err != nil {
+		if err = rows.Scan(&item.ID, &item.Name, &item.KeyID, &item.Scopes, &item.Channels, &item.Status, &item.Version, &item.ExpiresAt, &item.GraceExpiresAt, &item.LastUsedAt, &item.LastUsedIP, &item.CreatedAt, &item.UserID, &item.Username, &item.DisplayName); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -144,27 +226,9 @@ func (s *Service) create(ctx context.Context, p *auth.Principal, in CreateInput,
 	if count >= max && !allowRotationReplacement {
 		return Created{}, fmt.Errorf("maximum of %d active keys reached", max)
 	}
-	if !validChannels(in.Channels) {
-		return Created{}, errors.New("channels must contain REST and/or MCP")
-	}
-	for _, c := range in.Channels {
-		if c == "REST" && !s.policyBool(ctx, "api_enabled", true) {
-			return Created{}, errors.New("personal REST keys are disabled")
-		}
-		if c == "MCP" && !s.policyBool(ctx, "mcp_enabled", true) {
-			return Created{}, errors.New("personal MCP keys are disabled")
-		}
-	}
-	if len(in.Scopes) == 0 {
-		return Created{}, errors.New("at least one scope is required")
-	}
-	for _, scope := range in.Scopes {
-		if !allowedScope(scope) {
-			return Created{}, fmt.Errorf("scope %s is not allowed", scope)
-		}
-		if !p.IsBootstrap && !hasUserPermission(p, scope) {
-			return Created{}, fmt.Errorf("scope %s exceeds user permission", scope)
-		}
+	in.Scopes, in.Channels = normalizeAccess(in.Scopes, in.Channels)
+	if err := s.validateAccess(ctx, p, in.Scopes, in.Channels); err != nil {
+		return Created{}, err
 	}
 	now := time.Now()
 	defaultDays, maxDays := s.policyInt(ctx, "default_lifetime_days", 365), s.policyInt(ctx, "max_lifetime_days", 730)
@@ -196,6 +260,62 @@ func (s *Service) create(ctx context.Context, p *auth.Principal, in CreateInput,
 	return Created{Key: key, Secret: raw, Warning: "이 Secret은 지금 한 번만 표시됩니다. 안전한 곳에 보관하세요."}, nil
 }
 func hasUserPermission(p *auth.Principal, scope string) bool { return p.Has(scope) }
+
+func (s *Service) UpdateAccess(ctx context.Context, p *auth.Principal, id string, in UpdateAccessInput, ip, requestID, ua string) (Key, error) {
+	if in.Version < 1 {
+		return Key{}, errors.New("version is required")
+	}
+	in.Scopes, in.Channels = normalizeAccess(in.Scopes, in.Channels)
+	if err := s.validateAccess(ctx, p, in.Scopes, in.Channels); err != nil {
+		return Key{}, err
+	}
+	var owner, status string
+	var beforeScopes, beforeChannels []string
+	var currentVersion int
+	if err := s.DB.QueryRow(ctx, `SELECT user_id,status,scopes,channels,version FROM personal_keys WHERE id=$1`, id).
+		Scan(&owner, &status, &beforeScopes, &beforeChannels, &currentVersion); err != nil {
+		return Key{}, err
+	}
+	if owner != p.UserID {
+		return Key{}, errors.New("access denied")
+	}
+	if status != "ACTIVE" {
+		return Key{}, errors.New("only an active key can be changed")
+	}
+	if currentVersion != in.Version {
+		return Key{}, errors.New("key was changed by another user")
+	}
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return Key{}, err
+	}
+	defer tx.Rollback(ctx)
+	command, err := tx.Exec(ctx, `UPDATE personal_keys SET scopes=$2,channels=$3,version=version+1 WHERE id=$1 AND status='ACTIVE' AND version=$4`, id, in.Scopes, in.Channels, in.Version)
+	if err != nil {
+		return Key{}, err
+	}
+	if command.RowsAffected() != 1 {
+		return Key{}, errors.New("key was changed by another user")
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO personal_key_history(id,key_id,action,actor_id,details) VALUES($1,$2,'UPDATE_ACCESS',$3,jsonb_build_object('beforeScopes',$4::text[],'afterScopes',$5::text[],'beforeChannels',$6::text[],'afterChannels',$7::text[]))`, ids.New(), id, p.UserID, beforeScopes, in.Scopes, beforeChannels, in.Channels); err != nil {
+		return Key{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Key{}, err
+	}
+	s.Audit.Record(ctx, audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "WEB", Action: "KEY_ACCESS_UPDATE", Resource: "personal_key", ResourceID: id,
+		Before: map[string]any{"scopes": beforeScopes, "channels": beforeChannels}, After: map[string]any{"scopes": in.Scopes, "channels": in.Channels}, IP: ip, RequestID: requestID, UserAgent: ua})
+	items, err := s.List(ctx, p, p.UserID, false)
+	if err != nil {
+		return Key{}, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return Key{}, pgx.ErrNoRows
+}
 
 func (s *Service) Rotate(ctx context.Context, p *auth.Principal, id, ip, requestID, ua string) (Created, error) {
 	var in CreateInput

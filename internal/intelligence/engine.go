@@ -674,7 +674,8 @@ func (s *Service) RunIfDue(ctx context.Context) error {
 	}
 	var due bool
 	if err := s.DB.QueryRow(ctx, `SELECT NOT EXISTS(
-		SELECT 1 FROM intelligence_runs WHERE finished_at IS NOT NULL AND finished_at > now() - ($1 || ' minutes')::interval)`,
+		SELECT 1 FROM intelligence_runs WHERE finished_at IS NOT NULL
+		AND finished_at > now() - make_interval(mins => $1::int))`,
 		minutes).Scan(&due); err != nil {
 		return err
 	}

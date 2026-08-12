@@ -156,6 +156,18 @@
    column was cut off at the panel edge while the coaching table sat half empty.
    They stack instead, each with the full width its columns need. */
 .intelligence-stack { display: grid; gap: 16px; margin-bottom: 18px; }
+.intelligence-stack .intelligence-table-head {
+  align-items: flex-start;
+  margin: 0;
+  padding: 20px 22px 17px;
+}
+.intelligence-table-head > div { display: grid; gap: 9px; }
+.intelligence-table-head .panel-title-row { display: flex; align-items: center; gap: 8px; }
+.intelligence-table-head .panel-title-row span {
+  display: inline-flex; align-items: center; min-height: 22px; padding: 2px 8px;
+  border-radius: 999px; background: #edf4f8; color: #527087; font-size: 12px; font-weight: 750;
+}
+.intelligence-table-head p { margin: 0; line-height: 1.55; }
 
 /* The risk and signal tables carry one long sentence plus five short columns.
    Without explicit widths the sentence starved the rest, wrapping the headers

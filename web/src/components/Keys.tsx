@@ -2,6 +2,7 @@ import { FormEvent, useMemo, useState } from 'react'
 import { api } from '../api'
 import { Modal } from './Layout'
 import { errorMessage } from '../App'
+import type { PersonalKey } from '../types'
 
 // Issuing a key used to mean ticking boxes in a flat grid of raw scope strings.
 // Nobody reads thirty codes; people either tick everything or tick too little
@@ -50,12 +51,15 @@ const presets = [
   { key: 'minimal', label: '최소 권한', hint: '고객 조회만 허용합니다', pick: (all: string[]) => all.filter(s => s === 'customer:read') },
 ]
 
-export function KeyModal({ scopes, onClose, onCreated, notify }: {
-  scopes: string[]; onClose: () => void; onCreated: (secret: string) => void; notify: Notify
+export function KeyModal({ scopes, onClose, onCreated, onUpdated, notify, editing }: {
+  scopes: string[]; onClose: () => void; onCreated?: (secret: string) => void; onUpdated?: () => void; notify: Notify; editing?: PersonalKey
 }) {
-  const [selected, setSelected] = useState<string[]>(['customer:read', 'opportunity:read', 'activity:read', 'forecast:read', CHANNEL_SCOPE])
-  const [rest, setRest] = useState(true)
-  const [mcp, setMcp] = useState(true)
+  const defaultScopes = ['customer:read', 'opportunity:read', 'activity:read', 'forecast:read', CHANNEL_SCOPE]
+  const editableInitial = editing?.scopes.filter(scope => scopes.includes(scope))
+  const mcpAvailable = scopes.includes(CHANNEL_SCOPE)
+  const [selected, setSelected] = useState<string[]>(editableInitial || defaultScopes.filter(scope => scopes.includes(scope)))
+  const [rest, setRest] = useState(editing ? editing.channels.includes('REST') : true)
+  const [mcp, setMcp] = useState(editing ? editing.channels.includes('MCP') && mcpAvailable : mcpAvailable)
   const [busy, setBusy] = useState(false)
   const [guide, setGuide] = useState(false)
 
@@ -82,34 +86,45 @@ export function KeyModal({ scopes, onClose, onCreated, notify }: {
   const chosenData = selected.filter(s => s !== CHANNEL_SCOPE)
   const writeCount = chosenData.filter(isWriteScope).length
   const missingChannelScope = mcp && !has(CHANNEL_SCOPE)
+  const unavailableCount = editing ? editing.scopes.filter(scope => !scopes.includes(scope)).length : 0
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
     setBusy(true)
     try {
-      const result = await api<{ secret: string }>('/api/v1/me/keys', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: form.get('name'),
-          scopes: mcp ? [...new Set([...selected, CHANNEL_SCOPE])] : selected.filter(s => s !== CHANNEL_SCOPE),
-          channels: [...(rest ? ['REST'] : []), ...(mcp ? ['MCP'] : [])],
-        }),
-      })
-      onCreated(result.secret)
+      const access = {
+        scopes: mcp ? [...new Set([...selected, CHANNEL_SCOPE])] : selected.filter(s => s !== CHANNEL_SCOPE),
+        channels: [...(rest ? ['REST'] : []), ...(mcp ? ['MCP'] : [])],
+      }
+      if (editing) {
+        await api(`/api/v1/me/keys/${editing.id}`, {
+          method: 'PUT', body: JSON.stringify({ ...access, version: editing.version }),
+        })
+        notify('키 권한을 변경했습니다. 다음 요청부터 즉시 적용됩니다.')
+        onUpdated?.()
+      } else {
+        const result = await api<{ secret: string }>('/api/v1/me/keys', {
+          method: 'POST', body: JSON.stringify({ name: form.get('name'), ...access }),
+        })
+        onCreated?.(result.secret)
+      }
     } catch (err) { notify(errorMessage(err), true) } finally { setBusy(false) }
   }
 
-  return <Modal title="새 개인 연동 키" onClose={onClose} wide>
+  return <Modal title={editing ? '키 권한 변경' : '새 개인 연동 키'} onClose={onClose} wide>
     <form className="form key-form" onSubmit={submit}>
-      <label>키 이름 *<input name="name" required autoFocus placeholder="예: 영업 리포트 Agent" />
-        <small>어디에 쓰는 키인지 알아볼 수 있게 적으세요. 나중에 폐기할 때 기준이 됩니다.</small></label>
+      {editing ? <div className="key-edit-target">
+        <span>변경 대상</span><b>{editing.name}</b><code>relio_{editing.keyId}_••••••</code>
+        <small>Secret은 바뀌지 않으며 저장한 권한은 다음 API·MCP 요청부터 적용됩니다.</small>
+      </div> : <label>키 이름 *<input name="name" required autoFocus placeholder="예: 영업 리포트 Agent" />
+        <small>어디에 쓰는 키인지 알아볼 수 있게 적으세요. 나중에 폐기할 때 기준이 됩니다.</small></label>}
 
       <fieldset>
         <legend>사용 채널</legend>
         <div className="check-row">
           <label><input type="checkbox" checked={rest} onChange={e => setRest(e.target.checked)} /> REST API</label>
-          <label><input type="checkbox" checked={mcp} onChange={e => setMcp(e.target.checked)} /> MCP (AI 에이전트)</label>
+          <label title={mcpAvailable ? undefined : '본인에게 mcp:use 권한이 없습니다'}><input type="checkbox" checked={mcp} disabled={!mcpAvailable} onChange={e => setMcp(e.target.checked)} /> MCP (AI 에이전트)</label>
         </div>
         {mcp && <p className="field-note">
           MCP 연결 방법이 필요하면 <button type="button" className="link-button" onClick={() => setGuide(true)}>MCP 사용 안내</button>를 확인하세요.
@@ -118,6 +133,10 @@ export function KeyModal({ scopes, onClose, onCreated, notify }: {
 
       <fieldset>
         <legend>권한 범위 <small>본인 권한보다 넓게 부여되지 않습니다</small></legend>
+
+        {unavailableCount > 0 && <p className="field-note warn">
+          현재 본인 권한에서 제외된 {unavailableCount}개 Scope는 저장 시 키에서도 제거됩니다.
+        </p>}
 
         <div className="scope-presets">
           {presets.map(preset => <button key={preset.key} type="button" className="preset-chip"
@@ -172,7 +191,7 @@ export function KeyModal({ scopes, onClose, onCreated, notify }: {
       <div className="modal-actions">
         <button type="button" className="btn btn-ghost" onClick={onClose}>취소</button>
         <button className="btn btn-primary" disabled={busy || !chosenData.length || (!rest && !mcp)}>
-          {busy ? '발급 중…' : '키 발급'}
+          {busy ? (editing ? '저장 중…' : '발급 중…') : (editing ? '권한 저장' : '키 발급')}
         </button>
       </div>
     </form>
@@ -186,7 +205,35 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
   const [tab, setTab] = useState<'connect' | 'config' | 'tools' | 'trouble'>('connect')
   const origin = location.origin
   const sample = keyPreview || 'relio_{keyId}_{secret}'
-  const clientConfig = `{
+  const qwenCommand = `qwen mcp add --scope user --transport http relio ${origin}/mcp \\
+  --header "Authorization: Bearer ${sample}"`
+  const qwenConfig = `{
+  "mcpServers": {
+    "relio": {
+      "httpUrl": "${origin}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${sample}"
+      }
+    }
+  }
+}`
+  const openCodeCommand = `opencode mcp add relio --url ${origin}/mcp \\
+  --header "Authorization=Bearer ${sample}"`
+  const openCodeConfig = `{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "relio": {
+      "type": "remote",
+      "url": "${origin}/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer ${sample}"
+      }
+    }
+  }
+}`
+  const bridgeConfig = `{
   "mcpServers": {
     "relio": {
       "command": "npx",
@@ -225,9 +272,19 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
       </>}
 
       {tab === 'config' && <>
-        <h3>Claude Desktop 등 MCP 클라이언트</h3>
-        <p className="muted-copy">설정 파일에 아래 내용을 추가하세요. 사내망에서 <code>npx</code>를 쓸 수 없다면 클라이언트가 제공하는 HTTP 전송 설정을 사용하고 위 엔드포인트와 헤더를 그대로 넣으면 됩니다.</p>
-        <CopyBlock text={clientConfig} />
+        <h3>Qwen Code · 권장</h3>
+        <p className="muted-copy">Qwen은 <code>httpUrl</code>을 사용하는 네이티브 Streamable HTTP 설정이 필요합니다. <code>url</code>은 구형 SSE 설정이므로 사용하지 마세요.</p>
+        <CopyBlock text={qwenCommand} />
+        <CopyBlock text={qwenConfig} />
+
+        <h3>OpenCode · 권장</h3>
+        <p className="muted-copy">OpenCode는 Qwen의 <code>mcpServers</code>가 아니라 최상위 <code>mcp</code>에 <code>type: remote</code>로 설정합니다. CLI Header 구분자는 콜론이 아닌 등호입니다.</p>
+        <CopyBlock text={openCodeCommand} />
+        <CopyBlock text={openCodeConfig} />
+
+        <h3>Claude Desktop 등 stdio 전용 클라이언트</h3>
+        <p className="muted-copy">클라이언트가 원격 HTTP를 직접 지원하지 않을 때만 <code>mcp-remote</code> Bridge를 사용하세요.</p>
+        <CopyBlock text={bridgeConfig} />
         <p className="muted-copy">Origin 제한이 켜져 있으면 관리자 화면의 <b>연동 키 · API · MCP</b>에서 클라이언트 Origin을 먼저 허용해야 합니다.</p>
       </>}
 
@@ -248,7 +305,8 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
           <div><span>403 mcp_access_denied</span><b>키에 MCP 채널이 없거나 <code>mcp:use</code> 권한이 빠졌습니다.</b></div>
           <div><span>403 invalid_origin</span><b>관리자 화면에서 클라이언트 Origin을 허용하세요.</b></div>
           <div><span>405 sse_not_supported</span><b>정상입니다. 이 서버는 POST만 사용합니다.</b></div>
-          <div><span>인증은 되는데 목록 호출 실패</span><b>구버전에서 프로토콜 버전 협상 문제로 발생하던 증상입니다. v1.11.3 이상으로 올리세요.</b></div>
+          <div><span>failed to parse json · Failed to get tools</span><b>v1.11.4 이상인지 확인하고, Qwen은 <code>httpUrl</code>, OpenCode는 <code>type: remote</code> 설정을 사용하세요.</b></div>
+          <div><span>Qwen Pending approval</span><b>Project Scope 서버는 작업공간 승인 후 연결됩니다. 바로 확인하려면 위 명령처럼 User Scope로 추가하세요.</b></div>
           <div><span>도구 호출이 isError로 반환됨</span><b>전송 오류가 아니라 도구가 실행되어 실패한 것입니다. 메시지에 사유가 들어 있습니다.</b></div>
         </div>
       </>}

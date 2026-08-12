@@ -94,7 +94,7 @@ docker run -d \
   -e BOOTSTRAP_ADMIN_PASSWORD="ChangeMe-To-A-Strong-Password" \
   -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -v relio-data:/var/lib/relio \
-  relio:v1.11.3
+  relio:v1.11.4
 ```
 
 ### 자격증명 영속성 (ENCRYPTION_KEY)
@@ -119,8 +119,8 @@ Relio는 Data Key의 단방향 ID를 PostgreSQL에 등록합니다. SSO Secret �
 GitHub Release에서 파일 하나만 반입합니다.
 
 ```bash
-gunzip -c relio-v1.11.3.tar.gz | docker load
-docker image inspect relio:v1.11.3
+gunzip -c relio-v1.11.4.tar.gz | docker load
+docker image inspect relio:v1.11.4
 ```
 
 SHA-256은 Release 본문에 기록되며 별도 Checksum Asset은 배포하지 않습니다.
@@ -161,7 +161,7 @@ Sales Intelligence MCP는 `find_deals_at_risk`, `explain_deal_risk`, `recommend_
 ```bash
 make test
 make build
-make docker VERSION=1.11.3
+make docker VERSION=1.11.4
 ```
 
 검증 항목:
@@ -169,8 +169,8 @@ make docker VERSION=1.11.3
 ```bash
 ./scripts/check-env-contract.sh
 ./scripts/check-static-assets.sh
-./scripts/run-offline-container-test.sh relio:v1.11.3
-./scripts/run-upgrade-container-test.sh relio:v1.11.2 relio:v1.11.3
+./scripts/run-offline-container-test.sh relio:v1.11.4
+./scripts/run-upgrade-container-test.sh relio:v1.11.3 relio:v1.11.4
 ```
 
 오프라인 테스트는 Docker internal network에서 PostgreSQL과 Relio를 시작하고 Migration, Bootstrap 로그인, CRM/영업 기능, REST Personal Key, MCP, Admin Operations, Data Quality, Configuration Bundle 왕복, Support Bundle/Audit 검색과 외부 정적 자산 부재를 검사합니다. Container 교체 후 SSO Secret·Personal Key 유지와 잘못된 Volume의 Fail-Closed 동작도 검증합니다.
@@ -180,14 +180,14 @@ make docker VERSION=1.11.3
 SemVer Tag를 push하면 `.github/workflows/release.yml`이 테스트, 이미지 빌드, 오프라인 검증, `docker save`, gzip 압축과 GitHub Release를 수행합니다.
 
 ```bash
-git tag v1.11.3
-git push origin v1.11.3
+git tag v1.11.4
+git push origin v1.11.4
 ```
 
 Relio가 Release Asset으로 직접 업로드하는 파일은 다음 하나뿐입니다.
 
 ```text
-relio-v1.11.3.tar.gz
+relio-v1.11.4.tar.gz
 ```
 
 ## 설계 문서

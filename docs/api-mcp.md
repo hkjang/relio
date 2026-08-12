@@ -1,9 +1,9 @@
 # Relio REST API & MCP (Model Context Protocol) 명세서
 
-- **문서 버전**: v1.6.0  
-- **최종 수정일**: 2026년 8월 11일  
-- **대상**: API Integration Engineer, AI Agent Developer, Solutions Architect  
-- **문서 개요**: Relio REST API v1 Specification, Personal API Key 인증, MCP Streamable HTTP 어댑터 `/mcp`, Protocol Version 2025-11-25 및 13가지 전용 MCP Tool 상세 Schema  
+- **문서 버전**: v1.11.4
+- **최종 수정일**: 2026년 8월 12일
+- **대상**: API Integration Engineer, AI Agent Developer, Solutions Architect
+- **문서 개요**: Relio REST API v1 Specification, Personal API Key 인증·권한 변경, MCP Streamable HTTP 어댑터 `/mcp` 및 영업 인텔리전스 Tool Schema
 
 ---
 
@@ -29,6 +29,7 @@ Authorization: Bearer relio_4f30d2a1b7c9_xxxxxxxxxxxxxxxxx
 - **형식**: `relio_{keyId}_{secret}`
 - **검증 매커니즘**: `keyId`로 DB 조회 후 `HMAC-SHA256(secret)` 값으로 무결성 검증.
 - **권한 제어**: API Key 생성 시 지정된 Scope와 해당 사용자의 RBAC/Data Scope의 교집합만 허용.
+- **발급 후 권한 변경**: `PUT /api/v1/me/keys/{id}`에 `scopes`, `channels`, `version`을 전송합니다. Secret은 회전하지 않으며 변경 권한은 다음 요청부터 적용됩니다.
 
 ---
 
@@ -54,6 +55,12 @@ AI Agent의 오작동 및 부적절한 변경을 방지하기 위해 모든 Tool
 | **`ANALYZE`** | 진단 및 위험 원인 설명, 추천 액션 도구 | `find_deals_at_risk`, `explain_deal_risk`, `recommend_next_actions` |
 | **`WRITE`** | 영업기회 생성/수정, 활동 등록 도구 | `create_opportunity`, `add_activity`, `build_account_plan` |
 | **`APPROVAL`** | high-risk 승인/반려 처리 도구 (추가 검증 필요) | `approve_request`, `reject_request` |
+
+### 2.3 Qwen Code와 OpenCode 설정
+
+- Qwen Code는 `mcpServers.relio.httpUrl`과 `headers.Authorization`을 사용합니다. `url`은 구형 SSE 설정입니다.
+- OpenCode는 `mcp.relio.type`을 `remote`로, `url`, `headers`, `oauth: false`를 설정합니다.
+- 제품의 **개인 연동 키 → MCP 사용 안내 → 클라이언트 설정**에서 현재 Host와 키 형식이 반영된 예시를 복사할 수 있습니다.
 
 ---
 

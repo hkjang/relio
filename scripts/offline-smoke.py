@@ -382,6 +382,35 @@ key = request(
     },
     csrf_header,
 )
+assert key["key"]["version"] == 1
+# Access can be narrowed and expanded without rotating the one-time secret.
+# The version also prevents a stale browser tab from restoring old privileges.
+limited_key = request(
+    f"/api/v1/me/keys/{key['key']['id']}",
+    "PUT",
+    {"version": key["key"]["version"], "scopes": ["mcp:use", "customer:read"], "channels": ["MCP"]},
+    csrf_header,
+)
+assert limited_key["channels"] == ["MCP"] and limited_key["version"] == 2
+restored_key = request(
+    f"/api/v1/me/keys/{key['key']['id']}",
+    "PUT",
+    {
+        "version": limited_key["version"],
+        "scopes": ["mcp:use", "customer:read", "contact:read", "opportunity:read", "activity:read", "forecast:read", "approval:request", "approval:approve"],
+        "channels": ["REST", "MCP"],
+    },
+    csrf_header,
+)
+assert restored_key["version"] == 3
+expect_http_error(
+    f"/api/v1/me/keys/{key['key']['id']}",
+    "PUT",
+    {"version": limited_key["version"], "scopes": ["customer:read"], "channels": ["REST"]},
+    csrf_header,
+    contains="another user",
+)
+key["key"] = restored_key
 inventory = request("/api/v1/admin/personal-keys")
 assert inventory["items"][0]["keyId"] == key["key"]["keyId"]
 assert "secret" not in inventory["items"][0]
@@ -409,6 +438,7 @@ tool_list = request(
     {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
 )
 tool_names = {tool["name"] for tool in tool_list["result"]["tools"]}
+assert all(tool["inputSchema"].get("required") is not None for tool in tool_list["result"]["tools"] if "required" in tool["inputSchema"])
 assert "submit_approval" not in tool_names
 assert {"find_deals_at_risk", "explain_deal_risk", "explain_forecast_change", "get_sales_coaching_insights"}.issubset(tool_names)
 assert {"get_account_brief", "get_account_relationships", "get_account_plan", "find_cross_sell_opportunities", "get_opportunity_team"}.issubset(tool_names)

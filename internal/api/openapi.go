@@ -99,7 +99,7 @@ func OpenAPI() map[string]any {
 			"/approvals/{id}/reject":                         map[string]any{"post": operation("반려", "approval:approve")},
 			"/me/keys":                                       methods("개인 API/MCP Key 목록 및 생성", "", ""),
 			"/me/keys/{id}/rotate":                           map[string]any{"post": operation("개인 Key Rotation", "")},
-			"/me/keys/{id}":                                  map[string]any{"delete": operation("개인 Key Revoke", "")},
+			"/me/keys/{id}":                                  map[string]any{"put": operation("개인 Key Scope·Channel 변경", ""), "delete": operation("개인 Key Revoke", "")},
 			"/me/activity":                                   get("내 접속/API/MCP 활동", ""),
 			"/me/views":                                      methods("저장된 검색 조회 및 저장", "", ""),
 			"/me/views/{id}":                                 map[string]any{"put": operation("저장된 검색 수정", ""), "delete": operation("저장된 검색 삭제", "")},

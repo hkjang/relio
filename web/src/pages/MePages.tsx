@@ -16,7 +16,48 @@ function PasswordChange(props:Props){const [busy,setBusy]=useState(false);async 
 
 function Profile(props:Props){return <Frame {...props} title="내 프로필" subtitle="업무에 사용하는 나의 정보를 확인합니다." actions={<button className="btn btn-primary">프로필 편집</button>}><div className="profile-layout"><section className="panel profile-card"><span className="avatar profile-avatar">{initials(props.user.displayName, 1)}</span><h2>{props.user.displayName}</h2><p>{props.user.email||props.user.username}</p><Status value={props.user.authMethod}/><div className="profile-stats"><div><b>{props.user.dataScope}</b><small>데이터 범위</small></div><div><b>{props.user.permissions.length}</b><small>권한</small></div></div></section><section className="panel profile-info"><div className="panel-head"><div><h2>기본 정보</h2><p>조직 정보는 관리자에게 문의하세요.</p></div></div><div className="info-grid"><div><small>이름</small><b>{props.user.displayName}</b></div><div><small>사용자 ID</small><b>{props.user.username}</b></div><div><small>이메일</small><b>{props.user.email||'미등록'}</b></div><div><small>인증 방식</small><b>{props.user.authMethod}</b></div><div><small>조직 ID</small><b>{props.user.organizationId||'미지정'}</b></div><div><small>데이터 범위</small><b>{props.user.dataScope}</b></div></div></section></div></Frame>}
 
-function Keys(props:Props){const [items,setItems]=useState<PersonalKey[]>([]);const [scopes,setScopes]=useState<string[]>([]);const [modal,setModal]=useState(false);const [guide,setGuide]=useState(false);const [secret,setSecret]=useState('');const load=()=>api<{items:PersonalKey[];allowedScopes:string[]}>('/api/v1/me/keys').then(v=>{setItems(v.items);setScopes(v.allowedScopes)}).catch(e=>props.notify(errorMessage(e),true));useEffect(()=>{void load()},[]);async function revoke(id:string){if(!confirm('이 키를 즉시 폐기할까요? 이 작업은 되돌릴 수 없습니다.'))return;try{await api(`/api/v1/me/keys/${id}`,{method:'DELETE'});props.notify('키를 폐기했습니다.');load()}catch(e){props.notify(errorMessage(e),true)}}async function rotate(id:string){if(!confirm('새 키를 만들고 기존 키를 Grace Period 후 폐기할까요?'))return;try{const v=await api<{secret:string}>(`/api/v1/me/keys/${id}/rotate`,{method:'POST'});setSecret(v.secret);props.notify('새 키가 발급되었습니다.');load()}catch(e){props.notify(errorMessage(e),true)}}return <Frame {...props} title="개인 연동 키" subtitle="개인별 권한 범위가 적용되는 접근 키를 안전하게 발급하고 회전합니다." actions={<><button className="btn btn-secondary" onClick={()=>setGuide(true)}>MCP 사용 안내</button><button className="btn btn-primary" onClick={()=>setModal(true)}>＋ 새 키 발급</button></>}><div className="key-security"><span>⌁</span><div><b>원본 비밀값은 데이터베이스에 저장하지 않습니다</b><p>Secret은 발급 직후 한 번만 표시되며, 관리자는 값이 아닌 메타데이터만 확인할 수 있습니다.</p></div></div><section className="panel table-panel">{items.length?<table><thead><tr><th>이름 · 키 ID</th><th>채널</th><th>범위</th><th>상태</th><th>만료일</th><th>최근 사용</th><th/></tr></thead><tbody>{items.map(k=><tr key={k.id}><td><b>{k.name}</b><code className="key-id">relio_{k.keyId}_••••••</code></td><td>{k.channels.map(c=><Status key={c} value={c}/>)}</td><td><span className="scope-count">{k.scopes.length} scopes</span><small className="table-sub scope-preview">{k.scopes.slice(0,2).join(', ')}</small></td><td><Status value={k.status}/>{k.graceExpiresAt&&<small className="table-sub">Grace {date(k.graceExpiresAt)}</small>}</td><td>{date(k.expiresAt)}</td><td>{k.lastUsedAt?<>{relative(k.lastUsedAt)}<small className="table-sub">{k.lastUsedIp}</small></>:'사용 안 함'}</td><td><div className="row-menu"><button onClick={()=>rotate(k.id)} disabled={k.status!=='ACTIVE'}>회전</button><button className="danger" onClick={()=>revoke(k.id)} disabled={k.status==='REVOKED'}>폐기</button></div></td></tr>)}</tbody></table>:<Empty icon="⌁" title="발급된 개인 키가 없습니다" description="REST API 또는 MCP에서 사용할 첫 키를 발급하세요." action={<button className="btn btn-primary" onClick={()=>setModal(true)}>키 발급</button>}/>}</section>{modal&&<KeyModal scopes={scopes} onClose={()=>setModal(false)} onCreated={v=>{setModal(false);setSecret(v);load()}} notify={props.notify}/>} {secret&&<SecretModal secret={secret} onClose={()=>setSecret('')} notify={props.notify}/>}{guide&&<McpGuideModal onClose={()=>setGuide(false)}/>}</Frame>}
+function Keys(props: Props) {
+  const [items, setItems] = useState<PersonalKey[]>([])
+  const [scopes, setScopes] = useState<string[]>([])
+  const [modal, setModal] = useState(false)
+  const [editing, setEditing] = useState<PersonalKey | null>(null)
+  const [guide, setGuide] = useState(false)
+  const [secret, setSecret] = useState('')
+  const load = () => api<{items: PersonalKey[]; allowedScopes: string[]}>('/api/v1/me/keys')
+    .then(v => { setItems(v.items); setScopes(v.allowedScopes) })
+    .catch(e => props.notify(errorMessage(e), true))
+  useEffect(() => { void load() }, [])
+
+  async function revoke(id: string) {
+    if (!confirm('이 키를 즉시 폐기할까요? 이 작업은 되돌릴 수 없습니다.')) return
+    try {
+      await api(`/api/v1/me/keys/${id}`, {method: 'DELETE'})
+      props.notify('키를 폐기했습니다.')
+      load()
+    } catch (e) { props.notify(errorMessage(e), true) }
+  }
+  async function rotate(id: string) {
+    if (!confirm('새 키를 만들고 기존 키를 Grace Period 후 폐기할까요?')) return
+    try {
+      const v = await api<{secret: string}>(`/api/v1/me/keys/${id}/rotate`, {method: 'POST'})
+      setSecret(v.secret)
+      props.notify('새 키가 발급되었습니다.')
+      load()
+    } catch (e) { props.notify(errorMessage(e), true) }
+  }
+
+  return <Frame {...props} title="개인 연동 키" subtitle="접근 키를 발급하고 Scope·채널 권한을 안전하게 변경하거나 회전합니다."
+    actions={<><button className="btn btn-secondary" onClick={() => setGuide(true)}>MCP 사용 안내</button><button className="btn btn-primary" onClick={() => setModal(true)}>＋ 새 키 발급</button></>}>
+    <div className="key-security"><span>⌁</span><div><b>Secret은 그대로 두고 권한만 변경할 수 있습니다</b><p>원본 Secret은 발급 직후 한 번만 표시되며, 권한 변경은 다음 API·MCP 요청부터 즉시 적용됩니다.</p></div></div>
+    <section className="panel table-panel">{items.length ? <table><thead><tr><th>이름 · 키 ID</th><th>채널</th><th>범위</th><th>상태</th><th>만료일</th><th>최근 사용</th><th/></tr></thead><tbody>
+      {items.map(k => <tr key={k.id}><td><b>{k.name}</b><code className="key-id">relio_{k.keyId}_••••••</code></td><td>{k.channels.map(c => <Status key={c} value={c}/>)}</td><td title={k.scopes.join(', ')}><span className="scope-count">{k.scopes.length} scopes</span><small className="table-sub scope-preview">{k.scopes.slice(0, 2).join(', ')}</small></td><td><Status value={k.status}/>{k.graceExpiresAt && <small className="table-sub">Grace {date(k.graceExpiresAt)}</small>}</td><td>{date(k.expiresAt)}</td><td>{k.lastUsedAt ? <>{relative(k.lastUsedAt)}<small className="table-sub">{k.lastUsedIp}</small></> : '사용 안 함'}</td><td><div className="row-menu"><button onClick={() => setEditing(k)} disabled={k.status !== 'ACTIVE'}>권한</button><button onClick={() => rotate(k.id)} disabled={k.status !== 'ACTIVE'}>회전</button><button className="danger" onClick={() => revoke(k.id)} disabled={k.status === 'REVOKED'}>폐기</button></div></td></tr>)}
+    </tbody></table> : <Empty icon="⌁" title="발급된 개인 키가 없습니다" description="REST API 또는 MCP에서 사용할 첫 키를 발급하세요." action={<button className="btn btn-primary" onClick={() => setModal(true)}>키 발급</button>}/>}</section>
+    {modal && <KeyModal scopes={scopes} onClose={() => setModal(false)} onCreated={v => { setModal(false); setSecret(v); load() }} notify={props.notify}/>}
+    {editing && <KeyModal scopes={scopes} editing={editing} onClose={() => setEditing(null)} onUpdated={() => { setEditing(null); load() }} notify={props.notify}/>}
+    {secret && <SecretModal secret={secret} onClose={() => setSecret('')} notify={props.notify}/>}
+    {guide && <McpGuideModal onClose={() => setGuide(false)}/>}
+  </Frame>
+}
 function SecretModal({secret,onClose,notify}:{secret:string;onClose:()=>void;notify:Props['notify']}){const [copied,setCopied]=useState(false);async function copy(){await navigator.clipboard.writeText(secret);setCopied(true);notify('Secret을 클립보드에 복사했습니다.')}return <Modal title="키가 발급되었습니다" onClose={onClose}><div className="one-time-warning"><b>지금 한 번만 확인할 수 있습니다</b><p>창을 닫으면 다시 볼 수 없습니다. 안전한 비밀값 저장소에 보관하세요.</p></div><div className="secret-box"><code>{secret}</code><button onClick={copy}>{copied?'복사됨 ✓':'복사'}</button></div><div className="modal-actions"><button className="btn btn-primary" onClick={onClose}>안전하게 보관했습니다</button></div></Modal>}
 
 function Sessions(props:Props){const [items,setItems]=useState<any[]|null>(null);const load=()=>api<{items:any[]}>('/api/v1/me/sessions').then(v=>setItems(v.items)).catch(e=>props.notify(errorMessage(e),true));useEffect(()=>{void load()},[]);async function revoke(x:any){if(x.current){props.onLogout();return}if(!confirm('선택한 로그인 Session을 종료할까요?'))return;try{await api(`/api/v1/me/sessions/${x.id}`,{method:'DELETE'});props.notify('Session을 종료했습니다.');load()}catch(e){props.notify(errorMessage(e),true)}}return <Frame {...props} title="로그인 세션" subtitle="활성 로그인 위치와 인증 방식을 확인하고 개별 접속을 종료합니다.">{!items?<Spinner/>:<div className="settings-stack">{items.map(x=><section className="panel session-card" key={x.id}><div className="session-icon">◎</div><div><div className="session-title"><b>{x.current?'현재 세션':'다른 세션'}</b><Status value="ACTIVE"/></div><p>{x.authMethod} · {x.ip||'IP 없음'}</p><small>{x.userAgent||'Client 정보 없음'} · 최근 {relative(x.lastSeenAt)}</small></div><button className="btn btn-secondary" onClick={()=>revoke(x)}>{x.current?'로그아웃':'Session 종료'}</button></section>)}</div>}</Frame>}

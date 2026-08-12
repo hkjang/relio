@@ -320,31 +320,60 @@
 
 <hr>
 
-<h2>7. AI Agent 연동 및 Personal MCP Key 활용 (<code>/me/api-keys</code>)</h2>
+<h2>7. AI Agent 연동 및 Personal MCP Key 활용 (<code>/me/keys</code>)</h2>
 
 <h3>7.1 Personal API/MCP Key 발급</h3>
-<p>1. <code>/me/api-keys</code> 메뉴 이동 후 <code>새 키 생성</code> 클릭.</p>
+<p>1. <code>/me/keys</code> 메뉴 이동 후 <code>새 키 발급</code> 클릭.</p>
 <p>2. Scope 선택 (예: <code>mcp:use</code>, <code>opportunity:read</code> 등).</p>
 <p>3. 발급된 <code>relio_4f30d2a1b7c9_xxxxxxxx</code> 키를 안전한 곳에 보관.</p>
+<p>4. 발급 후에는 목록의 <code>권한</code> 버튼에서 Scope와 REST/MCP 채널을 변경할 수 있습니다. Secret은 바뀌지 않고 다음 요청부터 바로 적용됩니다.</p>
 
-<h3>7.2 AI Agent (Claude, Cursor 등) MCP 연동 설정</h3>
-<p>AI Agent 설정 파일(<code>mcp_config.json</code> 등)에 Relio MCP Server를 추가합니다:</p>
+<h3>7.2 Qwen Code 연동</h3>
+
+<p><pre><code class="bash">qwen mcp add --scope user --transport http relio https://relio.company.internal/mcp \
+  --header "Authorization: Bearer relio_4f30d2a1b7c9_xxxxxxxx"
+</code></pre></p>
 
 <p><pre><code class="json">{
   "mcpServers": {
     "relio-crm": {
-      "url": "https://relio.company.internal/mcp",
+      "httpUrl": "https://relio.company.internal/mcp",
       "headers": {
-        "Authorization": "Bearer relio_4f30d2a1b7c9_xxxxxxxx",
-        "Accept": "application/json, text/event-stream",
-        "MCP-Protocol-Version": "2025-11-25"
+        "Authorization": "Bearer relio_4f30d2a1b7c9_xxxxxxxx"
       }
     }
   }
 }
 </code></pre></p>
+
+<p>Qwen에서 <code>url</code>은 구형 SSE 전송을 뜻하므로 반드시 <code>httpUrl</code>을 사용합니다.</p>
+
+<h3>7.3 OpenCode 연동</h3>
+
+<p><pre><code class="bash">opencode mcp add relio --url https://relio.company.internal/mcp \
+  --header "Authorization=Bearer relio_4f30d2a1b7c9_xxxxxxxx"
+</code></pre></p>
+
+<p><pre><code class="json">{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "relio": {
+      "type": "remote",
+      "url": "https://relio.company.internal/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer relio_4f30d2a1b7c9_xxxxxxxx"
+      }
+    }
+  }
+}
+</code></pre></p>
+
+<p>Qwen의 <code>mcpServers</code> 설정을 OpenCode에 그대로 붙여 넣지 않습니다. OpenCode CLI의 Header는 <code>KEY=VALUE</code> 형식입니다.</p>
+
 <ul>
-<li>AI Agent는 <code>explain_deal_risk</code>, <code>recommend_next_actions</code>, <code>get_account_brief</code> 등 13가지 MCP 도구를 통해 실시간 영업 분석을 지원합니다.</li>
+<li>AI Agent는 권한에 따라 <code>explain_deal_risk</code>, <code>recommend_next_actions</code>, <code>get_account_brief</code> 등의 MCP 도구를 통해 실시간 영업 분석을 지원합니다.</li>
 </ul>
 
     </div>

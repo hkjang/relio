@@ -105,28 +105,60 @@ Relio는 B2B 영업 조직의 성공적인 딜 체결과 매출 성장을 돕기
 
 ---
 
-## 7. AI Agent 연동 및 Personal MCP Key 활용 (`/me/api-keys`)
+## 7. AI Agent 연동 및 Personal MCP Key 활용 (`/me/keys`)
 
 ### 7.1 Personal API/MCP Key 발급
-1. `/me/api-keys` 메뉴 이동 후 `새 키 생성` 클릭.
+1. `/me/keys` 메뉴 이동 후 `새 키 발급` 클릭.
 2. Scope 선택 (예: `mcp:use`, `opportunity:read` 등).
 3. 발급된 `relio_4f30d2a1b7c9_xxxxxxxx` 키를 안전한 곳에 보관.
+4. 발급 후에는 목록의 `권한` 버튼에서 Scope와 REST/MCP 채널을 변경할 수 있습니다. Secret은 바뀌지 않고 다음 요청부터 바로 적용됩니다.
 
-### 7.2 AI Agent (Claude, Cursor 등) MCP 연동 설정
-AI Agent 설정 파일(`mcp_config.json` 등)에 Relio MCP Server를 추가합니다:
+### 7.2 Qwen Code 연동
+
+```bash
+qwen mcp add --scope user --transport http relio https://relio.company.internal/mcp \
+  --header "Authorization: Bearer relio_4f30d2a1b7c9_xxxxxxxx"
+```
 
 ```json
 {
   "mcpServers": {
     "relio-crm": {
-      "url": "https://relio.company.internal/mcp",
+      "httpUrl": "https://relio.company.internal/mcp",
       "headers": {
-        "Authorization": "Bearer relio_4f30d2a1b7c9_xxxxxxxx",
-        "Accept": "application/json, text/event-stream",
-        "MCP-Protocol-Version": "2025-11-25"
+        "Authorization": "Bearer relio_4f30d2a1b7c9_xxxxxxxx"
       }
     }
   }
 }
 ```
-- AI Agent는 `explain_deal_risk`, `recommend_next_actions`, `get_account_brief` 등 13가지 MCP 도구를 통해 실시간 영업 분석을 지원합니다.
+
+Qwen에서 `url`은 구형 SSE 전송을 뜻하므로 반드시 `httpUrl`을 사용합니다.
+
+### 7.3 OpenCode 연동
+
+```bash
+opencode mcp add relio --url https://relio.company.internal/mcp \
+  --header "Authorization=Bearer relio_4f30d2a1b7c9_xxxxxxxx"
+```
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "relio": {
+      "type": "remote",
+      "url": "https://relio.company.internal/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer relio_4f30d2a1b7c9_xxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+Qwen의 `mcpServers` 설정을 OpenCode에 그대로 붙여 넣지 않습니다. OpenCode CLI의 Header는 `KEY=VALUE` 형식입니다.
+
+- AI Agent는 권한에 따라 `explain_deal_risk`, `recommend_next_actions`, `get_account_brief` 등의 MCP 도구를 통해 실시간 영업 분석을 지원합니다.

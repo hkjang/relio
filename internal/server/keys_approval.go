@@ -14,7 +14,7 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 		s.serviceError(w, r, err)
 		return
 	}
-	httpx.JSON(w, 200, map[string]any{"items": v, "allowedScopes": apikey.AllowedScopes})
+	httpx.JSON(w, 200, map[string]any{"items": v, "allowedScopes": apikey.AllowedScopesFor(principal(r))})
 }
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	var in apikey.CreateInput
@@ -27,6 +27,18 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, 201, v)
+}
+func (s *Server) updateKeyAccess(w http.ResponseWriter, r *http.Request) {
+	var in apikey.UpdateAccessInput
+	if !httpx.DecodeJSON(w, r, &in) {
+		return
+	}
+	v, err := s.Keys.UpdateAccess(r.Context(), principal(r), r.PathValue("id"), in, httpx.ClientIP(r), httpx.RequestID(r.Context()), r.UserAgent())
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	httpx.JSON(w, 200, v)
 }
 func (s *Server) rotateKey(w http.ResponseWriter, r *http.Request) {
 	v, err := s.Keys.Rotate(r.Context(), principal(r), r.PathValue("id"), httpx.ClientIP(r), httpx.RequestID(r.Context()), r.UserAgent())

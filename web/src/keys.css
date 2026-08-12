@@ -2,6 +2,11 @@
    that decision visible: what is grouped with what, what can only read, and how
    much has been granted so far. */
 .key-form fieldset { border: 0; padding: 0; margin: 20px 0 0; }
+.key-edit-target { display: grid; grid-template-columns: auto 1fr; gap: 5px 10px; padding: 13px 15px; border: 1px solid #d9e4ec; border-radius: 10px; background: #f8fafc; }
+.key-edit-target span { color: var(--muted); font-size: 13px; }
+.key-edit-target b { color: #243b53; font-size: 14px; }
+.key-edit-target code { grid-column: 2; color: #516a82; font-size: 12px; }
+.key-edit-target small { grid-column: 1 / 3; color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 3px; }
 .key-form legend { font-size: 14px; font-weight: 650; color: #526477; padding: 0; margin-bottom: 10px; }
 .key-form legend small { font-weight: 500; color: var(--muted); margin-left: 6px; }
 .field-note { font-size: 13px; color: var(--muted); margin: 9px 0 0; }
@@ -63,6 +68,7 @@
   overflow-x: auto; white-space: pre; scrollbar-width: thin;
 }
 .copy-block button { position: absolute; top: 9px; right: 9px; }
+.copy-block + .copy-block { margin-top: 8px; }
 .guide-trouble > div { align-items: flex-start; }
 .guide-trouble span { flex: none; width: 190px; }
 .guide-trouble b { font-weight: 500; text-align: left; flex: 1; }

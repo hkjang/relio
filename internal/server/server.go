@@ -253,6 +253,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/approvals/{id}/reject", s.requireAuth(http.HandlerFunc(s.reject), false))
 	mux.Handle("GET /api/v1/me/keys", s.requireAuth(http.HandlerFunc(s.listKeys), false))
 	mux.Handle("POST /api/v1/me/keys", s.requireAuth(http.HandlerFunc(s.createKey), false))
+	mux.Handle("PUT /api/v1/me/keys/{id}", s.requireAuth(http.HandlerFunc(s.updateKeyAccess), false))
 	mux.Handle("POST /api/v1/me/keys/{id}/rotate", s.requireAuth(http.HandlerFunc(s.rotateKey), false))
 	mux.Handle("DELETE /api/v1/me/keys/{id}", s.requireAuth(http.HandlerFunc(s.revokeKey), false))
 	mux.Handle("GET /api/v1/me/views", s.requireAuth(http.HandlerFunc(s.listSavedViews), false))
