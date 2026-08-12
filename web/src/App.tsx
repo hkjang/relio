@@ -11,6 +11,21 @@ import { navigate, Spinner } from './components/Layout'
 const emptyVersion: Version = { name: 'Relio', version: '…', gitCommit: 'unknown', buildDate: 'unknown', edition: 'Community' }
 const normalizeUser = (user: User): User => ({ ...user, permissions: Array.isArray(user.permissions) ? user.permissions : [] })
 
+// A session that expires while a tab is open sends the next request to /login.
+// Remember where the user was so signing in returns them there instead of the
+// dashboard, which is what made a refresh feel like it "jumped to the main page".
+const RETURN_KEY = 'relio.returnTo'
+const isReturnable = (path: string) => /^\/(app|admin|me)\//.test(path) && path !== '/me/password'
+function rememberReturn() {
+  const target = location.pathname + location.search
+  if (isReturnable(location.pathname)) sessionStorage.setItem(RETURN_KEY, target)
+}
+function takeReturn(): string {
+  const target = sessionStorage.getItem(RETURN_KEY)
+  sessionStorage.removeItem(RETURN_KEY)
+  return target && isReturnable(new URL(target, location.origin).pathname) ? target : '/app/dashboard'
+}
+
 export default function App() {
   const [path, setPath] = useState(location.pathname)
   const [user, setUser] = useState<User | null>(null)
@@ -33,11 +48,11 @@ export default function App() {
         if (currentUser.mustChangePassword && location.pathname !== '/me/password') navigate('/me/password')
         else if (location.pathname === '/' || location.pathname === '/login') navigate('/app/dashboard')
         try { const wf = await api<{enabled:boolean}>('/api/v1/approvals/status'); setApprovalEnabled(wf.enabled) } catch { /* permission-specific */ }
-      } catch { if (location.pathname !== '/login') navigate('/login') }
+      } catch { if (location.pathname !== '/login') { rememberReturn(); navigate('/login') } }
     } finally { setLoading(false) }
   }
-  function loggedIn(next: User) { const currentUser=normalizeUser(next); setUser(currentUser); setCSRF(currentUser.csrfToken); if (currentUser.mustChangePassword) navigate('/me/password'); else navigate('/app/dashboard') }
-  async function logout() { try { await api('/api/v1/auth/logout', { method:'POST' }) } finally { setUser(null); setCSRF(); navigate('/login') } }
+  function loggedIn(next: User) { const currentUser=normalizeUser(next); setUser(currentUser); setCSRF(currentUser.csrfToken); if (currentUser.mustChangePassword) navigate('/me/password'); else navigate(takeReturn()) }
+  async function logout() { try { await api('/api/v1/auth/logout', { method:'POST' }) } finally { sessionStorage.removeItem(RETURN_KEY); setUser(null); setCSRF(); navigate('/login') } }
   const notify = (message:string,error=false) => setToast({message,error})
   if (loading) return <div className="boot"><div className="brand-mark big">R</div><Spinner /></div>
   if (!user) return <Login status={status} version={version} onLogin={loggedIn} notify={notify} />
@@ -48,7 +63,7 @@ export default function App() {
   let page
   if (path.startsWith('/admin')) page = <AdminPages {...common} />
   else if (path.startsWith('/app/voices')) page = <VoicePages {...common} />
-  else if (path.startsWith('/me')) page = <MePages {...common} onPasswordChanged={async () => { const me=await api<{user:User}>('/api/v1/auth/me');const currentUser=normalizeUser(me.user);setUser(currentUser);setCSRF(currentUser.csrfToken);navigate('/app/dashboard') }} />
+  else if (path.startsWith('/me')) page = <MePages {...common} onPasswordChanged={async () => { const me=await api<{user:User}>('/api/v1/auth/me');const currentUser=normalizeUser(me.user);setUser(currentUser);setCSRF(currentUser.csrfToken);navigate(takeReturn()) }} />
   else page = <AppPages {...common} />
   return <>{page}{toast && <div className={`toast ${toast.error?'toast-error':''}`}><span>{toast.error?'!':'✓'}</span>{toast.message}</div>}</>
 }

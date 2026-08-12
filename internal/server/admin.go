@@ -427,6 +427,7 @@ var permissionCatalog = []struct {
 }{
 	{"고객", "customer:read", "고객 조회", "Data Scope 범위의 고객과 Customer 360을 조회합니다."},
 	{"고객", "customer:write", "고객 등록·수정", "고객을 생성, 수정, 병합하고 Account Plan을 저장합니다."},
+	{"고객", "customer:delete", "고객 삭제", "고객을 삭제합니다. 영업기회·계약·고객 요청 이력이 있으면 삭제 대신 비활성으로 전환됩니다. 기본 Role에는 포함되지 않습니다."},
 	{"담당자", "contact:read", "담당자 조회", "고객 담당자와 Relationship Map을 조회합니다."},
 	{"담당자", "contact:write", "담당자 등록·수정", "담당자와 담당자 간 관계를 관리합니다."},
 	{"Lead", "lead:read", "Lead 조회", "미전환 Lead 목록을 조회합니다."},

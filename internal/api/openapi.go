@@ -15,7 +15,7 @@ func OpenAPI() map[string]any {
 		"paths": map[string]any{
 			"/system/version":               get("서비스 빌드 버전", false),
 			"/customers":                    methods("고객 검색 및 생성", "customer:read", "customer:write"),
-			"/customers/{id}":               readUpdate("고객 조회 및 수정", "customer:read", "customer:write"),
+			"/customers/{id}":               readUpdateDelete("고객 조회, 수정 및 삭제", "customer:read", "customer:write", "customer:delete"),
 			"/customers/{id}/360":           get("Customer 360", "customer:read + opportunity:read + activity:read"),
 			"/customers/{id}/relationships": methods("고객 담당자 Relationship Graph", "customer:read + contact:read", "contact:write"),
 			"/customers/{id}/relationships/{relationshipId}": map[string]any{"put": operation("담당자 관계 수정", "contact:write"), "delete": operation("담당자 관계 삭제", "contact:write")},
@@ -24,6 +24,7 @@ func OpenAPI() map[string]any {
 			"/customers/{id}/duplicates":                     get("중복 고객 후보", "customer:read"),
 			"/customers/{id}/merge":                          map[string]any{"post": operation("고객 병합", "customer:write")},
 			"/contacts":                                      methods("담당자 조회 및 생성", "contact:read", "contact:write"),
+			"/contacts/{id}":                                 map[string]any{"put": operation("담당자 수정", "contact:write"), "delete": operation("담당자 삭제", "contact:write")},
 			"/leads":                                         methods("Lead 조회 및 생성", "lead:read", "lead:write"),
 			"/opportunities":                                 methods("영업기회 조회 및 생성", "opportunity:read", "opportunity:write"),
 			"/opportunities/{id}":                            readUpdate("영업기회 조회 및 수정", "opportunity:read", "opportunity:write"),
@@ -138,6 +139,10 @@ func methods(summary, read, write string) map[string]any {
 func readUpdate(summary, read, write string) map[string]any {
 	return map[string]any{"get": operation(summary, read), "put": operation(summary, write)}
 }
+func readUpdateDelete(summary, read, write, remove string) map[string]any {
+	return map[string]any{"get": operation(summary, read), "put": operation(summary, write), "delete": operation(summary, remove)}
+}
+
 func operation(summary string, permission any) map[string]any {
 	return map[string]any{"summary": summary, "description": func() string {
 		if p, ok := permission.(string); ok && p != "" {

@@ -19,7 +19,7 @@ const dictionary: Record<string, string> = {
   DEMO: '시연', PROPOSAL: '제안', OTHER: '기타',
 
   // 담당자 관계
-  DECISION_MAKER: '의사결정자', INFLUENCER: '영향력자', CHAMPION: '지지자',
+  DECISION_MAKER: '의사결정자', INFLUENCER: '영향력자', CHAMPION: '지지자', PROCUREMENT: '구매 담당',
   BLOCKER: '반대자', EVALUATOR: '평가자', END_USER: '실사용자',
   HIGH: '높음', MEDIUM: '보통', LOW: '낮음',
   SUPPORT: '우호', NEUTRAL: '중립', OPPOSE: '반대',
@@ -94,6 +94,15 @@ const dictionary: Record<string, string> = {
 export function label(value?: string | null): string {
   if (!value) return ''
   return dictionary[value] ?? dictionary[value.toUpperCase()] ?? value
+}
+
+/** contactRoleLabel resolves the codes a contact role shares with another
+ *  domain. USER is a Data Scope meaning "본인" everywhere else, but on a contact
+ *  it means the person who actually uses what we sell. */
+const contactRoleNames: Record<string, string> = { USER: '실사용자' }
+export function contactRoleLabel(value?: string | null): string {
+  if (!value) return ''
+  return contactRoleNames[value.toUpperCase()] ?? label(value)
 }
 
 /** codeLabel shows the Korean name with the original code for administrators. */

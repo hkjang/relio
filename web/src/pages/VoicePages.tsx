@@ -5,6 +5,7 @@ import Layout, { Empty, Modal, Spinner, Status, navigate, rowProps, useDialog } 
 import { initials, label } from '../labels'
 import { errorMessage } from '../App'
 import { SavedViews } from '../components/SavedViews'
+import { ContactSelect, useContacts } from '../components/Contacts'
 
 type Props = { path: string; user: User; version: Version; approvalEnabled: boolean; onLogout: () => void; notify: (m: string, e?: boolean) => void }
 
@@ -161,12 +162,10 @@ function VoiceModal({ prefill, categories, customers, onClose, onSaved, notify }
   const [busy, setBusy] = useState(false)
   const [voiceType, setVoiceType] = useState('COMPLAINT')
   const [customerId, setCustomerId] = useState(prefill?.customerId || '')
-  const [contacts, setContacts] = useState<{ id: string; name: string; title?: string }[]>([])
+  const [contactId, setContactId] = useState('')
+  const contacts = useContacts(customerId, notify)
   const matching = categories.filter(c => c.voiceType === voiceType)
-  useEffect(() => {
-    if (!customerId) { setContacts([]); return }
-    api<{ items: any[] }>(`/api/v1/contacts?customerId=${customerId}`).then(v => setContacts(v.items)).catch(() => setContacts([]))
-  }, [customerId])
+  useEffect(() => { setContactId('') }, [customerId])
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); const f = new FormData(e.currentTarget); setBusy(true)
     try {
@@ -183,9 +182,9 @@ function VoiceModal({ prefill, categories, customers, onClose, onSaved, notify }
     <div className="form-grid">
       <label>고객 *<select name="customerId" required value={customerId} onChange={e => setCustomerId(e.target.value)}>
         <option value="">고객 선택</option>{customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-      <label>요청 담당자<select name="contactId" disabled={!contacts.length}>
-        <option value="">미지정</option>{contacts.map(c => <option key={c.id} value={c.id}>{c.name}{c.title ? ` · ${c.title}` : ''}</option>)}</select>
-        <small>{customerId ? `${contacts.length}명 등록됨` : '고객을 먼저 선택하세요'}</small></label>
+      <ContactSelect label="요청 담당자" name="contactId" customerId={customerId} contacts={contacts}
+        value={contactId} onChange={setContactId} disabled={!customerId} disabledHint="고객을 먼저 선택하세요"
+        placeholder="미지정" notify={notify} />
       <label>유형 *<select value={voiceType} onChange={e => setVoiceType(e.target.value)}>{voiceTypes.map(x => <option key={x} value={x}>{label(x)}</option>)}</select></label>
       <label>세부 분류<select name="categoryId">
         <option value="">미지정</option>{matching.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>

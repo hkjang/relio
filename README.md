@@ -36,7 +36,10 @@ Relio는 인터넷이 차단된 기업 환경에서 단일 Docker Image로 운�
 - 목록의 모든 행을 Tab으로 이동해 Enter로 열 수 있고, 모달과 Drawer는 포커스를 가두며 Escape로 닫힙니다.
 - 자주 쓰는 검색 조건을 이름 붙여 저장하고, 고객·영업기회·요청·계약에 즐겨찾기를 답니다.
 - Customer 360, 중복 탐지·병합, 설명 가능한 Deal Health, Deal Inspection과 팀장 Sales Coaching을 제공합니다.
+- Customer 360에서 고객 담당자를 등록·수정·삭제하고 역할, 영향력, 우리에 대한 성향과 접점 정보를 함께 관리합니다.
+- 담당자를 고르는 모든 자리(관계 연결, 고객 요청 접수)에서 화면을 떠나지 않고 담당자를 새로 등록할 수 있습니다.
 - Customer 360의 Relationship Map으로 Decision Maker, Champion, 영향력·지지 성향과 담당자 간 연결 관계를 시각화합니다.
+- 고객 삭제는 `customer:delete` 권한을 요구하며 영업기회·계약·견적·요청·매출 이력이 있으면 삭제 대신 비활성으로 전환해 기록을 보존합니다.
 - Strategic Account Plan에서 고객 목표, 경쟁사, 위험, 연간 매출 목표와 White Space Cross-sell 기회를 관리합니다.
 - Opportunity Team은 Presales, Consultant, Manager, Legal 등 협업 역할을 기록하되 사용자의 Data Scope를 확대하지 않습니다.
 - 관리자가 Stage별 Sales Playbook과 Exit Criteria(`OFF`/`WARNING`/`BLOCK`)를 설정하며 영업 담당자는 Opportunity에서 실행 상태를 관리합니다.
@@ -85,7 +88,7 @@ docker run -d \
   -e BOOTSTRAP_ADMIN_PASSWORD="ChangeMe-To-A-Strong-Password" \
   -e ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -v relio-data:/var/lib/relio \
-  relio:v1.9.0
+  relio:v1.10.0
 ```
 
 ### 자격증명 영속성 (ENCRYPTION_KEY)
@@ -110,8 +113,8 @@ Relio는 Data Key의 단방향 ID를 PostgreSQL에 등록합니다. SSO Secret �
 GitHub Release에서 파일 하나만 반입합니다.
 
 ```bash
-gunzip -c relio-v1.9.0.tar.gz | docker load
-docker image inspect relio:v1.9.0
+gunzip -c relio-v1.10.0.tar.gz | docker load
+docker image inspect relio:v1.10.0
 ```
 
 SHA-256은 Release 본문에 기록되며 별도 Checksum Asset은 배포하지 않습니다.
@@ -152,7 +155,7 @@ Sales Intelligence MCP는 `find_deals_at_risk`, `explain_deal_risk`, `recommend_
 ```bash
 make test
 make build
-make docker VERSION=1.9.0
+make docker VERSION=1.10.0
 ```
 
 검증 항목:
@@ -160,8 +163,8 @@ make docker VERSION=1.9.0
 ```bash
 ./scripts/check-env-contract.sh
 ./scripts/check-static-assets.sh
-./scripts/run-offline-container-test.sh relio:v1.9.0
-./scripts/run-upgrade-container-test.sh relio:v1.8.0 relio:v1.9.0
+./scripts/run-offline-container-test.sh relio:v1.10.0
+./scripts/run-upgrade-container-test.sh relio:v1.9.0 relio:v1.10.0
 ```
 
 오프라인 테스트는 Docker internal network에서 PostgreSQL과 Relio를 시작하고 Migration, Bootstrap 로그인, CRM/영업 기능, REST Personal Key, MCP, Admin Operations, Data Quality, Configuration Bundle 왕복, Support Bundle/Audit 검색과 외부 정적 자산 부재를 검사합니다. Container 교체 후 SSO Secret·Personal Key 유지와 잘못된 Volume의 Fail-Closed 동작도 검증합니다.
@@ -171,14 +174,14 @@ make docker VERSION=1.9.0
 SemVer Tag를 push하면 `.github/workflows/release.yml`이 테스트, 이미지 빌드, 오프라인 검증, `docker save`, gzip 압축과 GitHub Release를 수행합니다.
 
 ```bash
-git tag v1.9.0
-git push origin v1.9.0
+git tag v1.10.0
+git push origin v1.10.0
 ```
 
 Relio가 Release Asset으로 직접 업로드하는 파일은 다음 하나뿐입니다.
 
 ```text
-relio-v1.9.0.tar.gz
+relio-v1.10.0.tar.gz
 ```
 
 ## 설계 문서

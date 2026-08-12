@@ -132,11 +132,13 @@ function NotificationBell({ canRead }: { canRead: boolean }) {
 
 export function Empty({ icon = '◇', title, description, action }: { icon?: string; title: string; description: string; action?: ReactNode }) { return <div className="empty"><span className="empty-icon">{icon}</span><h3>{title}</h3><p>{description}</p>{action}</div> }
 export function Spinner() { return <div className="spinner-wrap" role="status"><span className="spinner"/><p>데이터를 불러오는 중입니다</p></div> }
-export function Status({ value, raw = false }: { value: string; raw?: boolean }) {
+export function Status({ value, raw = false, text }: { value: string; raw?: boolean; text?: string }) {
   // Keep the code in the class name so existing colour rules still match,
-  // but show the Korean label to the user.
+  // but show the Korean label to the user. `text` overrides the dictionary for
+  // codes that mean different things in different domains — USER is a Data
+  // Scope ("본인") and also a contact role ("실사용자").
   const c = value.toLowerCase().replaceAll('_', '-')
-  return <span className={`status status-${c}`} title={value}>{raw ? value : label(value)}</span>
+  return <span className={`status status-${c}`} title={value}>{raw ? value : text || label(value)}</span>
 }
 export function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   const surface = useDialog(onClose)

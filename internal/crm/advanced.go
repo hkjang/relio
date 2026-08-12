@@ -55,40 +55,19 @@ func (s *Service) CreateContact(ctx context.Context, p *auth.Principal, in Conta
 	if err := auth.Require(p, "contact:write"); err != nil {
 		return Contact{}, err
 	}
-	if strings.TrimSpace(in.Name) == "" || in.CustomerID == "" {
+	if in.CustomerID == "" {
 		return Contact{}, errors.New("customerId and name are required")
+	}
+	// Create and update share one validator so the two paths cannot accept
+	// different values for the same field.
+	if err := normalizeContact(&in); err != nil {
+		return Contact{}, err
 	}
 	if _, err := s.GetCustomer(ctx, p, in.CustomerID); err != nil {
 		return Contact{}, errors.New("customer not found or inaccessible")
 	}
 	id := ids.New()
-	role := strings.ToUpper(strings.TrimSpace(in.RelationshipRole))
-	if role == "" {
-		role = "USER"
-	}
-	if role != "DECISION_MAKER" && role != "CHAMPION" && role != "INFLUENCER" && role != "USER" && role != "PROCUREMENT" {
-		return Contact{}, errors.New("invalid relationshipRole")
-	}
-	influence := strings.ToUpper(strings.TrimSpace(in.Influence))
-	if influence == "" {
-		influence = "MEDIUM"
-	}
-	if influence != "HIGH" && influence != "MEDIUM" && influence != "LOW" {
-		return Contact{}, errors.New("invalid influence")
-	}
-	sentiment := strings.ToUpper(strings.TrimSpace(in.Sentiment))
-	if sentiment == "" {
-		sentiment = "NEUTRAL"
-	}
-	if sentiment != "SUPPORT" && sentiment != "NEUTRAL" && sentiment != "OPPOSE" {
-		return Contact{}, errors.New("invalid sentiment")
-	}
-	if in.RelationshipStrength != nil && (*in.RelationshipStrength < 0 || *in.RelationshipStrength > 100) {
-		return Contact{}, errors.New("relationshipStrength must be between 0 and 100")
-	}
-	if in.DecisionPower != nil && (*in.DecisionPower < 0 || *in.DecisionPower > 100) {
-		return Contact{}, errors.New("decisionPower must be between 0 and 100")
-	}
+	role, influence, sentiment := in.RelationshipRole, in.Influence, in.Sentiment
 	relationshipStrength := 50
 	if in.RelationshipStrength != nil {
 		relationshipStrength = *in.RelationshipStrength

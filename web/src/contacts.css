@@ -1,0 +1,49 @@
+/* The contact panel is the customer's org chart in list form: identity first,
+   then the two signals a salesperson actually acts on — influence and how the
+   person feels about us — then how to reach them. */
+.contacts-panel { margin-bottom: 18px; }
+.contact-table { display: grid; gap: 6px; }
+.contact-row {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1.4fr) minmax(120px, .9fr) minmax(110px, .7fr) minmax(150px, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fff;
+}
+.contact-row:hover { border-color: #bcd6ea; background: #fafcfe; }
+.contact-row:focus-visible { outline: 2px solid #1c7fb2; outline-offset: 1px; }
+.contact-identity b { display: block; font-size: 15px; color: #1d3752; }
+.contact-identity small { display: block; font-size: 13px; color: var(--muted); margin-top: 3px; }
+.contact-role { display: flex; flex-wrap: wrap; gap: 3px; }
+.contact-signal small,.contact-reach small { display: block; font-size: 13px; color: #5d7085; }
+/* Sentiment is the one signal worth reading at a glance, so it keeps its colour
+   against the neutral text around it. */
+.contact-signal small.positive { color: #168166; font-weight: 650; }
+.contact-signal small.danger-text { color: #c43c52; font-weight: 650; }
+.contact-signal small + small,.contact-reach small + small { margin-top: 3px; }
+.contact-reach small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A picker that can also create, so a form is never a dead end. */
+.contact-select .contact-select-row { display: flex; gap: 6px; align-items: center; }
+.contact-select .contact-select-row select { flex: 1; min-width: 0; }
+.contact-select .contact-select-row button { white-space: nowrap; }
+
+.inline-hint {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px dashed #c3d5e6;
+  border-radius: 10px;
+  background: #f6f9fc;
+  color: #566d85;
+  font-size: 15px;
+}
+
+@media (max-width: 1100px) {
+  .contact-row { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 8px; }
+  .contact-row .contact-role,.contact-row .contact-signal,.contact-row .contact-reach,.contact-row .row-menu { grid-column: 2 / 4; }
+  .contact-row .contact-signal { display: flex; gap: 12px; }
+  .contact-row .contact-signal small + small { margin-top: 0; }
+}
