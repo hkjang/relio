@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <!-- Ultra Sharp Intense Neon Gradient for Relio -->
+    <linearGradient id="relio-intense-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="50%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+    <filter id="rl-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="4" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Completely Transparent Background (No Rectangle Frame) -->
+  <g filter="url(#rl-glow)">
+    <!-- Sharp Octagonal Outer CRM Ring -->
+    <polygon points="36,10 84,10 110,36 110,84 84,110 36,110 10,84 10,36" 
+             fill="none" 
+             stroke="url(#relio-intense-grad)" 
+             stroke-width="4" 
+             stroke-dasharray="14 6" 
+             stroke-linecap="round" />
+    
+    <!-- Bold Sharp Edge R Monogram -->
+    <path d="M 38 24 L 38 96 M 38 24 L 74 24 C 90 24, 90 58, 74 58 L 38 58 M 58 58 L 88 96" 
+          fill="none" 
+          stroke="url(#relio-intense-grad)" 
+          stroke-width="12" 
+          stroke-linecap="round" 
+          stroke-linejoin="round" />
+
+    <!-- Center Relationship Core Node -->
+    <circle cx="66" cy="41" r="7" fill="#ffffff" filter="url(#rl-glow)" />
+    <circle cx="88" cy="96" r="6" fill="#8b5cf6" />
+    <circle cx="38" cy="24" r="5" fill="#10b981" />
+    <circle cx="38" cy="96" r="5" fill="#06b6d4" />
+  </g>
+</svg>
