@@ -138,6 +138,24 @@ func (s *Server) apiDocs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = fmt.Fprint(w, `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Relio API</title><style>body{font-family:system-ui;background:#f4f7fb;color:#172033;margin:0}.wrap{max-width:900px;margin:48px auto;padding:36px;background:white;border-radius:18px;box-shadow:0 16px 50px #18315318}h1{margin:0;color:#153e75}code{background:#eef3f9;padding:3px 7px;border-radius:5px}.row{padding:14px 0;border-bottom:1px solid #e6ecf3}.method{display:inline-block;width:58px;color:#087f5b;font-weight:700}a{color:#155eef}</style></head><body><main class="wrap"><h1>Relio REST API</h1><p>오프라인 내장 API 문서입니다. 전체 OpenAPI 3.1 정의는 <a href="/api/openapi.json">/api/openapi.json</a>에서 확인할 수 있습니다.</p><div class="row"><span class="method">GET</span><code>/api/v1/customers</code> 고객 검색</div><div class="row"><span class="method">GET</span><code>/api/v1/customers/{id}/360</code> Customer 360</div><div class="row"><span class="method">GET</span><code>/api/v1/customers/{id}/relationships</code> Relationship Graph</div><div class="row"><span class="method">GET</span><code>/api/v1/customers/{id}/account-plan</code> Strategic Account Plan</div><div class="row"><span class="method">GET</span><code>/api/v1/opportunities/{id}/team</code> Opportunity Team</div><div class="row"><span class="method">GET</span><code>/api/v1/deal-intelligence/at-risk</code> 위험 Deal 분석</div><div class="row"><span class="method">POST</span><code>/mcp</code> MCP Streamable HTTP</div><p>인증: <code>Authorization: Bearer relio_...</code>. 모든 결과에는 사용자 Permission, Data Scope, Key Scope의 교집합이 적용됩니다.</p></main></body></html>`)
 }
+
+// isMachinePath reports paths that belong to an API or protocol client rather
+// than to the browser application, so the SPA fallback leaves them alone.
+func isMachinePath(path string) bool {
+	switch {
+	case strings.HasPrefix(path, "/api/"):
+		return true
+	case path == "/mcp" || strings.HasPrefix(path, "/mcp/"):
+		return true
+	case strings.HasPrefix(path, "/.well-known/"):
+		// Relio authenticates MCP with a static Personal Key. Answering an OAuth
+		// discovery probe with the HTML shell made clients try to parse it;
+		// a plain 404 tells them to fall back to the bearer token.
+		return true
+	}
+	return false
+}
+
 func (s *Server) spaHandler() http.Handler {
 	assets, err := fs.Sub(webui.Assets, "dist")
 	if err != nil {
@@ -145,8 +163,19 @@ func (s *Server) spaHandler() http.Handler {
 	}
 	files := http.FileServer(http.FS(assets))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/mcp" {
-			http.NotFound(w, r)
+		// Anything a machine talks to must never fall through to the single-page
+		// shell. An MCP client configured with a trailing slash, or one probing
+		// for OAuth metadata this server does not publish, used to receive
+		// `200 text/html` and report "failed to parse json".
+		if isMachinePath(r.URL.Path) {
+			httpx.ErrorJSON(w, r, http.StatusNotFound, "not_found", "요청한 엔드포인트가 없습니다.", nil)
+			return
+		}
+		// The shell answers navigation, which is GET (and HEAD for probes).
+		// Serving it for a POST turns every misrouted API call into HTML.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			httpx.ErrorJSON(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "이 경로는 GET만 지원합니다.", nil)
 			return
 		}
 		path := strings.TrimPrefix(r.URL.Path, "/")

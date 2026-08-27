@@ -140,7 +140,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 	mux.HandleFunc("GET /api/v1/auth/oidc/start", s.oidcStart)
 	mux.HandleFunc("GET /api/v1/auth/oidc/callback", s.oidcCallback)
-	mux.Handle("/mcp", s.requireAuth(s.MCP, true))
+	// Both spellings reach the same handler. A client configured with a
+	// trailing slash used to fall through to the SPA and receive HTML.
+	mux.Handle("/mcp", s.mcpEntry())
+	mux.Handle("/mcp/", s.mcpEntry())
 	mux.HandleFunc("GET /analytics.js", s.analyticsLoader)
 	mux.HandleFunc("POST /api/v1/csp-report", s.cspReport)
 	mux.HandleFunc("GET /api/openapi.json", func(w http.ResponseWriter, r *http.Request) { httpx.JSON(w, 200, api.OpenAPI()) })
@@ -375,11 +378,48 @@ func (w *statusRecorder) Write(b []byte) (int, error) {
 	}
 	return w.ResponseWriter.Write(b)
 }
+
+// mcpEntry fronts the MCP endpoint with the two things a protocol client needs
+// before it can authenticate: a CORS preflight answer, and a 401 that says which
+// scheme to use. Everything else is the normal authenticated MCP handler.
+func (s *Server) mcpEntry() http.Handler {
+	authed := s.requireAuth(s.MCP, true)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// "/mcp" and "/mcp/" are the endpoint; "/mcp/anything" is not.
+		if trailing := strings.TrimPrefix(r.URL.Path, "/mcp"); trailing != "" && trailing != "/" {
+			httpx.ErrorJSON(w, r, http.StatusNotFound, "not_found", "MCP 엔드포인트는 /mcp 입니다.", nil)
+			return
+		}
+		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" && s.MCP.OriginAllowed(r.Context(), origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Add("Vary", "Origin")
+			w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version, WWW-Authenticate")
+		}
+		if r.Method == http.MethodOptions {
+			// Browser-hosted clients such as the MCP Inspector preflight before
+			// they can send Authorization at all, so this runs before auth.
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID")
+			w.Header().Set("Access-Control-Max-Age", "600")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		authed.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) requireAuth(next http.Handler, mcpChannel bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		p, err := s.Auth.Authenticate(r)
 		if err != nil {
+			if mcpChannel {
+				// A 401 with no WWW-Authenticate sends MCP clients hunting for
+				// OAuth metadata this server does not publish. Naming the scheme
+				// keeps them on the Personal Key they already hold.
+				w.Header().Set("WWW-Authenticate", `Bearer realm="Relio MCP"`)
+			}
 			httpx.ErrorJSON(w, r, http.StatusUnauthorized, "authentication_required", "로그인이 필요합니다.", nil)
 			return
 		}

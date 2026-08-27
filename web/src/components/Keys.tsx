@@ -274,7 +274,7 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
       {tab === 'connect' && <>
         <h3>엔드포인트</h3>
         <CopyBlock text={`${origin}/mcp`} />
-        <p className="muted-copy">Streamable HTTP 방식입니다. 서버가 먼저 보내는 SSE 스트림은 사용하지 않으므로 <code>GET /mcp</code>는 405를 반환합니다. 정상 동작입니다.</p>
+        <p className="muted-copy">Streamable HTTP 방식입니다. 서버가 먼저 보내는 SSE 스트림은 사용하지 않으므로 <code>GET /mcp</code>는 405를 반환합니다. 정상 동작입니다. 끝에 <code>/</code>가 붙은 <code>/mcp/</code>도 동일하게 동작합니다.</p>
 
         <h3>인증</h3>
         <CopyBlock text={`Authorization: Bearer ${sample}`} />
@@ -321,7 +321,8 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
           <div><span>403 mcp_access_denied</span><b>키에 MCP 채널이 없거나 <code>mcp:use</code> 권한이 빠졌습니다.</b></div>
           <div><span>403 invalid_origin</span><b>관리자 화면에서 클라이언트 Origin을 허용하세요.</b></div>
           <div><span>405 sse_not_supported</span><b>정상입니다. 이 서버는 POST만 사용합니다.</b></div>
-          <div><span>failed to parse json · Failed to get tools</span><b>v1.11.4 이상인지 확인하고, Qwen은 <code>httpUrl</code>, OpenCode는 <code>type: remote</code> 설정을 사용하세요.</b></div>
+          <div><span>failed to parse json · Failed to get tools</span><b>v1.11.7 이상에서는 <code>/mcp</code>와 <code>/mcp/</code> 모두 동작합니다. 그 이전 버전은 끝에 <code>/</code>가 붙으면 화면 HTML을 반환했으므로 서버를 올리거나 슬래시를 빼세요. Qwen은 <code>httpUrl</code>, OpenCode는 <code>type: remote</code> 설정을 사용하세요.</b></div>
+          <div><span>OAuth 로그인 창을 요구함</span><b>Relio는 개인 키 Bearer 인증만 사용합니다. OpenCode는 <code>oauth: false</code>로 두세요. OAuth 탐색(.well-known) 경로는 404를 반환하는 것이 정상입니다.</b></div>
           <div><span>Qwen Pending approval</span><b>Project Scope 서버는 작업공간 승인 후 연결됩니다. 바로 확인하려면 위 명령처럼 User Scope로 추가하세요.</b></div>
           <div><span>도구 호출이 isError로 반환됨</span><b>전송 오류가 아니라 도구가 실행되어 실패한 것입니다. 메시지에 사유가 들어 있습니다.</b></div>
         </div>

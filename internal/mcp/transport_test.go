@@ -107,3 +107,26 @@ func TestFirstIDSkipsNotifications(t *testing.T) {
 		t.Fatal("a batch of notifications has no id to answer with")
 	}
 }
+
+// A body a client cannot correlate to a request must not arrive as 200. The
+// client has no id to match, so it waits for a response that never comes.
+func TestParseFailuresAnswerWithAClientVisibleStatus(t *testing.T) {
+	if _, _, err := parseRequests([]byte("{not json")); err == nil {
+		t.Fatal("malformed body must fail to parse")
+	}
+	if _, _, err := parseRequests([]byte("")); err == nil {
+		t.Fatal("empty body must fail to parse")
+	}
+	w := httptest.NewRecorder()
+	(&Server{}).writeErrorStatus(w, 400, nil, -32700, "Parse error", nil)
+	if w.Code != 400 {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	var out response
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("error body must still be JSON-RPC: %v", err)
+	}
+	if out.Error == nil || out.Error.Code != -32700 {
+		t.Fatalf("error = %+v, want -32700", out.Error)
+	}
+}

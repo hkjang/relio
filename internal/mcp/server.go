@@ -126,6 +126,16 @@ func (s *Server) allowedOrigin(ctx context.Context, r *http.Request) bool {
 	if origin == "" {
 		return true
 	}
+	return s.OriginAllowed(ctx, origin)
+}
+
+// OriginAllowed exposes the same check to the CORS preflight, which has to
+// answer before the request carries any credentials.
+func (s *Server) OriginAllowed(ctx context.Context, origin string) bool {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return true
+	}
 	var raw []byte
 	allowed := []string{}
 	if s.DB.QueryRow(ctx, `SELECT value FROM system_settings WHERE namespace='mcp' AND key='allowed_origins'`).Scan(&raw) == nil {
@@ -185,9 +195,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
-		// Sessions are not issued, so there is nothing to tear down. Answering
-		// 200 keeps clients that always send DELETE on shutdown quiet.
-		w.WriteHeader(http.StatusOK)
+		// Sessions are not issued, so there is nothing to tear down. 204 says
+		// that without a body: a 200 with an empty body made clients that parse
+		// every 2xx report "failed to parse json" on shutdown.
+		w.WriteHeader(http.StatusNoContent)
 		success = true
 		return
 	}
@@ -202,18 +213,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		s.writeError(w, nil, -32700, "Parse error", nil)
+		s.writeErrorStatus(w, http.StatusBadRequest, nil, -32700, "Parse error", nil)
 		return
 	}
 	// Revisions before 2025-06-18 allow a JSON-RPC batch, and clients still send
 	// them. Rejecting an array as malformed JSON broke tools/list for those.
 	batch, requests, perr := parseRequests(body)
 	if perr != nil {
-		s.writeError(w, nil, -32700, "Parse error", map[string]any{"cause": perr.Error()})
+		// A body we cannot parse has no request id to answer, so a 200 would
+		// leave the client waiting for a correlation that never comes.
+		s.writeErrorStatus(w, http.StatusBadRequest, nil, -32700, "Parse error", map[string]any{"cause": perr.Error()})
 		return
 	}
 	if len(requests) == 0 {
-		s.writeError(w, nil, -32600, "Invalid Request", nil)
+		s.writeErrorStatus(w, http.StatusBadRequest, nil, -32600, "Invalid Request", nil)
 		return
 	}
 	methods := make([]string, 0, len(requests))
@@ -342,6 +355,7 @@ func (s *Server) dispatch(r *http.Request, p *auth.Principal, req request, negot
 			"capabilities": map[string]any{
 				"tools":     map[string]any{"listChanged": false},
 				"resources": map[string]any{"subscribe": false, "listChanged": false},
+				"prompts":   map[string]any{"listChanged": false},
 			},
 			"serverInfo":   map[string]any{"name": "Relio", "title": "Relio CRM MCP Server", "version": version.Current().Version},
 			"instructions": "Relio CRM data is filtered by the authenticated user's permissions, data scope, and key scopes.",
@@ -363,6 +377,10 @@ func (s *Server) dispatch(r *http.Request, p *auth.Principal, req request, negot
 			return toolFailure(err), nil, call.Name
 		}
 		return result, nil, call.Name
+	case "prompts/list":
+		// Declared as a capability and answered empty. Clients that probe every
+		// method on connect logged "Method not found" against a healthy server.
+		return map[string]any{"prompts": []any{}}, nil, ""
 	case "resources/list":
 		return map[string]any{"resources": s.resources(p)}, nil, ""
 	case "resources/templates/list":
@@ -401,7 +419,13 @@ func keys(m map[string]bool) []string {
 	return out
 }
 func (s *Server) writeError(w http.ResponseWriter, id json.RawMessage, code int, message string, data any) {
-	httpx.JSON(w, http.StatusOK, response{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: message, Data: data}})
+	s.writeErrorStatus(w, http.StatusOK, id, code, message, data)
+}
+
+// writeErrorStatus lets transport-level failures answer with an HTTP status the
+// client can act on while still carrying a JSON-RPC error body.
+func (s *Server) writeErrorStatus(w http.ResponseWriter, status int, id json.RawMessage, code int, message string, data any) {
+	httpx.JSON(w, status, response{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: message, Data: data}})
 }
 
 func (s *Server) approvalsEnabled(ctx context.Context) bool {

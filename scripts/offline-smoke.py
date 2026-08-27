@@ -442,6 +442,31 @@ tool_list = request(
     {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
 )
+# A client configured with a trailing slash used to fall through to the single
+# page shell and receive HTML, which every MCP client reports as
+# "failed to parse json". Both spellings must reach the protocol handler.
+slash_list = request(
+    "/mcp/",
+    "POST",
+    {"jsonrpc": "2.0", "id": 21, "method": "tools/list", "params": {}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert len(slash_list["result"]["tools"]) == len(tool_list["result"]["tools"])
+# The same shell answered OAuth discovery probes with HTML. A protocol client
+# has to see a plain 404 so it keeps using the Personal Key it already holds.
+for probe in ("/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server"):
+    expect_http_error(probe, contains="HTTP 404")
+# Neither an unparseable body nor a session teardown may answer 200 with
+# something a client will try, and fail, to decode.
+expect_http_error("/mcp", "POST", None, {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"}, contains="HTTP 400")
+assert request("/mcp", "DELETE", None, mcp_headers, expect_json=False) == ""
+prompts = request(
+    "/mcp",
+    "POST",
+    {"jsonrpc": "2.0", "id": 22, "method": "prompts/list", "params": {}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert prompts["result"]["prompts"] == []
 tool_names = {tool["name"] for tool in tool_list["result"]["tools"]}
 assert all(tool["inputSchema"].get("required") is not None for tool in tool_list["result"]["tools"] if "required" in tool["inputSchema"])
 assert "submit_approval" not in tool_names
