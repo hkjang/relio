@@ -18,7 +18,7 @@ func (s *Service) SearchContacts(ctx context.Context, p *auth.Principal, q, cust
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.DB.Query(ctx, `SELECT ct.id,ct.customer_id,ct.name,COALESCE(ct.title,''),COALESCE(ct.department,''),COALESCE(ct.email,''),COALESCE(ct.phone,''),COALESCE(ct.mobile,''),ct.decision_maker,ct.primary_contact,ct.relationship_role,ct.influence,ct.sentiment,ct.relationship_strength,ct.decision_power,ct.last_contact_at,ct.owner_id,ct.created_at FROM contacts ct JOIN customers c ON c.id=ct.customer_id WHERE `+scopeSQL("c")+` AND ($4='' OR ct.customer_id::text=$4) AND ($5='' OR lower(ct.name) LIKE '%'||lower($5)||'%' OR lower(COALESCE(ct.email,'')) LIKE '%'||lower($5)||'%') ORDER BY ct.decision_maker DESC,(ct.relationship_role='CHAMPION') DESC,ct.primary_contact DESC,ct.name LIMIT $6`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, strings.TrimSpace(q), limit)
+	rows, err := s.DB.Query(ctx, `SELECT ct.id,ct.customer_id,ct.name,COALESCE(ct.title,''),COALESCE(ct.department,''),COALESCE(ct.email,''),COALESCE(ct.phone,''),COALESCE(ct.mobile,''),ct.decision_maker,ct.primary_contact,ct.relationship_role,ct.influence,ct.sentiment,ct.relationship_strength,ct.decision_power,ct.last_contact_at,ct.owner_id,ct.created_at FROM contacts ct JOIN customers c ON c.id=ct.customer_id WHERE `+scopeSQL("c")+` AND ($4='' OR ct.customer_id::text=$4) AND ($5='' OR lower(ct.name) LIKE $5 ESCAPE '\' OR lower(COALESCE(ct.email,'')) LIKE $5 ESCAPE '\') ORDER BY ct.decision_maker DESC,(ct.relationship_role='CHAMPION') DESC,ct.primary_contact DESC,ct.name LIMIT $6`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, searchPattern(q), limit)
 	if err != nil {
 		return nil, err
 	}

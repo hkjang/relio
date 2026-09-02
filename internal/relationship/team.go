@@ -163,12 +163,12 @@ func (s *Service) Collaborators(ctx context.Context, p *auth.Principal, query st
 			SELECT child.id FROM organizations child JOIN scope_tree ON child.parent_id=scope_tree.id
 		)
 		SELECT 1 FROM scope_tree WHERE id=u.organization_id
-	))) AND ($4='' OR lower(u.display_name) LIKE '%'||lower($4)||'%' OR lower(u.username) LIKE '%'||lower($4)||'%') ORDER BY u.display_name LIMIT $5`, p.DataScope, p.UserID, func() any {
+	))) AND ($4='' OR lower(u.display_name) LIKE $4 ESCAPE '\' OR lower(u.username) LIKE $4 ESCAPE '\') ORDER BY u.display_name LIMIT $5`, p.DataScope, p.UserID, func() any {
 		if p.OrganizationID == "" {
 			return nil
 		}
 		return p.OrganizationID
-	}(), strings.TrimSpace(query), limit)
+	}(), crm.SearchPattern(query), limit)
 	if err != nil {
 		return nil, err
 	}

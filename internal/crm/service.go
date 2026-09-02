@@ -107,6 +107,25 @@ func scopeSQL(alias string) string {
 // that operate on the same CRM entities as the web, REST, and MCP adapters.
 func ScopeSQL(alias string) string { return scopeSQL(alias) }
 
+// searchPattern turns what a person typed into a LIKE pattern that means only
+// what they typed. Interpolating the raw text left % and _ as wildcards, so a
+// search for "50%" listed every customer containing "50" and a search for "%"
+// listed everything. Callers pair it with LIKE ... ESCAPE '\' and keep the
+// empty-string guard, because a blank query still means "no filter".
+func searchPattern(q string) string {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return ""
+	}
+	return "%" + likeEscaper.Replace(strings.ToLower(q)) + "%"
+}
+
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// SearchPattern exposes the CRM search escaping rule to the other services that
+// run free-text LIKE searches over the same data.
+func SearchPattern(q string) string { return searchPattern(q) }
+
 // CustomerQuery carries the list filters the customer screen exposes. Filters
 // are applied on top of, never instead of, the caller's Data Scope.
 type CustomerQuery struct {
@@ -136,8 +155,8 @@ func (s *Service) SearchCustomers(ctx context.Context, p *auth.Principal, filter
 	if order == "" {
 		order = "c.updated_at DESC,c.id"
 	}
-	query := `SELECT c.id,c.name,COALESCE(c.registration_no,''),c.customer_type,COALESCE(c.grade,''),COALESCE(c.industry,''),COALESCE(c.website,''),COALESCE(c.phone,''),COALESCE(c.email,''),COALESCE(c.address,''),c.owner_id,u.display_name,COALESCE(c.organization_id::text,''),c.health,COALESCE(c.annual_revenue,0),COALESCE(c.employee_count,0),c.custom_fields,c.version,c.created_at,c.updated_at FROM customers c JOIN users u ON u.id=c.owner_id WHERE c.active=true AND c.merged_into_id IS NULL AND ` + scopeSQL("c") + ` AND ($4='' OR lower(c.name) LIKE '%'||lower($4)||'%' OR lower(COALESCE(c.registration_no,'')) LIKE '%'||lower($4)||'%') AND ($5='' OR c.customer_type=$5) AND ($6='' OR COALESCE(c.grade,'')=$6) ORDER BY ` + order + ` LIMIT $7 OFFSET $8`
-	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), strings.TrimSpace(filter.Q), strings.ToUpper(strings.TrimSpace(filter.CustomerType)), strings.ToUpper(strings.TrimSpace(filter.Grade)), limit+1, offset)
+	query := `SELECT c.id,c.name,COALESCE(c.registration_no,''),c.customer_type,COALESCE(c.grade,''),COALESCE(c.industry,''),COALESCE(c.website,''),COALESCE(c.phone,''),COALESCE(c.email,''),COALESCE(c.address,''),c.owner_id,u.display_name,COALESCE(c.organization_id::text,''),c.health,COALESCE(c.annual_revenue,0),COALESCE(c.employee_count,0),c.custom_fields,c.version,c.created_at,c.updated_at FROM customers c JOIN users u ON u.id=c.owner_id WHERE c.active=true AND c.merged_into_id IS NULL AND ` + scopeSQL("c") + ` AND ($4='' OR lower(c.name) LIKE $4 ESCAPE '\' OR lower(COALESCE(c.registration_no,'')) LIKE $4 ESCAPE '\') AND ($5='' OR c.customer_type=$5) AND ($6='' OR COALESCE(c.grade,'')=$6) ORDER BY ` + order + ` LIMIT $7 OFFSET $8`
+	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), searchPattern(filter.Q), strings.ToUpper(strings.TrimSpace(filter.CustomerType)), strings.ToUpper(strings.TrimSpace(filter.Grade)), limit+1, offset)
 	if err != nil {
 		return Page[Customer]{}, err
 	}
@@ -429,8 +448,8 @@ func (s *Service) ListOpportunities(ctx context.Context, p *auth.Principal, f Op
 	if order == "" {
 		order = "o.updated_at DESC,o.id"
 	}
-	query := `SELECT o.id,o.name,o.customer_id,c.name,o.owner_id,u.display_name,COALESCE(o.organization_id::text,''),o.pipeline_id,o.stage_id,ps.name,ps.color,o.expected_amount,o.currency_code,o.exchange_rate,o.base_expected_amount,o.probability,o.weighted_amount,o.base_weighted_amount,o.expected_close_date,o.forecast_category,COALESCE(o.competitor,''),COALESCE(o.next_action,''),o.next_action_date,o.status,COALESCE(o.lost_reason,''),COALESCE(o.win_reason,''),o.stage_entered_at,o.last_activity_at,o.custom_fields,o.version,o.created_at,o.updated_at FROM opportunities o JOIN customers c ON c.id=o.customer_id JOIN users u ON u.id=o.owner_id JOIN pipeline_stages ps ON ps.id=o.stage_id WHERE ` + scopeSQL("o") + ` AND ($4='' OR lower(o.name) LIKE '%'||lower($4)||'%' OR lower(c.name) LIKE '%'||lower($4)||'%') AND ($5='' OR o.customer_id::text=$5) AND ($6='' OR o.status=$6) AND ($7='' OR o.stage_id::text=$7) AND ($8='' OR o.forecast_category=$8) AND (NOT $9 OR o.last_activity_at IS NULL OR o.last_activity_at<now()-interval '30 days') ORDER BY ` + order + ` LIMIT $10 OFFSET $11`
-	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), strings.TrimSpace(f.Query), f.CustomerID, f.Status, f.StageID, strings.ToUpper(f.ForecastCategory), f.StaleOnly, f.Limit+1, offset)
+	query := `SELECT o.id,o.name,o.customer_id,c.name,o.owner_id,u.display_name,COALESCE(o.organization_id::text,''),o.pipeline_id,o.stage_id,ps.name,ps.color,o.expected_amount,o.currency_code,o.exchange_rate,o.base_expected_amount,o.probability,o.weighted_amount,o.base_weighted_amount,o.expected_close_date,o.forecast_category,COALESCE(o.competitor,''),COALESCE(o.next_action,''),o.next_action_date,o.status,COALESCE(o.lost_reason,''),COALESCE(o.win_reason,''),o.stage_entered_at,o.last_activity_at,o.custom_fields,o.version,o.created_at,o.updated_at FROM opportunities o JOIN customers c ON c.id=o.customer_id JOIN users u ON u.id=o.owner_id JOIN pipeline_stages ps ON ps.id=o.stage_id WHERE ` + scopeSQL("o") + ` AND ($4='' OR lower(o.name) LIKE $4 ESCAPE '\' OR lower(c.name) LIKE $4 ESCAPE '\') AND ($5='' OR o.customer_id::text=$5) AND ($6='' OR o.status=$6) AND ($7='' OR o.stage_id::text=$7) AND ($8='' OR o.forecast_category=$8) AND (NOT $9 OR o.last_activity_at IS NULL OR o.last_activity_at<now()-interval '30 days') ORDER BY ` + order + ` LIMIT $10 OFFSET $11`
+	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), searchPattern(f.Query), f.CustomerID, f.Status, f.StageID, strings.ToUpper(f.ForecastCategory), f.StaleOnly, f.Limit+1, offset)
 	if err != nil {
 		return Page[Opportunity]{}, err
 	}
