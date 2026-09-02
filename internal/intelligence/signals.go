@@ -122,8 +122,11 @@ type RunSummary struct {
 }
 
 // SignalFilter and friends carry list filters. Every filter narrows the caller's
-// Data Scope; none widens it.
+// Data Scope; none widens it. ID picks a single record out of the same scoped
+// query the list uses, so reading one record obeys exactly the rules that decide
+// whether it appears in a list at all.
 type SignalFilter struct {
+	ID         string
 	AccountID  string
 	EntityType string
 	EntityID   string
@@ -136,6 +139,7 @@ type SignalFilter struct {
 }
 
 type RiskFilter struct {
+	ID         string
 	AccountID  string
 	EntityType string
 	EntityID   string
@@ -148,6 +152,7 @@ type RiskFilter struct {
 }
 
 type InsightFilter struct {
+	ID            string
 	AccountID     string
 	OpportunityID string
 	InsightType   string
@@ -157,6 +162,7 @@ type InsightFilter struct {
 }
 
 type RecommendationFilter struct {
+	ID            string
 	AccountID     string
 	OpportunityID string
 	AssigneeID    string
