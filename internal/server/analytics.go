@@ -59,10 +59,7 @@ func (s *Server) cspReport(w http.ResponseWriter, r *http.Request) {
 		} `json:"csp-report"`
 	}
 	if json.Unmarshal(body, &legacy) == nil && legacy.Report.BlockedURI != "" {
-		directive := legacy.Report.Directive
-		if directive == "" {
-			directive = strings.Fields(legacy.Report.Violated + " ")[0]
-		}
+		directive := reportedDirective(legacy.Report.Directive, legacy.Report.Violated)
 		_ = s.Analytics.RecordViolation(r.Context(), directive, legacy.Report.BlockedURI, legacy.Report.DocumentURI)
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -83,6 +80,23 @@ func (s *Server) cspReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// reportedDirective names the directive a legacy CSP report is about. Both
+// fields are optional: effective-directive is the modern spelling, and
+// violated-directive carries the whole policy ("script-src 'self'"), so only
+// its first token is the directive. Reading that token unguarded crashed the
+// handler on a report that carried neither, because strings.Fields returns
+// nothing for a blank string — an unauthenticated 500 any client could trigger.
+// An empty result is fine: RecordViolation drops a violation it cannot name.
+func reportedDirective(effective, violated string) string {
+	if directive := strings.TrimSpace(effective); directive != "" {
+		return directive
+	}
+	if fields := strings.Fields(violated); len(fields) > 0 {
+		return fields[0]
+	}
+	return ""
 }
 
 // analyticsLoader serves the generated tracking loader from Relio's own origin so
