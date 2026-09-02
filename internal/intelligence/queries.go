@@ -33,23 +33,32 @@ func clampLimit(limit int) int {
 	return limit
 }
 
+// signalQuery builds the list statement and its arguments. The builders are
+// separate from the scans so the predicate set — including the id filter every
+// single-record read depends on — can be tested without a database.
+func signalQuery(p *auth.Principal, f SignalFilter) (string, []any) {
+	args := scopeArgs(p)
+	args = append(args, f.AccountID, strings.ToUpper(f.EntityType), f.EntityID, strings.ToUpper(f.SignalType),
+		strings.ToUpper(f.Severity), strings.ToUpper(f.Sentiment), statusOr(f.Status, "ACTIVE"),
+		strings.TrimSpace(f.ID), clampLimit(f.Limit))
+	return `
+		SELECT g.id::text,g.signal_type,g.sentiment,g.severity,g.entity_type,g.entity_id::text,g.account_id::text,c.name,
+		       g.title,g.description,g.evidence,g.detected_at,g.source_type,COALESCE(g.source_id::text,''),g.status,g.resolved_at
+		FROM signals g JOIN customers c ON c.id=g.account_id
+		WHERE ` + crm.ScopeSQL("c") + `
+		  AND ($4='' OR g.account_id::text=$4) AND ($5='' OR g.entity_type=$5) AND ($6='' OR g.entity_id::text=$6)
+		  AND ($7='' OR g.signal_type=$7) AND ($8='' OR g.severity=$8) AND ($9='' OR g.sentiment=$9)
+		  AND ($10='ALL' OR g.status=$10) AND ($11='' OR g.id::text=$11)
+		ORDER BY CASE g.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
+		         g.detected_at DESC LIMIT $12`, args
+}
+
 func (s *Service) ListSignals(ctx context.Context, p *auth.Principal, f SignalFilter) ([]Signal, error) {
 	if err := auth.Require(p, "intelligence:read"); err != nil {
 		return nil, err
 	}
-	args := scopeArgs(p)
-	args = append(args, f.AccountID, strings.ToUpper(f.EntityType), f.EntityID, strings.ToUpper(f.SignalType),
-		strings.ToUpper(f.Severity), strings.ToUpper(f.Sentiment), statusOr(f.Status, "ACTIVE"), clampLimit(f.Limit))
-	rows, err := s.DB.Query(ctx, `
-		SELECT g.id::text,g.signal_type,g.sentiment,g.severity,g.entity_type,g.entity_id::text,g.account_id::text,c.name,
-		       g.title,g.description,g.evidence,g.detected_at,g.source_type,COALESCE(g.source_id::text,''),g.status,g.resolved_at
-		FROM signals g JOIN customers c ON c.id=g.account_id
-		WHERE `+crm.ScopeSQL("c")+`
-		  AND ($4='' OR g.account_id::text=$4) AND ($5='' OR g.entity_type=$5) AND ($6='' OR g.entity_id::text=$6)
-		  AND ($7='' OR g.signal_type=$7) AND ($8='' OR g.severity=$8) AND ($9='' OR g.sentiment=$9)
-		  AND ($10='ALL' OR g.status=$10)
-		ORDER BY CASE g.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
-		         g.detected_at DESC LIMIT $11`, args...)
+	sql, args := signalQuery(p, f)
+	rows, err := s.DB.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -69,35 +78,42 @@ func (s *Service) ListSignals(ctx context.Context, p *auth.Principal, f SignalFi
 	return out, rows.Err()
 }
 
+// GetSignal reads one record by id. The id goes into the statement rather than
+// into a scan over a listed page: a page can only ever hold the first 200 rows,
+// so on an account with more analysis than that the record simply could not be
+// opened — nor ignored, since every write reads the record first.
 func (s *Service) GetSignal(ctx context.Context, p *auth.Principal, id string) (Signal, error) {
-	items, err := s.ListSignals(ctx, p, SignalFilter{Status: "ALL", Limit: 200})
+	items, err := s.ListSignals(ctx, p, SignalFilter{ID: id, Status: "ALL", Limit: 1})
 	if err != nil {
 		return Signal{}, err
 	}
-	for _, item := range items {
-		if item.ID == id {
-			return item, nil
-		}
+	if len(items) == 0 {
+		return Signal{}, errors.New("signal not found")
 	}
-	return Signal{}, errors.New("signal not found")
+	return items[0], nil
+}
+
+func riskQuery(p *auth.Principal, f RiskFilter) (string, []any) {
+	args := scopeArgs(p)
+	args = append(args, f.AccountID, strings.ToUpper(f.EntityType), f.EntityID, strings.ToUpper(f.RiskType),
+		strings.ToUpper(f.Severity), statusOr(f.Status, "OPEN"), f.MinScore, strings.TrimSpace(f.ID), clampLimit(f.Limit))
+	return `
+		SELECT r.id::text,r.risk_type,r.entity_type,r.entity_id::text,r.account_id::text,c.name,r.risk_score,r.severity,
+		       r.title,r.description,r.factors,r.detected_at,r.resolved_at,COALESCE(r.accepted_note,''),r.status
+		FROM risks r JOIN customers c ON c.id=r.account_id
+		WHERE ` + crm.ScopeSQL("c") + `
+		  AND ($4='' OR r.account_id::text=$4) AND ($5='' OR r.entity_type=$5) AND ($6='' OR r.entity_id::text=$6)
+		  AND ($7='' OR r.risk_type=$7) AND ($8='' OR r.severity=$8) AND ($9='ALL' OR r.status=$9)
+		  AND r.risk_score >= $10 AND ($11='' OR r.id::text=$11)
+		ORDER BY r.risk_score DESC, r.detected_at DESC LIMIT $12`, args
 }
 
 func (s *Service) ListRisks(ctx context.Context, p *auth.Principal, f RiskFilter) ([]Risk, error) {
 	if err := auth.Require(p, "intelligence:read"); err != nil {
 		return nil, err
 	}
-	args := scopeArgs(p)
-	args = append(args, f.AccountID, strings.ToUpper(f.EntityType), f.EntityID, strings.ToUpper(f.RiskType),
-		strings.ToUpper(f.Severity), statusOr(f.Status, "OPEN"), f.MinScore, clampLimit(f.Limit))
-	rows, err := s.DB.Query(ctx, `
-		SELECT r.id::text,r.risk_type,r.entity_type,r.entity_id::text,r.account_id::text,c.name,r.risk_score,r.severity,
-		       r.title,r.description,r.factors,r.detected_at,r.resolved_at,COALESCE(r.accepted_note,''),r.status
-		FROM risks r JOIN customers c ON c.id=r.account_id
-		WHERE `+crm.ScopeSQL("c")+`
-		  AND ($4='' OR r.account_id::text=$4) AND ($5='' OR r.entity_type=$5) AND ($6='' OR r.entity_id::text=$6)
-		  AND ($7='' OR r.risk_type=$7) AND ($8='' OR r.severity=$8) AND ($9='ALL' OR r.status=$9)
-		  AND r.risk_score >= $10
-		ORDER BY r.risk_score DESC, r.detected_at DESC LIMIT $11`, args...)
+	sql, args := riskQuery(p, f)
+	rows, err := s.DB.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -117,16 +133,14 @@ func (s *Service) ListRisks(ctx context.Context, p *auth.Principal, f RiskFilter
 }
 
 func (s *Service) GetRisk(ctx context.Context, p *auth.Principal, id string) (Risk, error) {
-	items, err := s.ListRisks(ctx, p, RiskFilter{Status: "ALL", Limit: 200})
+	items, err := s.ListRisks(ctx, p, RiskFilter{ID: id, Status: "ALL", Limit: 1})
 	if err != nil {
 		return Risk{}, err
 	}
-	for _, item := range items {
-		if item.ID == id {
-			return item, nil
-		}
+	if len(items) == 0 {
+		return Risk{}, errors.New("risk not found")
 	}
-	return Risk{}, errors.New("risk not found")
+	return items[0], nil
 }
 
 // ExplainRisk restates a score as the arithmetic that produced it. A number
@@ -164,20 +178,26 @@ func (s *Service) ExplainRisk(ctx context.Context, p *auth.Principal, id string)
 	}, nil
 }
 
+func insightQuery(p *auth.Principal, f InsightFilter) (string, []any) {
+	args := scopeArgs(p)
+	args = append(args, f.AccountID, f.OpportunityID, strings.ToUpper(f.InsightType), statusOr(f.Status, "ACTIVE"),
+		strings.TrimSpace(f.ID), clampLimit(f.Limit))
+	return `
+		SELECT i.id::text,i.account_id::text,c.name,COALESCE(i.opportunity_id::text,''),i.insight_type,i.title,i.summary,
+		       i.evidence,i.confidence,i.generated_at,i.expires_at,i.status
+		FROM insights i JOIN customers c ON c.id=i.account_id
+		WHERE ` + crm.ScopeSQL("c") + `
+		  AND ($4='' OR i.account_id::text=$4) AND ($5='' OR i.opportunity_id::text=$5)
+		  AND ($6='' OR i.insight_type=$6) AND ($7='ALL' OR i.status=$7) AND ($8='' OR i.id::text=$8)
+		ORDER BY i.generated_at DESC LIMIT $9`, args
+}
+
 func (s *Service) ListInsights(ctx context.Context, p *auth.Principal, f InsightFilter) ([]Insight, error) {
 	if err := auth.Require(p, "intelligence:read"); err != nil {
 		return nil, err
 	}
-	args := scopeArgs(p)
-	args = append(args, f.AccountID, f.OpportunityID, strings.ToUpper(f.InsightType), statusOr(f.Status, "ACTIVE"), clampLimit(f.Limit))
-	rows, err := s.DB.Query(ctx, `
-		SELECT i.id::text,i.account_id::text,c.name,COALESCE(i.opportunity_id::text,''),i.insight_type,i.title,i.summary,
-		       i.evidence,i.confidence,i.generated_at,i.expires_at,i.status
-		FROM insights i JOIN customers c ON c.id=i.account_id
-		WHERE `+crm.ScopeSQL("c")+`
-		  AND ($4='' OR i.account_id::text=$4) AND ($5='' OR i.opportunity_id::text=$5)
-		  AND ($6='' OR i.insight_type=$6) AND ($7='ALL' OR i.status=$7)
-		ORDER BY i.generated_at DESC LIMIT $8`, args...)
+	sql, args := insightQuery(p, f)
+	rows, err := s.DB.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -201,39 +221,43 @@ func (s *Service) ListInsights(ctx context.Context, p *auth.Principal, f Insight
 }
 
 func (s *Service) GetInsight(ctx context.Context, p *auth.Principal, id string) (Insight, error) {
-	items, err := s.ListInsights(ctx, p, InsightFilter{Status: "ALL", Limit: 200})
+	items, err := s.ListInsights(ctx, p, InsightFilter{ID: id, Status: "ALL", Limit: 1})
 	if err != nil {
 		return Insight{}, err
 	}
-	for _, item := range items {
-		if item.ID == id {
-			return item, nil
-		}
+	if len(items) == 0 {
+		return Insight{}, errors.New("insight not found")
 	}
-	return Insight{}, errors.New("insight not found")
+	return items[0], nil
 }
 
-func (s *Service) ListRecommendations(ctx context.Context, p *auth.Principal, f RecommendationFilter) ([]Recommendation, error) {
-	if err := auth.Require(p, "intelligence:read"); err != nil {
-		return nil, err
-	}
+func recommendationQuery(p *auth.Principal, f RecommendationFilter) (string, []any) {
 	assignee := f.AssigneeID
 	if f.Mine {
 		assignee = p.UserID
 	}
 	args := scopeArgs(p)
 	args = append(args, f.AccountID, f.OpportunityID, assignee, strings.ToUpper(f.Priority),
-		statusOr(f.Status, "OPEN"), clampLimit(f.Limit))
-	rows, err := s.DB.Query(ctx, `
+		statusOr(f.Status, "OPEN"), strings.TrimSpace(f.ID), clampLimit(f.Limit))
+	return `
 		SELECT n.id::text,n.account_id::text,c.name,COALESCE(n.opportunity_id::text,''),n.recommendation_type,n.priority,
 		       n.title,n.description,n.due_date,n.source_type,COALESCE(n.source_id::text,''),n.assignee_id::text,
 		       u.display_name,n.status,COALESCE(n.task_id::text,''),COALESCE(n.dismiss_reason,''),n.generated_at,n.decided_at
 		FROM recommendations n JOIN customers c ON c.id=n.account_id JOIN users u ON u.id=n.assignee_id
-		WHERE `+crm.ScopeSQL("c")+`
+		WHERE ` + crm.ScopeSQL("c") + `
 		  AND ($4='' OR n.account_id::text=$4) AND ($5='' OR n.opportunity_id::text=$5)
 		  AND ($6='' OR n.assignee_id::text=$6) AND ($7='' OR n.priority=$7) AND ($8='ALL' OR n.status=$8)
+		  AND ($9='' OR n.id::text=$9)
 		ORDER BY CASE n.priority WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 ELSE 2 END,
-		         n.due_date NULLS LAST, n.generated_at DESC LIMIT $9`, args...)
+		         n.due_date NULLS LAST, n.generated_at DESC LIMIT $10`, args
+}
+
+func (s *Service) ListRecommendations(ctx context.Context, p *auth.Principal, f RecommendationFilter) ([]Recommendation, error) {
+	if err := auth.Require(p, "intelligence:read"); err != nil {
+		return nil, err
+	}
+	sql, args := recommendationQuery(p, f)
+	rows, err := s.DB.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -252,16 +276,14 @@ func (s *Service) ListRecommendations(ctx context.Context, p *auth.Principal, f 
 }
 
 func (s *Service) GetRecommendation(ctx context.Context, p *auth.Principal, id string) (Recommendation, error) {
-	items, err := s.ListRecommendations(ctx, p, RecommendationFilter{Status: "ALL", Limit: 200})
+	items, err := s.ListRecommendations(ctx, p, RecommendationFilter{ID: id, Status: "ALL", Limit: 1})
 	if err != nil {
 		return Recommendation{}, err
 	}
-	for _, item := range items {
-		if item.ID == id {
-			return item, nil
-		}
+	if len(items) == 0 {
+		return Recommendation{}, errors.New("recommendation not found")
 	}
-	return Recommendation{}, errors.New("recommendation not found")
+	return items[0], nil
 }
 
 // AcceptRecommendation turns advice into work. The Task it creates is an
