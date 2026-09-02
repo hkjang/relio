@@ -27,7 +27,7 @@ func (s *Service) ListLeads(ctx context.Context, p *auth.Principal, q string, li
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.DB.Query(ctx, `SELECT l.id,l.name,COALESCE(l.company,''),COALESCE(l.email,''),COALESCE(l.phone,''),COALESCE(l.source,''),l.status,l.owner_id,u.display_name,l.version,l.created_at,l.updated_at FROM leads l JOIN users u ON u.id=l.owner_id WHERE `+scopeSQL("l")+` AND ($4='' OR lower(l.name) LIKE '%'||lower($4)||'%' OR lower(COALESCE(l.company,'')) LIKE '%'||lower($4)||'%') ORDER BY l.updated_at DESC LIMIT $5`, p.DataScope, p.UserID, nullable(p.OrganizationID), strings.TrimSpace(q), limit)
+	rows, err := s.DB.Query(ctx, `SELECT l.id,l.name,COALESCE(l.company,''),COALESCE(l.email,''),COALESCE(l.phone,''),COALESCE(l.source,''),l.status,l.owner_id,u.display_name,l.version,l.created_at,l.updated_at FROM leads l JOIN users u ON u.id=l.owner_id WHERE `+scopeSQL("l")+` AND ($4='' OR lower(l.name) LIKE $4 ESCAPE '\' OR lower(COALESCE(l.company,'')) LIKE $4 ESCAPE '\') ORDER BY l.updated_at DESC LIMIT $5`, p.DataScope, p.UserID, nullable(p.OrganizationID), searchPattern(q), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func (s *Service) ListProducts(ctx context.Context, p *auth.Principal, q string,
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.DB.Query(ctx, `SELECT id,code,name,COALESCE(description,''),unit_price,active,created_at,updated_at FROM products WHERE ($1='' OR lower(name) LIKE '%'||lower($1)||'%' OR lower(code) LIKE '%'||lower($1)||'%') ORDER BY active DESC,name LIMIT $2`, strings.TrimSpace(q), limit)
+	rows, err := s.DB.Query(ctx, `SELECT id,code,name,COALESCE(description,''),unit_price,active,created_at,updated_at FROM products WHERE ($1='' OR lower(name) LIKE $1 ESCAPE '\' OR lower(code) LIKE $1 ESCAPE '\') ORDER BY active DESC,name LIMIT $2`, searchPattern(q), limit)
 	if err != nil {
 		return nil, err
 	}

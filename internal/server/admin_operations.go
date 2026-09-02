@@ -92,8 +92,8 @@ func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
 		WHERE ($1='' OR channel=$1)
 		  AND ($2='' OR resource=$2)
 		  AND ($3='' OR action=$3)
-		  AND ($4='' OR COALESCE(actor_name,'') ILIKE '%' || $4 || '%' OR action ILIKE '%' || $4 || '%' OR resource ILIKE '%' || $4 || '%' OR COALESCE(resource_id,'') ILIKE '%' || $4 || '%' OR COALESCE(request_id,'') ILIKE '%' || $4 || '%')
-		ORDER BY occurred_at DESC LIMIT $5`, channel, resource, action, query, limit)
+		  AND ($4='' OR COALESCE(actor_name,'') ILIKE $4 ESCAPE '\' OR action ILIKE $4 ESCAPE '\' OR resource ILIKE $4 ESCAPE '\' OR COALESCE(resource_id,'') ILIKE $4 ESCAPE '\' OR COALESCE(request_id,'') ILIKE $4 ESCAPE '\')
+		ORDER BY occurred_at DESC LIMIT $5`, channel, resource, action, crm.SearchPattern(query), limit)
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
