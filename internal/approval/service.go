@@ -207,37 +207,69 @@ func matches(p Policy, snap map[string]any) bool {
 	if !ok {
 		return false
 	}
-	op := strings.ToUpper(p.ConditionOperator)
+	op := strings.ToUpper(strings.TrimSpace(p.ConditionOperator))
 	if op == "" {
 		op = "EQ"
 	}
-	aNum, aok := asFloat(actual)
-	bNum, bok := asFloat(p.ConditionValue)
-	if aok && bok {
-		switch op {
-		case "GT":
-			return aNum > bNum
-		case "GTE":
-			return aNum >= bNum
-		case "LT":
-			return aNum < bNum
-		case "LTE":
-			return aNum <= bNum
-		case "NE":
-			return aNum != bNum
-		default:
-			return aNum == bNum
+	a, b := conditionText(actual), conditionText(p.ConditionValue)
+	// CONTAINS asks about the text even when both sides look like numbers:
+	// "amount CONTAINS 50" is about the digits, and comparing 500000 to 50 as
+	// numbers is always false, which would silently disable the policy.
+	if op == "CONTAINS" {
+		return strings.Contains(strings.ToLower(a), strings.ToLower(b))
+	}
+	if aNum, aok := asFloat(actual); aok {
+		if bNum, bok := asFloat(p.ConditionValue); bok {
+			switch op {
+			case "GT":
+				return aNum > bNum
+			case "GTE":
+				return aNum >= bNum
+			case "LT":
+				return aNum < bNum
+			case "LTE":
+				return aNum <= bNum
+			case "NE":
+				return aNum != bNum
+			default:
+				return aNum == bNum
+			}
 		}
 	}
-	a, b := fmt.Sprint(actual), fmt.Sprint(p.ConditionValue)
 	switch op {
 	case "NE":
-		return a != b
-	case "CONTAINS":
-		return strings.Contains(strings.ToLower(a), strings.ToLower(b))
+		return !strings.EqualFold(a, b)
+	case "GT":
+		return strings.ToLower(a) > strings.ToLower(b)
+	case "GTE":
+		return strings.ToLower(a) >= strings.ToLower(b)
+	case "LT":
+		return strings.ToLower(a) < strings.ToLower(b)
+	case "LTE":
+		return strings.ToLower(a) <= strings.ToLower(b)
 	default:
 		return strings.EqualFold(a, b)
 	}
+}
+
+// conditionText renders a snapshot or condition value the way an administrator
+// wrote it. A JSON snapshot carries every number as a float64, and fmt.Sprint
+// would print an amount of 500,000,000 as "5e+08", so a text comparison against
+// the digits they typed would never match.
+func conditionText(v any) string {
+	switch n := v.(type) {
+	case nil:
+		return ""
+	case float64:
+		return strconv.FormatFloat(n, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(n), 'f', -1, 32)
+	case json.Number:
+		return n.String()
+	case string:
+		return n
+	}
+	return fmt.Sprint(v)
 }
 func asFloat(v any) (float64, bool) {
 	switch n := v.(type) {

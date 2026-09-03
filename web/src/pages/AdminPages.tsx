@@ -284,15 +284,17 @@ function ApprovalPolicies(props:Props){
 function PolicyModal({policy,onClose,onSaved,notify}:{policy?:any;onClose:()=>void;onSaved:()=>void;notify:Props['notify']}){
   const editing=Boolean(policy?.id);const [busy,setBusy]=useState(false)
   async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);setBusy(true)
-    const value=String(f.get('value')||'')
-    const body={name:f.get('name'),entityType:f.get('entity'),conditionField:f.get('field'),conditionOperator:f.get('operator'),conditionValue:value?Number(value):null,approverMethod:'MANAGER',approvalSteps:Number(f.get('steps')),allowReject:f.get('reject')==='on',allowResubmit:f.get('resubmit')==='on',allowDelegate:false,active:f.get('active')==='on',priority:Number(f.get('priority'))}
+    const value=String(f.get('value')||'').trim()
+    // status 같은 문자 항목은 숫자로 바꾸면 null 이 되어 정책이 조용히 무시됩니다.
+    const conditionValue=value===''?null:(value===String(Number(value))?Number(value):value)
+    const body={name:f.get('name'),entityType:f.get('entity'),conditionField:f.get('field'),conditionOperator:f.get('operator'),conditionValue,approverMethod:'MANAGER',approvalSteps:Number(f.get('steps')),allowReject:f.get('reject')==='on',allowResubmit:f.get('resubmit')==='on',allowDelegate:false,active:f.get('active')==='on',priority:Number(f.get('priority'))}
     try{await api(editing?`/api/v1/admin/approval-policies/${policy.id}`:'/api/v1/admin/approval-policies',{method:editing?'PUT':'POST',body:JSON.stringify(body)});notify(editing?'승인 정책을 저장했습니다.':'승인 정책을 활성화했습니다. 해당 업무에 검토 UI가 나타납니다.');onSaved()}catch(e){notify(errorMessage(e),true)}finally{setBusy(false)}}
   return <Modal title={editing?`${policy.name} 편집`:'팀장 1단계 승인 정책'} onClose={onClose} wide><form className="form" onSubmit={submit}><div className="form-grid">
     <label className="span-2">정책명 *<input name="name" required autoFocus defaultValue={policy?.name||''} placeholder="예: 5억원 이상 Opportunity"/></label>
     <label>대상 업무<select name="entity" defaultValue={policy?.entityType||'OPPORTUNITY'}>{['OPPORTUNITY','QUOTATION','CONTRACT','CUSTOMER'].map(x=><option key={x}>{x}</option>)}</select></label>
     <label>조건 항목<select name="field" defaultValue={policy?.conditionField??'expected_amount'}><option value="expected_amount">expected_amount</option><option value="amount">amount</option><option value="discount_percent">discount_percent</option><option value="status">status</option><option value="">모든 건</option></select></label>
-    <label>조건<select name="operator" defaultValue={policy?.conditionOperator||'GTE'}><option value="GTE">이상 (GTE)</option><option value="GT">초과 (GT)</option><option value="EQ">같음 (EQ)</option><option value="LTE">이하 (LTE)</option></select></label>
-    <label>조건값<input name="value" type="number" defaultValue={policy?.conditionValue??''}/></label>
+    <label>조건<select name="operator" defaultValue={policy?.conditionOperator||'GTE'}><option value="GTE">이상 (GTE)</option><option value="GT">초과 (GT)</option><option value="EQ">같음 (EQ)</option><option value="NE">같지 않음 (NE)</option><option value="LTE">이하 (LTE)</option><option value="LT">미만 (LT)</option><option value="CONTAINS">포함 (CONTAINS)</option></select></label>
+    <label>조건값<input name="value" defaultValue={policy?.conditionValue??''} placeholder="예: 500000000 또는 OPEN"/></label>
     <label>승인 단계<input name="steps" type="number" min="1" max="5" defaultValue={policy?.approvalSteps??1}/></label>
     <label>우선순위<input name="priority" type="number" min="1" defaultValue={policy?.priority??100}/><small>숫자가 작을수록 먼저 평가됩니다.</small></label>
     <label className="span-2">승인자<input readOnly value="요청자의 팀장 (없으면 시스템 관리자)"/></label>
