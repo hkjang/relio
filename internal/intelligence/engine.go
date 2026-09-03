@@ -314,23 +314,25 @@ func opportunitySignals(o *opportunityFacts, now time.Time) []Signal {
 			DetectedAt:  now, SourceType: "OPPORTUNITY", SourceID: o.ID, Status: "ACTIVE",
 		})
 	}
-	// A deal whose close date has passed while still open is a forecast lie.
-	if o.CloseDate != nil && o.CloseDate.Before(now) {
-		overdue := int(now.Sub(*o.CloseDate).Hours() / 24)
-		out = append(out, Signal{
-			SignalType: "CLOSE_DATE_PASSED", Sentiment: "NEGATIVE", Severity: "HIGH",
-			EntityType: "OPPORTUNITY", EntityID: o.ID, AccountID: o.AccountID,
-			Title:       fmt.Sprintf("%s의 예상 종료일이 %d일 지났습니다", o.Name, overdue),
-			Description: "예상 종료일이 지났는데 진행 중입니다. Forecast가 실제와 어긋나 있습니다.",
-			Evidence:    map[string]any{"daysOverdue": overdue, "expectedCloseDate": o.CloseDate},
-			DetectedAt:  now, SourceType: "OPPORTUNITY", SourceID: o.ID, Status: "ACTIVE",
-		})
+	// A deal whose close date has passed while still open is a forecast lie. The
+	// close date itself is not late yet, so this counts whole days past it.
+	if o.CloseDate != nil {
+		if overdue := calendarDays(*o.CloseDate, now); overdue > 0 {
+			out = append(out, Signal{
+				SignalType: "CLOSE_DATE_PASSED", Sentiment: "NEGATIVE", Severity: "HIGH",
+				EntityType: "OPPORTUNITY", EntityID: o.ID, AccountID: o.AccountID,
+				Title:       fmt.Sprintf("%s의 예상 종료일이 %d일 지났습니다", o.Name, overdue),
+				Description: "예상 종료일이 지났는데 진행 중입니다. Forecast가 실제와 어긋나 있습니다.",
+				Evidence:    map[string]any{"daysOverdue": overdue, "expectedCloseDate": o.CloseDate},
+				DetectedAt:  now, SourceType: "OPPORTUNITY", SourceID: o.ID, Status: "ACTIVE",
+			})
+		}
 	}
 	return out
 }
 
 func contractSignals(c *contractFacts, now time.Time) []Signal {
-	remaining := int(c.EndDate.Sub(now).Hours() / 24)
+	remaining := calendarDays(now, c.EndDate)
 	if remaining > renewalDays || remaining < 0 {
 		return nil
 	}
@@ -594,6 +596,19 @@ func daysSince(at *time.Time, now time.Time) int {
 		return 1 << 30
 	}
 	return int(now.Sub(*at).Hours() / 24)
+}
+
+// calendarDays counts whole days between two calendar dates. It exists because
+// expected_close_date and end_date are DATE columns, so they arrive at midnight
+// while now carries a time of day: subtracting the two and dividing by 24 loses
+// most of a day and then truncates the remainder toward zero, which reported a
+// contract expiring tomorrow as "만료 D-0". Elapsed-time questions ("how long
+// has this stage been quiet") stay with daysSince; this is for date questions.
+func calendarDays(from, to time.Time) int {
+	from, to = from.UTC(), to.UTC()
+	fromDay := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.UTC)
+	toDay := time.Date(to.Year(), to.Month(), to.Day(), 0, 0, 0, 0, time.UTC)
+	return int(toDay.Sub(fromDay) / (24 * time.Hour))
 }
 
 func nullableID(id string) any {

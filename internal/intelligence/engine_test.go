@@ -115,6 +115,90 @@ func TestContractExpirySeverityTightensAsTheDateNears(t *testing.T) {
 	}
 }
 
+// end_date and expected_close_date are DATE columns, so a row arrives at
+// midnight UTC while now carries a time of day. Every case below builds the
+// date the way the database does, which is what the other tests, built from
+// now.AddDate, never exercise.
+func dateOf(t time.Time, offsetDays int) time.Time {
+	t = t.AddDate(0, 0, offsetDays)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func TestCalendarDaysCountsDatesNotElapsedHours(t *testing.T) {
+	cases := []struct {
+		name string
+		from time.Time
+		to   time.Time
+		want int
+	}{
+		{"tomorrow's midnight is one day away from this morning", now, dateOf(now, 1), 1},
+		{"today's midnight is today", now, dateOf(now, 0), 0},
+		{"yesterday's midnight is one day behind", now, dateOf(now, -1), -1},
+		{"across a month boundary", dateOf(now, 0), dateOf(now, 30), 30},
+		{"a non-UTC instant is read as its UTC date", now.In(time.FixedZone("KST", 9*3600)), dateOf(now, 2), 2},
+	}
+	for _, c := range cases {
+		if got := calendarDays(c.from, c.to); got != c.want {
+			t.Fatalf("%s: calendarDays = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+func TestContractExpiryCountsWholeDaysToTheEndDate(t *testing.T) {
+	cases := []struct {
+		offset  int
+		signal  bool
+		label   string
+		comment string
+	}{
+		{1, true, "만료 D-1", "a contract expiring tomorrow is D-1, not D-0"},
+		{0, true, "만료 D-0", "a contract expiring today must still be reported"},
+		{-1, false, "", "a contract that expired yesterday is not an expiring one"},
+		{renewalDays, true, "만료 D-90", "the last day of the notice window is inside it"},
+		{renewalDays + 1, false, "", "the day before the notice window opens stays quiet"},
+	}
+	for _, c := range cases {
+		signals := contractSignals(&contractFacts{ID: "k", Title: "계약", AccountID: "a",
+			EndDate: dateOf(now, c.offset), RenewalStatus: "IN_PROGRESS"}, now)
+		if !c.signal {
+			if len(signals) != 0 {
+				t.Fatalf("%s: end_date %+d produced %d signals", c.comment, c.offset, len(signals))
+			}
+			continue
+		}
+		if len(signals) != 1 {
+			t.Fatalf("%s: end_date %+d produced %d signals", c.comment, c.offset, len(signals))
+		}
+		if !strings.HasSuffix(signals[0].Title, c.label) {
+			t.Fatalf("%s: title = %q, want it to end with %q", c.comment, signals[0].Title, c.label)
+		}
+		if got := signals[0].Evidence["daysRemaining"]; got != c.offset {
+			t.Fatalf("%s: daysRemaining = %v, want %d", c.comment, got, c.offset)
+		}
+	}
+}
+
+func TestCloseDateIsNotOverdueOnTheDayItself(t *testing.T) {
+	due := dateOf(now, 0)
+	open := &opportunityFacts{ID: "o", Name: "딜", AccountID: "a", StageName: "제안",
+		StageEnteredAt: now.AddDate(0, 0, -1), Status: "OPEN", CloseDate: &due}
+	if _, ok := signalTypes(opportunitySignals(open, now))["CLOSE_DATE_PASSED"]; ok {
+		t.Fatal("a deal due today has not missed its close date yet")
+	}
+	yesterday := dateOf(now, -1)
+	open.CloseDate = &yesterday
+	late, ok := signalTypes(opportunitySignals(open, now))["CLOSE_DATE_PASSED"]
+	if !ok {
+		t.Fatal("a deal one day past its close date must be reported")
+	}
+	if got := late.Evidence["daysOverdue"]; got != 1 {
+		t.Fatalf("daysOverdue = %v, want 1", got)
+	}
+	if !strings.Contains(late.Title, "1일 지났습니다") {
+		t.Fatalf("title = %q, want it to say one day", late.Title)
+	}
+}
+
 func TestContractTitleDoesNotLeakStatusCodes(t *testing.T) {
 	signals := contractSignals(&contractFacts{ID: "k", Title: "연간 유지보수 계약", AccountID: "a",
 		EndDate: now.AddDate(0, 0, 20), RenewalStatus: "NOT_STARTED"}, now)
