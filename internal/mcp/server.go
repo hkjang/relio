@@ -139,6 +139,45 @@ func boolean(description string) map[string]any {
 	return map[string]any{"type": "boolean", "description": description}
 }
 
+// The two list tools whose result is a page rather than the whole set. Their
+// answer already carries hasMore and nextCursor, but no tool took a cursor
+// back, so an agent could read the first page, be told there was more, and have
+// no way to ask for it — everything past the first page was invisible over MCP.
+// Both schemas set additionalProperties:false, so the argument has to be
+// declared here before a client is allowed to send it.
+var cursorProp = str("다음 페이지 커서 · 직전 응답의 nextCursor 값을 그대로 전달합니다. 첫 페이지는 비웁니다.")
+
+var searchCustomersSchema = schema(nil, map[string]any{
+	"query":  str("검색어"),
+	"cursor": cursorProp,
+	"limit":  integer("최대 결과 수"),
+})
+
+var listOpportunitiesSchema = schema(nil, map[string]any{
+	"query":      str("검색어"),
+	"customerId": str("고객 ID"),
+	"status":     str("OPEN, WON, LOST"),
+	"cursor":     cursorProp,
+	"limit":      integer("최대 결과 수"),
+})
+
+// customerSearchArgs and opportunityFilterArgs keep the tool arguments and the
+// service filter in one place, so a paging argument cannot be advertised in the
+// schema and then dropped on the way to the query.
+func customerSearchArgs(a map[string]any) crm.CustomerQuery {
+	return crm.CustomerQuery{Q: strArg(a, "query"), Cursor: strArg(a, "cursor"), Limit: intArg(a, "limit", 50)}
+}
+
+func opportunityFilterArgs(a map[string]any) crm.OpportunityFilter {
+	return crm.OpportunityFilter{
+		Query:      strArg(a, "query"),
+		CustomerID: strArg(a, "customerId"),
+		Status:     strings.ToUpper(strings.TrimSpace(strArg(a, "status"))),
+		Cursor:     strArg(a, "cursor"),
+		Limit:      intArg(a, "limit", 50),
+	}
+}
+
 func (s *Server) allowedOrigin(ctx context.Context, r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
@@ -500,7 +539,7 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 		}
 	}
 	qprops := map[string]any{"query": str("검색어"), "limit": integer("최대 결과 수")}
-	add("customer:read", "search_customers", "고객 검색", "이름 또는 사업자번호로 접근 가능한 고객을 검색합니다.", schema(nil, qprops), true, false)
+	add("customer:read", "search_customers", "고객 검색", "이름 또는 사업자번호로 접근 가능한 고객을 검색합니다. 응답의 hasMore가 true면 nextCursor를 cursor 인자로 넘겨 다음 페이지를 이어 받습니다.", searchCustomersSchema, true, false)
 	add("customer:read", "get_customer", "고객 상세", "고객 기본 정보를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
 	add("customer:read", "get_customer_360", "Customer 360", "담당자, 영업기회, 활동, 계약, 누적매출을 함께 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
 	customerProps := map[string]any{"name": str("고객명"), "registrationNo": str("사업자등록번호"), "customerType": str("PROSPECT, CUSTOMER, PARTNER"), "grade": str("고객 등급"), "industry": str("산업군"), "website": str("웹사이트"), "phone": str("대표 전화"), "email": str("대표 이메일"), "address": str("주소"), "health": str("NORMAL, ATTENTION, RISK"), "annualRevenue": number("연 매출"), "employeeCount": integer("직원 수"), "customFields": map[string]any{"type": "object", "description": "사용자 정의 필드", "additionalProperties": true}}
@@ -525,7 +564,7 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	add("lead:write", "create_lead", "Lead 등록", "초기 잠재고객 Lead를 등록합니다.", schema([]string{"name"}, map[string]any{"name": str("Lead 이름"), "company": str("회사명"), "email": str("이메일"), "phone": str("전화"), "source": str("유입 경로"), "status": str("NEW 등 Lead 상태"), "customFields": map[string]any{"type": "object", "additionalProperties": true}}), false, false)
 	add("product:read", "list_products", "상품 조회", "활성 여부를 포함한 상품·서비스 카탈로그를 검색합니다.", schema(nil, qprops), true, false)
 	add("product:write", "create_product", "상품 등록", "견적과 영업에 사용할 상품·서비스를 등록합니다.", schema([]string{"code", "name", "unitPrice"}, map[string]any{"code": str("상품 코드"), "name": str("상품명"), "description": str("설명"), "unitPrice": number("단가"), "active": boolean("활성 여부")}), false, false)
-	add("opportunity:read", "list_opportunities", "영업기회 조회", "접근 가능한 영업기회를 조회합니다.", schema(nil, map[string]any{"query": str("검색어"), "customerId": str("고객 ID"), "status": str("OPEN, WON, LOST"), "limit": integer("최대 결과 수")}), true, false)
+	add("opportunity:read", "list_opportunities", "영업기회 조회", "접근 가능한 영업기회를 조회합니다. 응답의 hasMore가 true면 nextCursor를 cursor 인자로 넘겨 다음 페이지를 이어 받습니다.", listOpportunitiesSchema, true, false)
 	add("opportunity:read", "get_opportunity", "영업기회 상세", "영업기회와 자동 Health 신호를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("영업기회 ID")}), true, false)
 	oppProps := map[string]any{"name": str("영업기회명"), "customerId": str("고객 ID"), "stageId": str("Stage ID"), "expectedAmount": number("예상 금액"), "expectedCloseDate": str("YYYY-MM-DD"), "nextAction": str("다음 행동"), "nextActionDate": str("YYYY-MM-DD")}
 	add("customer:read opportunity:read opportunity:write", "create_opportunity", "영업기회 생성", "새 영업기회를 생성합니다.", schema([]string{"name", "customerId"}, oppProps), false, false)
@@ -678,7 +717,7 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 	var err error
 	switch call.Name {
 	case "search_customers":
-		v, err = s.CRM.ListCustomers(ctx, p, strArg(a, "query"), "", "", intArg(a, "limit", 50))
+		v, err = s.CRM.SearchCustomers(ctx, p, customerSearchArgs(a))
 	case "get_customer":
 		v, err = s.CRM.GetCustomer(ctx, p, strArg(a, "id"))
 	case "get_customer_360":
@@ -741,7 +780,7 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 			v, err = s.CRM.CreateProduct(ctx, p, in, meta)
 		}
 	case "list_opportunities":
-		v, err = s.CRM.ListOpportunities(ctx, p, crm.OpportunityFilter{Query: strArg(a, "query"), CustomerID: strArg(a, "customerId"), Status: strArg(a, "status"), Limit: intArg(a, "limit", 50)})
+		v, err = s.CRM.ListOpportunities(ctx, p, opportunityFilterArgs(a))
 	case "get_opportunity":
 		v, err = s.CRM.GetOpportunity(ctx, p, strArg(a, "id"))
 	case "create_opportunity":

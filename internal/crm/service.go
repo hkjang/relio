@@ -33,23 +33,30 @@ func (s *Service) audit(ctx context.Context, p *auth.Principal, m RequestMeta, a
 	s.Audit.Record(ctx, audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: m.Channel, Action: action, Resource: resource, ResourceID: id, Before: before, After: after, IP: m.IP, RequestID: m.RequestID, UserAgent: m.UserAgent})
 }
 
-func pageOffset(cursor string) int {
+// errInvalidCursor answers a cursor this server did not issue. Treating one as
+// offset 0 silently restarted the listing at page one, so a caller walking the
+// pages — an MCP agent especially — kept receiving the first page together with
+// a nextCursor and never reached the end.
+var errInvalidCursor = errors.New("cursor is not valid: pass back the nextCursor value from the previous page")
+
+func parseCursor(cursor string) (int, error) {
+	cursor = strings.TrimSpace(cursor)
 	if cursor == "" {
-		return 0
+		return 0, nil
 	}
 	b, err := base64.RawURLEncoding.DecodeString(cursor)
 	if err != nil {
-		return 0
+		return 0, errInvalidCursor
 	}
-	parts := strings.Split(string(b), ":")
-	if len(parts) != 2 || parts[0] != "offset" {
-		return 0
+	prefix, digits, found := strings.Cut(string(b), ":")
+	if !found || prefix != "offset" {
+		return 0, errInvalidCursor
 	}
-	n, _ := strconv.Atoi(parts[1])
-	if n < 0 {
-		return 0
+	n, err := strconv.Atoi(digits)
+	if err != nil || n < 0 {
+		return 0, errInvalidCursor
 	}
-	return n
+	return n, nil
 }
 func nextCursor(offset int) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("offset:%d", offset)))
@@ -149,7 +156,10 @@ func (s *Service) SearchCustomers(ctx context.Context, p *auth.Principal, filter
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	offset := pageOffset(filter.Cursor)
+	offset, err := parseCursor(filter.Cursor)
+	if err != nil {
+		return Page[Customer]{}, err
+	}
 	orders := map[string]string{"name": "c.name ASC,c.id", "-name": "c.name DESC,c.id", "annualRevenue": "c.annual_revenue ASC NULLS LAST,c.id", "-annualRevenue": "c.annual_revenue DESC NULLS LAST,c.id", "createdAt": "c.created_at ASC,c.id", "-createdAt": "c.created_at DESC,c.id", "updatedAt": "c.updated_at ASC,c.id", "-updatedAt": "c.updated_at DESC,c.id"}
 	order := orders[filter.Sort]
 	if order == "" {
@@ -442,7 +452,10 @@ func (s *Service) ListOpportunities(ctx context.Context, p *auth.Principal, f Op
 	if f.Limit < 1 || f.Limit > 200 {
 		f.Limit = 50
 	}
-	offset := pageOffset(f.Cursor)
+	offset, err := parseCursor(f.Cursor)
+	if err != nil {
+		return Page[Opportunity]{}, err
+	}
 	orders := map[string]string{"name": "o.name ASC,o.id", "-name": "o.name DESC,o.id", "expectedAmount": "o.base_expected_amount ASC,o.id", "-expectedAmount": "o.base_expected_amount DESC,o.id", "probability": "o.probability ASC,o.id", "-probability": "o.probability DESC,o.id", "expectedCloseDate": "o.expected_close_date ASC NULLS LAST,o.id", "-expectedCloseDate": "o.expected_close_date DESC NULLS LAST,o.id", "updatedAt": "o.updated_at ASC,o.id", "-updatedAt": "o.updated_at DESC,o.id"}
 	order := orders[f.Sort]
 	if order == "" {
