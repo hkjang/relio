@@ -26,6 +26,24 @@ import (
 
 const ProtocolVersion = "2025-11-25"
 
+// MaxRequestBytes caps one MCP HTTP message.
+const MaxRequestBytes = 1 << 20
+
+// readRequestBody reads at most one byte past the cap so an oversized body can
+// be told apart from a malformed one. Stopping exactly at the cap truncates a
+// larger message into invalid JSON, and the client is then told "Parse error"
+// about a body it serialised correctly.
+func readRequestBody(r io.Reader) (body []byte, tooLarge bool, err error) {
+	body, err = io.ReadAll(io.LimitReader(r, MaxRequestBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(body) > MaxRequestBytes {
+		return nil, true, nil
+	}
+	return body, false, nil
+}
+
 // Every revision this server can speak, newest first. Nothing in the
 // implementation is version-specific — the differences that matter to us
 // (batching, the protocol header) are handled explicitly — so the list is the
@@ -211,7 +229,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.ErrorJSON(w, r, http.StatusNotAcceptable, "accept_required", "Accept에 application/json을 포함해야 합니다.", nil)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, tooLarge, err := readRequestBody(r.Body)
+	if tooLarge {
+		s.writeErrorStatus(w, http.StatusRequestEntityTooLarge, nil, -32600,
+			"요청 본문이 너무 큽니다.", map[string]any{"maxBytes": MaxRequestBytes})
+		return
+	}
 	if err != nil {
 		s.writeErrorStatus(w, http.StatusBadRequest, nil, -32700, "Parse error", nil)
 		return
