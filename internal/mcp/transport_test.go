@@ -2,7 +2,10 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -128,5 +131,62 @@ func TestParseFailuresAnswerWithAClientVisibleStatus(t *testing.T) {
 	}
 	if out.Error == nil || out.Error.Code != -32700 {
 		t.Fatalf("error = %+v, want -32700", out.Error)
+	}
+}
+
+type failingReader struct{ err error }
+
+func (f failingReader) Read([]byte) (int, error) { return 0, f.err }
+
+// An oversized body used to be read up to the cap and no further, so the client
+// was told its own well-formed message was a parse error.
+func TestOversizedBodyIsReportedAsSuchNotAsAParseError(t *testing.T) {
+	atCap := strings.Repeat("a", MaxRequestBytes)
+	body, tooLarge, err := readRequestBody(strings.NewReader(atCap))
+	if err != nil || tooLarge || len(body) != MaxRequestBytes {
+		t.Fatalf("at the cap: len=%d tooLarge=%v err=%v", len(body), tooLarge, err)
+	}
+
+	// One byte past the cap is rejected rather than silently cut down.
+	_, tooLarge, err = readRequestBody(strings.NewReader(atCap + "a"))
+	if err != nil || !tooLarge {
+		t.Fatalf("one byte past the cap: tooLarge=%v err=%v", tooLarge, err)
+	}
+
+	// The message that motivated this: valid JSON-RPC whose arguments push it
+	// past the cap. Truncating it produces a body parseRequests rejects, which
+	// is exactly the misleading answer we no longer send.
+	big := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_note","arguments":{"content":"` +
+		strings.Repeat("x", MaxRequestBytes) + `"}}}`
+	if _, tooLarge, err = readRequestBody(strings.NewReader(big)); err != nil || !tooLarge {
+		t.Fatalf("oversized tools/call: tooLarge=%v err=%v", tooLarge, err)
+	}
+	if _, _, perr := parseRequests([]byte(big[:MaxRequestBytes])); perr == nil {
+		t.Fatal("a truncated body must not parse — otherwise a partial call would run")
+	}
+
+	// A read that fails is still a transport failure, not an oversized body.
+	if _, tooLarge, err = readRequestBody(failingReader{err: errors.New("connection reset")}); err == nil || tooLarge {
+		t.Fatalf("read failure: tooLarge=%v err=%v", tooLarge, err)
+	}
+}
+
+func TestOversizedBodyAnswersWith413AndAJSONRPCError(t *testing.T) {
+	w := httptest.NewRecorder()
+	(&Server{}).writeErrorStatus(w, http.StatusRequestEntityTooLarge, nil, -32600,
+		"요청 본문이 너무 큽니다.", map[string]any{"maxBytes": MaxRequestBytes})
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", w.Code)
+	}
+	var out response
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("error body must still be JSON-RPC: %v", err)
+	}
+	if out.Error == nil || out.Error.Code != -32600 {
+		t.Fatalf("error = %+v, want -32600", out.Error)
+	}
+	data, _ := out.Error.Data.(map[string]any)
+	if data["maxBytes"] != float64(MaxRequestBytes) {
+		t.Fatalf("data = %v, want the cap the client has to fit under", out.Error.Data)
 	}
 }
