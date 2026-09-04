@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -107,6 +108,15 @@ func addMonthsClamped(anchor time.Time, months int) time.Time {
 	return time.Date(first.Year(), first.Month(), day, 0, 0, 0, 0, time.UTC)
 }
 
+// maxScheduleEntries bounds how much work one activation may ask for. The
+// contract period and the schedule type together decide how many revenue rows
+// get written, and nothing bounded that pair: an end date typed as 2205 instead
+// of 2025 turned a monthly contract into thousands of inserts inside a single
+// transaction, and left behind a schedule tab that returns every row at once and
+// so can never load again. Fifty years of monthly recognition is already far
+// past any real contract, so that is where the line sits.
+const maxScheduleEntries = 600
+
 func buildScheduleDates(start, end *time.Time, scheduleType string) ([]time.Time, error) {
 	if start == nil {
 		return nil, errors.New("startDate is required to activate a contract")
@@ -129,6 +139,9 @@ func buildScheduleDates(start, end *time.Time, scheduleType string) ([]time.Time
 		date := addMonthsClamped(*start, n*step)
 		if date.After(*end) {
 			break
+		}
+		if len(dates) == maxScheduleEntries {
+			return nil, fmt.Errorf("contract period is too long for a %s revenue schedule: it would create over %d entries, so shorten the period or choose a less frequent revenueScheduleType", scheduleType, maxScheduleEntries)
 		}
 		dates = append(dates, date)
 	}
