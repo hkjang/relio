@@ -6,6 +6,19 @@ import (
 	"time"
 )
 
+// TestExpiringDaysStaysAFilterAboveTheCap covers the argument get_expiring_contracts
+// hands to Contracts. Over-range used to become 0, and 0 is how the query says
+// "do not narrow by end date", so an agent asking for contracts expiring within
+// 5000 days was answered with every contract in scope — including the ones with
+// no end date at all.
+func TestExpiringDaysStaysAFilterAboveTheCap(t *testing.T) {
+	for days, want := range map[int]int{5000: 3650, 3651: 3650, 3650: 3650, 90: 90, 0: 0, -1: 0} {
+		if got := boundExpiringDays(days); got != want {
+			t.Errorf("boundExpiringDays(%d) = %d, want %d", days, got, want)
+		}
+	}
+}
+
 func TestBuildMonthlyScheduleClampsEndOfMonth(t *testing.T) {
 	start := time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2024, time.April, 30, 0, 0, 0, 0, time.UTC)

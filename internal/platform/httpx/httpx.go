@@ -3,10 +3,10 @@ package httpx
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -67,14 +67,48 @@ func Bearer(r *http.Request) string {
 	return strings.TrimSpace(v[7:])
 }
 
+// IntQuery reads a bounded integer from the query string. A key that is absent,
+// is not a decimal integer, or lands outside [min, max] yields fallback.
+//
+// The parse is strict on purpose. fmt.Sscan stops at the first byte it cannot
+// use and reports no error about the rest, so it read "1e3" as 1, "0x10" as 16
+// and "50abc" as 50: a caller was answered with a different number than it sent,
+// under a schema this server publishes as `type: integer` with a minimum and a
+// maximum. Surrounding spaces are still accepted because a query string carries
+// a "+" as a space.
 func IntQuery(r *http.Request, key string, fallback, min, max int) int {
-	v := r.URL.Query().Get(key)
-	if v == "" {
-		return fallback
-	}
-	var n int
-	if _, err := fmt.Sscan(v, &n); err != nil || n < min || n > max {
+	n, ok := intQuery(r, key)
+	if !ok || n < min || n > max {
 		return fallback
 	}
 	return n
+}
+
+// ClampQuery is IntQuery for a filter whose fallback switches the filter off.
+// Falling back there answers a request to narrow with everything the caller did
+// not ask for, so an out-of-range value is pulled to the nearest bound instead
+// and only an unreadable one yields fallback.
+func ClampQuery(r *http.Request, key string, fallback, min, max int) int {
+	n, ok := intQuery(r, key)
+	switch {
+	case !ok:
+		return fallback
+	case n < min:
+		return min
+	case n > max:
+		return max
+	}
+	return n
+}
+
+func intQuery(r *http.Request, key string) (int, bool) {
+	v := strings.TrimSpace(r.URL.Query().Get(key))
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }

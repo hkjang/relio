@@ -121,6 +121,24 @@ func (s *Service) DueActions(ctx context.Context, p *auth.Principal, days, limit
 	return out, rows.Err()
 }
 
+// maxExpiringDays caps the "ends within N days" filter of Contracts at ten
+// years. An over-range value used to reset to 0, which is how the query says
+// "do not narrow by end date at all": get_expiring_contracts with days=5000
+// answered with every contract in scope, including the ones that carry no end
+// date, and called them expiring. Pulling the value to the cap keeps the answer
+// on the side the caller asked for.
+const maxExpiringDays = 3650
+
+func boundExpiringDays(days int) int {
+	switch {
+	case days < 0:
+		return 0
+	case days > maxExpiringDays:
+		return maxExpiringDays
+	}
+	return days
+}
+
 func (s *Service) Contracts(ctx context.Context, p *auth.Principal, customerID string, expiringDays int, renewalOnly bool, limit int) ([]map[string]any, error) {
 	if err := auth.Require(p, "contract:read"); err != nil {
 		return nil, err
@@ -128,9 +146,7 @@ func (s *Service) Contracts(ctx context.Context, p *auth.Principal, customerID s
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
-	if expiringDays < 0 || expiringDays > 3650 {
-		expiringDays = 0
-	}
+	expiringDays = boundExpiringDays(expiringDays)
 	rows, err := s.DB.Query(ctx, `SELECT c.id,c.contract_no,c.customer_id,cu.name,c.opportunity_id,c.title,c.amount,c.currency_code,c.exchange_rate,c.base_amount,c.start_date,c.end_date,c.status,CASE WHEN c.status='ACTIVE' AND c.end_date<current_date THEN 'EXPIRED' WHEN c.status='ACTIVE' AND c.end_date<=current_date+c.renewal_notice_days THEN 'EXPIRING' ELSE c.status END,c.auto_renew,c.revenue_schedule_type,c.renewal_notice_days,c.renewal_status,COALESCE(c.renewal_action,''),c.activated_at,c.owner_id,c.version,c.created_at,c.updated_at,CASE WHEN c.end_date IS NULL THEN NULL ELSE c.end_date-current_date END,COALESCE(rs.schedule_count,0),COALESCE(rs.recognized_count,0),COALESCE(rs.recognized_base_amount,0) FROM contracts c JOIN customers cu ON cu.id=c.customer_id LEFT JOIN LATERAL (SELECT count(*) schedule_count,count(*) FILTER(WHERE status='RECOGNIZED') recognized_count,COALESCE(sum(base_amount) FILTER(WHERE status='RECOGNIZED'),0) recognized_base_amount FROM revenue_schedules WHERE contract_id=c.id) rs ON true WHERE `+scopeSQL("c")+` AND ($4='' OR c.customer_id::text=$4) AND ($5=0 OR c.end_date BETWEEN current_date AND current_date+$5) AND (NOT $6 OR c.auto_renew=true) ORDER BY c.end_date NULLS LAST LIMIT $7`, p.DataScope, p.UserID, nullable(p.OrganizationID), customerID, expiringDays, renewalOnly, limit)
 	if err != nil {
 		return nil, err

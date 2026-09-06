@@ -64,7 +64,8 @@ func flag(name, description string) query {
 
 // number mirrors httpx.IntQuery: a value outside the accepted range falls back
 // rather than failing, and the fallback itself may sit outside that range to
-// mean "no filter", in which case it is not a schema default.
+// mean "no filter", in which case it is not a schema default. The few keys read
+// with httpx.ClampQuery instead say so in their own description.
 func number(name, description string, fallback, low, high int) query {
 	q := query{name: name, description: description, kind: "integer", min: low, max: high}
 	if fallback >= low && fallback <= high {
@@ -185,7 +186,7 @@ var queryParameters = map[string][]query{
 	"GET /quotations": {text("customerId", "이 고객의 견적만 반환합니다."), limit(50, 200)},
 	"GET /contracts": {
 		text("customerId", "이 고객의 계약만 반환합니다."),
-		number("expiringDays", "이 일수 안에 종료되는 계약만 반환합니다. 0이면 종료일로 좁히지 않습니다.", 0, 0, 3650),
+		number("expiringDays", "이 일수 안에 종료되는 계약만 반환합니다. 0이면 종료일로 좁히지 않으며, 최대값보다 큰 값은 최대값으로 줄여 적용합니다.", 0, 0, 3650),
 		flag("renewalOnly", "갱신 통지 기간에 들어온 계약만 반환합니다."),
 		limit(50, 200),
 	},
