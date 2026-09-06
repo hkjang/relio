@@ -252,7 +252,7 @@ func (s *Server) createQuotation(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, 201, v)
 }
 func (s *Server) listContracts(w http.ResponseWriter, r *http.Request) {
-	v, err := s.CRM.Contracts(r.Context(), principal(r), r.URL.Query().Get("customerId"), httpx.IntQuery(r, "expiringDays", 0, 0, 3650), r.URL.Query().Get("renewalOnly") == "true", httpx.IntQuery(r, "limit", 50, 1, 200))
+	v, err := s.CRM.Contracts(r.Context(), principal(r), r.URL.Query().Get("customerId"), httpx.ClampQuery(r, "expiringDays", 0, 0, 3650), r.URL.Query().Get("renewalOnly") == "true", httpx.IntQuery(r, "limit", 50, 1, 200))
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
