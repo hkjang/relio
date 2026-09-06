@@ -39,6 +39,8 @@ jobs:
         run: ./scripts/check-env-contract.sh
       - name: Verify no external runtime asset
         run: ./scripts/check-static-assets.sh
+      - name: Verify the release upgrades from a published release
+        run: ./scripts/previous-release-tag-test.sh
 
   offline-image:
     needs: test

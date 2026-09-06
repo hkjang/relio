@@ -58,14 +58,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          previous_tag="$(git tag --sort=-v:refname | awk -v current="$GITHUB_REF_NAME" '$0 != current { print; exit }')"
-          if [ -n "$previous_tag" ]; then
-            previous_asset="relio-${previous_tag}.tar.gz"
-            gh release download "$previous_tag" --repo "$GITHUB_REPOSITORY" --pattern "$previous_asset"
-            gunzip -c "$previous_asset" | docker load
-            ./scripts/run-upgrade-container-test.sh "relio:$previous_tag" "relio:$GITHUB_REF_NAME"
-            rm "$previous_asset"
+          previous_tag="$(./scripts/previous-release-tag.sh "$GITHUB_REF_NAME")"
+          if [ -z "$previous_tag" ]; then
+            echo "No earlier release was ever published, so there is no image to upgrade from."
+            exit 0
           fi
+          echo "Upgrading from the newest published release: $previous_tag"
+          previous_asset="relio-${previous_tag}.tar.gz"
+          gh release download "$previous_tag" --repo "$GITHUB_REPOSITORY" --pattern "$previous_asset"
+          gunzip -c "$previous_asset" | docker load
+          ./scripts/run-upgrade-container-test.sh "relio:$previous_tag" "relio:$GITHUB_REF_NAME"
+          rm "$previous_asset"
       - name: Package the only release asset
         run: |
           version="${GITHUB_REF_NAME#v}"
