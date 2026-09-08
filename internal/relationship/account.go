@@ -71,7 +71,7 @@ func (s *Service) planYear(ctx context.Context, requested int) int {
 	if configured >= 2000 && configured <= 2200 {
 		return configured
 	}
-	return time.Now().Year()
+	return s.Clock.Date(ctx).Year()
 }
 
 func (s *Service) GetAccountPlan(ctx context.Context, p *auth.Principal, customerID string, requestedYear int) (AccountPlan, error) {

@@ -3,7 +3,6 @@ package server
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/hkjang/relio/internal/audit"
 	"github.com/hkjang/relio/internal/platform/httpx"
@@ -256,7 +255,7 @@ func (s *Server) exportVoices(w http.ResponseWriter, r *http.Request) {
 		After: map[string]any{"rows": count, "filters": r.URL.RawQuery},
 		IP:    httpx.ClientIP(r), RequestID: httpx.RequestID(r.Context()), UserAgent: r.UserAgent()})
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="relio-voices-`+time.Now().Format("20060102")+`.csv"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="relio-voices-`+s.Clock.DateStamp(r.Context())+`.csv"`)
 	w.WriteHeader(http.StatusOK)
 	// Excel needs the BOM to read UTF-8 Korean correctly.
 	_, _ = w.Write([]byte("\xef\xbb\xbf"))

@@ -30,6 +30,7 @@ import (
 	"github.com/hkjang/relio/internal/personal"
 	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/hkjang/relio/internal/platform/ids"
+	"github.com/hkjang/relio/internal/platform/timezone"
 	"github.com/hkjang/relio/internal/relationship"
 	"github.com/hkjang/relio/internal/voice"
 	"github.com/jackc/pgx/v5"
@@ -52,6 +53,9 @@ type Server struct {
 	Voices    *voice.Service
 	Personal  *personal.Service
 	Analytics *analytics.Service
+	// Clock supplies the calendar date of the configured system.timezone. A nil
+	// Clock answers with the default zone rather than the process clock.
+	Clock *timezone.Loader
 	// EncryptionKeyConfigured reports whether the instance data key is wrapped
 	// by the ENCRYPTION_KEY environment variable rather than the data volume.
 	EncryptionKeyConfigured bool

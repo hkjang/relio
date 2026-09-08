@@ -183,6 +183,12 @@ type QuotationInput struct {
 	CustomFields    map[string]any `json:"customFields"`
 }
 
+// quotationNumber stamps the number with the calendar date of the configured
+// system.timezone, the same way contractNumber does.
+func (s *Service) quotationNumber(ctx context.Context) string {
+	return "Q-" + s.Clock.DateStamp(ctx) + "-" + strings.ToUpper(ids.Token(4))
+}
+
 func (s *Service) CreateQuotation(ctx context.Context, p *auth.Principal, in QuotationInput, m RequestMeta) (map[string]any, error) {
 	if err := auth.Require(p, "quotation:write"); err != nil {
 		return nil, err
@@ -214,7 +220,7 @@ func (s *Service) CreateQuotation(ctx context.Context, p *auth.Principal, in Quo
 		return nil, err
 	}
 	id := ids.New()
-	no := "Q-" + time.Now().Format("20060102") + "-" + strings.ToUpper(ids.Token(4))
+	no := s.quotationNumber(ctx)
 	_, err = s.DB.Exec(ctx, `INSERT INTO quotations(id,quotation_no,customer_id,opportunity_id,owner_id,organization_id,title,amount,currency_code,exchange_rate,discount_percent,valid_until,custom_fields,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$5,$5)`, id, no, in.CustomerID, nullable(in.OpportunityID), p.UserID, nullable(p.OrganizationID), strings.TrimSpace(in.Title), in.Amount, currency, rate, in.DiscountPercent, valid, jsonValue(in.CustomFields))
 	if err != nil {
 		return nil, err

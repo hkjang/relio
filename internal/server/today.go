@@ -67,6 +67,9 @@ func (s *Server) collectToday(ctx context.Context, p *auth.Principal) ([]todayIt
 
 	// 2. Next actions that came due, from the salesperson's own commitments.
 	if p.Has("opportunity:read") {
+		// Read outside the row loop: the zone lookup is its own query and would
+		// otherwise take a second pooled connection while these rows are open.
+		today := s.Clock.Date(ctx)
 		rows, err := s.DB.Query(ctx, `SELECT o.id,o.name,c.name,o.next_action,o.next_action_date
 			FROM opportunities o JOIN customers c ON c.id=o.customer_id
 			WHERE `+crm.ScopeSQL("o")+` AND o.status='OPEN' AND o.next_action_date IS NOT NULL
@@ -84,7 +87,12 @@ func (s *Server) collectToday(ctx context.Context, p *auth.Principal) ([]todayIt
 				return nil, err
 			}
 			level := "WARNING"
-			if due.Before(time.Now().Truncate(24 * time.Hour)) {
+			// due is a DATE column, so it arrives at midnight UTC and today is
+			// in the same shape. The old Truncate(24h) rounded the absolute
+			// instant, which is midnight UTC whatever the setting says — before
+			// 09:00 in Seoul that is yesterday, and an action due today was
+			// already reported overdue.
+			if due.Before(today) {
 				level = "HIGH"
 			}
 			label := "다음 행동 예정"
