@@ -20,11 +20,20 @@ type Service struct {
 	Log *slog.Logger
 }
 
+// nullableJSON encodes an audit payload for a jsonb column. A value the encoder
+// refuses — a NaN in a numeric field, a cycle, a type it cannot represent — used
+// to drop the error and return nil, which the insert writes as SQL NULL: the
+// row still says the record changed and no longer says how, indistinguishable
+// from a change that carried no payload. The failure is recorded in its place so
+// the event stays honest about what it could not capture.
 func nullableJSON(v any) []byte {
 	if v == nil {
 		return nil
 	}
-	b, _ := json.Marshal(v)
+	b, err := json.Marshal(v)
+	if err != nil {
+		b, _ = json.Marshal(map[string]string{"encodeError": err.Error()})
+	}
 	return b
 }
 
