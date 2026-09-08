@@ -11,6 +11,7 @@ import (
 	"github.com/hkjang/relio/internal/auth"
 	"github.com/hkjang/relio/internal/crm"
 	"github.com/hkjang/relio/internal/platform/ids"
+	"github.com/hkjang/relio/internal/platform/timezone"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,6 +19,9 @@ type Service struct {
 	DB    *pgxpool.Pool
 	CRM   *crm.Service
 	Audit *audit.Service
+	// Clock supplies the calendar date of the configured system.timezone. A nil
+	// Clock answers with the default zone rather than the process clock.
+	Clock *timezone.Loader
 }
 
 func validRelationshipType(value string) bool {

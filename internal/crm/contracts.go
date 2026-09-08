@@ -169,6 +169,13 @@ func splitScheduleAmount(total float64, count int) []float64 {
 	return amounts
 }
 
+// contractNumber stamps the number with the calendar date of the configured
+// system.timezone. The date is the only part a salesperson reads back, so a
+// contract entered at 08:00 in Seoul used to be filed under yesterday.
+func (s *Service) contractNumber(ctx context.Context) string {
+	return "C-" + s.Clock.DateStamp(ctx) + "-" + strings.ToUpper(ids.HexToken(3))
+}
+
 func (s *Service) CreateContract(ctx context.Context, p *auth.Principal, in ContractInput, m RequestMeta) (Contract, error) {
 	if err := auth.Require(p, "contract:write"); err != nil {
 		return Contract{}, err
@@ -227,7 +234,7 @@ func (s *Service) CreateContract(ctx context.Context, p *auth.Principal, in Cont
 		return Contract{}, errors.New("renewalNoticeDays must be between 0 and 730")
 	}
 	if in.ContractNo == "" {
-		in.ContractNo = "C-" + time.Now().Format("20060102") + "-" + strings.ToUpper(ids.HexToken(3))
+		in.ContractNo = s.contractNumber(ctx)
 	}
 	contract := Contract{ID: ids.New(), ContractNo: strings.TrimSpace(in.ContractNo), CustomerID: in.CustomerID, OpportunityID: in.OpportunityID, OwnerID: p.UserID, OrganizationID: p.OrganizationID, Title: strings.TrimSpace(in.Title), Amount: in.Amount, CurrencyCode: currency, ExchangeRate: rate, BaseAmount: in.Amount * rate, StartDate: start, EndDate: end, Status: status, AutoRenew: in.AutoRenew, RevenueScheduleType: scheduleType, RenewalNoticeDays: in.RenewalNoticeDays, RenewalStatus: "NOT_STARTED", RenewalAction: strings.TrimSpace(in.RenewalAction), CustomFields: in.CustomFields, Version: 1}
 	if status == "ACTIVE" {
@@ -366,7 +373,7 @@ func (s *Service) RecognizeRevenueSchedule(ctx context.Context, p *auth.Principa
 	if err := auth.Require(p, "sales:write"); err != nil {
 		return RevenueSchedule{}, err
 	}
-	date := time.Now().UTC()
+	date := s.Clock.Date(ctx)
 	if strings.TrimSpace(recognizedDate) != "" {
 		var err error
 		date, err = time.Parse("2006-01-02", recognizedDate)

@@ -26,6 +26,7 @@ import (
 	"github.com/hkjang/relio/internal/personal"
 	"github.com/hkjang/relio/internal/platform/database"
 	"github.com/hkjang/relio/internal/platform/secrets"
+	"github.com/hkjang/relio/internal/platform/timezone"
 	"github.com/hkjang/relio/internal/platform/version"
 	"github.com/hkjang/relio/internal/relationship"
 	"github.com/hkjang/relio/internal/server"
@@ -73,9 +74,12 @@ func main() {
 		logger.Error("bootstrap administrator initialization failed", "error", err)
 		os.Exit(1)
 	}
-	crmService := &crm.Service{DB: db, Audit: auditService}
+	// One loader is shared so an administrator's timezone change is picked up
+	// once and every date the server derives from now agrees.
+	clock := &timezone.Loader{DB: db, Log: logger}
+	crmService := &crm.Service{DB: db, Audit: auditService, Clock: clock}
 	intelligenceService := &intelligence.Service{DB: db, CRM: crmService, Audit: auditService}
-	relationshipService := &relationship.Service{DB: db, CRM: crmService, Audit: auditService}
+	relationshipService := &relationship.Service{DB: db, CRM: crmService, Audit: auditService, Clock: clock}
 	crmService.StageGuard = intelligenceService
 	settingsService := &admin.SettingsService{DB: db, Secrets: secretManager, Audit: auditService}
 	keyService := &apikey.Service{DB: db, Secrets: secretManager, Audit: auditService}
@@ -87,6 +91,7 @@ func main() {
 	voiceService := &voice.Service{DB: db, CRM: crmService, Audit: auditService}
 	mcpServer := &mcp.Server{DB: db, CRM: crmService, Approvals: approvalService, Intelligence: intelligenceService, Relationships: relationshipService, Voices: voiceService}
 	app := server.New(db, logger, authService, auditService, crmService, settingsService, keyService, approvalService, oidcService, mcpServer, intelligenceService, relationshipService, voiceService, personalService, analyticsService)
+	app.Clock = clock
 	app.EncryptionKeyConfigured = cfg.EncryptionKey != ""
 	runner := job.New(db, logger)
 	runner.Snapshot = intelligenceService.CaptureForecastSnapshots
