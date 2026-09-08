@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 )
@@ -51,12 +52,29 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 	return true
 }
 
+// ClientIP is the address a request arrived from, canonicalised so that it is
+// both a stable key and a value PostgreSQL accepts for an `inet` column.
+//
+// Every caller that stores it binds it into an `::inet` cast that maps only the
+// empty string to NULL, and an address the cast refuses does not lose one
+// column — it fails the whole statement. That drops the audit event,
+// LOGIN_FAILED included, and in auth.Login it fails the session insert, so the
+// client cannot log in at all.
+// RemoteAddr carries the zone of a link-local address (`[fe80::1%eth0]:52000`),
+// which `inet` rejects, so the zone is dropped here; an address that is not an
+// address at all (a Unix socket peer is "@") becomes "" and is stored as NULL
+// instead of taking its row down with it. An IPv4-mapped form is unmapped so
+// one client keys and reads the same way on a dual-stack listener.
 func ClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
+	raw := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		raw = host
 	}
-	return r.RemoteAddr
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		return ""
+	}
+	return addr.WithZone("").Unmap().String()
 }
 
 func Bearer(r *http.Request) string {
