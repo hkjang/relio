@@ -466,16 +466,18 @@ func (s *Service) ListOpportunities(ctx context.Context, p *auth.Principal, f Op
 		order = "o.updated_at DESC,o.id"
 	}
 	query := `SELECT o.id,o.name,o.customer_id,c.name,o.owner_id,u.display_name,COALESCE(o.organization_id::text,''),o.pipeline_id,o.stage_id,ps.name,ps.color,o.expected_amount,o.currency_code,o.exchange_rate,o.base_expected_amount,o.probability,o.weighted_amount,o.base_weighted_amount,o.expected_close_date,o.forecast_category,COALESCE(o.competitor,''),COALESCE(o.next_action,''),o.next_action_date,o.status,COALESCE(o.lost_reason,''),COALESCE(o.win_reason,''),o.stage_entered_at,o.last_activity_at,o.custom_fields,o.version,o.created_at,o.updated_at FROM opportunities o JOIN customers c ON c.id=o.customer_id JOIN users u ON u.id=o.owner_id JOIN pipeline_stages ps ON ps.id=o.stage_id WHERE ` + scopeSQL("o") + ` AND ($4='' OR lower(o.name) LIKE $4 ESCAPE '\' OR lower(c.name) LIKE $4 ESCAPE '\') AND ($5='' OR o.customer_id::text=$5) AND ($6='' OR o.status=$6) AND ($7='' OR o.stage_id::text=$7) AND ($8='' OR o.forecast_category=$8) AND (NOT $9 OR o.last_activity_at IS NULL OR o.last_activity_at<now()-interval '30 days') ORDER BY ` + order + ` LIMIT $10 OFFSET $11`
+	// Read once for the whole page so two rows cannot be judged against
+	// different dates, and so a page does not repeat the settings lookup.
+	// Read before the rows open: the zone lookup is its own query and would
+	// otherwise take a second pooled connection while these rows are held.
+	now := time.Now()
+	today := s.Clock.DateAt(ctx, now)
 	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), searchPattern(f.Query), f.CustomerID, f.Status, f.StageID, strings.ToUpper(f.ForecastCategory), f.StaleOnly, f.Limit+1, offset)
 	if err != nil {
 		return Page[Opportunity]{}, err
 	}
 	defer rows.Close()
 	items := []Opportunity{}
-	// Read once for the whole page so two rows cannot be judged against
-	// different dates, and so a page does not repeat the settings lookup.
-	now := time.Now()
-	today := s.Clock.DateAt(ctx, now)
 	for rows.Next() {
 		x, err := scanOpportunity(rows)
 		if err != nil {
