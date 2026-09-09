@@ -13,6 +13,7 @@ import (
 	"github.com/hkjang/relio/internal/auth"
 	"github.com/hkjang/relio/internal/crm"
 	"github.com/hkjang/relio/internal/platform/ids"
+	"github.com/hkjang/relio/internal/platform/timezone"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -21,6 +22,10 @@ type Service struct {
 	DB    *pgxpool.Pool
 	CRM   *crm.Service
 	Audit *audit.Service
+	// Clock supplies the calendar date of the configured system.timezone, which
+	// is the calendar every D-day here is counted on. A nil Clock answers with
+	// the default zone rather than the process clock.
+	Clock *timezone.Loader
 }
 
 type opportunityChange struct {
@@ -192,6 +197,7 @@ func (s *Service) DealHealth(ctx context.Context, p *auth.Principal, opportunity
 		return DealHealth{}, err
 	}
 	now := time.Now().UTC()
+	today := s.Clock.DateAt(ctx, now)
 	result := DealHealth{OpportunityID: opp.ID, OpportunityName: opp.Name, CustomerID: opp.CustomerID, CustomerName: opp.CustomerName, OwnerID: opp.OwnerID, OwnerName: opp.OwnerName, HealthScore: 100, RiskLevel: "HEALTHY", Factors: []HealthFactor{}, Recommendations: []string{}, CalculatedAt: now}
 	if opp.Status != "OPEN" {
 		return result, nil
@@ -227,7 +233,10 @@ func (s *Service) DealHealth(ctx context.Context, p *auth.Principal, opportunity
 				return int(age)
 			}(), "thresholdDays": days, "lastActivityAt": opp.LastActivityAt}
 		case "CLOSE_DATE_PASSED":
-			triggered = opp.ExpectedCloseDate != nil && opp.ExpectedCloseDate.Before(now)
+			// expected_close_date is a DATE, so comparing it against an instant
+			// called every deal due today overdue from one second after midnight.
+			// It is late once the configured zone is on a later date than it.
+			triggered = opp.ExpectedCloseDate != nil && opp.ExpectedCloseDate.Before(today)
 			evidence = map[string]any{"expectedCloseDate": opp.ExpectedCloseDate}
 		case "NO_NEXT_ACTION":
 			triggered = strings.TrimSpace(opp.NextAction) == "" || opp.NextActionDate == nil

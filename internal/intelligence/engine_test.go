@@ -8,6 +8,11 @@ import (
 
 var now = time.Date(2026, time.August, 12, 9, 0, 0, 0, time.UTC)
 
+// today is the calendar date the configured zone is on at now. The engine
+// derives it from the system.timezone setting; here UTC and Seoul agree on it,
+// so these cases stay about the rules rather than about the calendar.
+var today = time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+
 func daysAgo(n int) *time.Time {
 	t := now.AddDate(0, 0, -n)
 	return &t
@@ -67,7 +72,7 @@ func TestEngagementIncreaseNeedsRealGrowth(t *testing.T) {
 func TestStalledDealAndPassedCloseDate(t *testing.T) {
 	closed := now.AddDate(0, 0, -5)
 	signals := opportunitySignals(&opportunityFacts{ID: "o", Name: "딜", AccountID: "a", StageName: "제안",
-		StageEnteredAt: now.AddDate(0, 0, -45), Status: "OPEN", CloseDate: &closed}, now)
+		StageEnteredAt: now.AddDate(0, 0, -45), Status: "OPEN", CloseDate: &closed}, now, today)
 	found := signalTypes(signals)
 	if _, ok := found["DEAL_STALLED"]; !ok {
 		t.Fatal("45 days in stage must raise DEAL_STALLED")
@@ -77,7 +82,7 @@ func TestStalledDealAndPassedCloseDate(t *testing.T) {
 	}
 	// A won deal is finished; it cannot be stalled.
 	won := opportunitySignals(&opportunityFacts{ID: "o", AccountID: "a", StageName: "제안",
-		StageEnteredAt: now.AddDate(0, 0, -400), Status: "WON"}, now)
+		StageEnteredAt: now.AddDate(0, 0, -400), Status: "WON"}, now, today)
 	if len(won) != 0 {
 		t.Fatalf("a closed deal produced %d signals", len(won))
 	}
@@ -98,7 +103,7 @@ func TestContractExpirySeverityTightensAsTheDateNears(t *testing.T) {
 	}
 	for _, c := range cases {
 		signals := contractSignals(&contractFacts{ID: "k", Title: "계약", AccountID: "a",
-			EndDate: now.AddDate(0, 0, c.days), RenewalStatus: c.renewal, AutoRenew: c.auto}, now)
+			EndDate: now.AddDate(0, 0, c.days), RenewalStatus: c.renewal, AutoRenew: c.auto}, now, today)
 		if len(signals) != 1 {
 			t.Fatalf("D-%d produced %d signals", c.days, len(signals))
 		}
@@ -107,10 +112,10 @@ func TestContractExpirySeverityTightensAsTheDateNears(t *testing.T) {
 		}
 	}
 	// Outside the notice window, and already expired, are both silent.
-	if len(contractSignals(&contractFacts{EndDate: now.AddDate(0, 0, 120)}, now)) != 0 {
+	if len(contractSignals(&contractFacts{EndDate: now.AddDate(0, 0, 120)}, now, today)) != 0 {
 		t.Fatal("a contract outside the notice window must stay quiet")
 	}
-	if len(contractSignals(&contractFacts{EndDate: now.AddDate(0, 0, -5)}, now)) != 0 {
+	if len(contractSignals(&contractFacts{EndDate: now.AddDate(0, 0, -5)}, now, today)) != 0 {
 		t.Fatal("an expired contract is not an expiring one")
 	}
 }
@@ -159,7 +164,7 @@ func TestContractExpiryCountsWholeDaysToTheEndDate(t *testing.T) {
 	}
 	for _, c := range cases {
 		signals := contractSignals(&contractFacts{ID: "k", Title: "계약", AccountID: "a",
-			EndDate: dateOf(now, c.offset), RenewalStatus: "IN_PROGRESS"}, now)
+			EndDate: dateOf(now, c.offset), RenewalStatus: "IN_PROGRESS"}, now, today)
 		if !c.signal {
 			if len(signals) != 0 {
 				t.Fatalf("%s: end_date %+d produced %d signals", c.comment, c.offset, len(signals))
@@ -182,12 +187,12 @@ func TestCloseDateIsNotOverdueOnTheDayItself(t *testing.T) {
 	due := dateOf(now, 0)
 	open := &opportunityFacts{ID: "o", Name: "딜", AccountID: "a", StageName: "제안",
 		StageEnteredAt: now.AddDate(0, 0, -1), Status: "OPEN", CloseDate: &due}
-	if _, ok := signalTypes(opportunitySignals(open, now))["CLOSE_DATE_PASSED"]; ok {
+	if _, ok := signalTypes(opportunitySignals(open, now, today))["CLOSE_DATE_PASSED"]; ok {
 		t.Fatal("a deal due today has not missed its close date yet")
 	}
 	yesterday := dateOf(now, -1)
 	open.CloseDate = &yesterday
-	late, ok := signalTypes(opportunitySignals(open, now))["CLOSE_DATE_PASSED"]
+	late, ok := signalTypes(opportunitySignals(open, now, today))["CLOSE_DATE_PASSED"]
 	if !ok {
 		t.Fatal("a deal one day past its close date must be reported")
 	}
@@ -201,7 +206,7 @@ func TestCloseDateIsNotOverdueOnTheDayItself(t *testing.T) {
 
 func TestContractTitleDoesNotLeakStatusCodes(t *testing.T) {
 	signals := contractSignals(&contractFacts{ID: "k", Title: "연간 유지보수 계약", AccountID: "a",
-		EndDate: now.AddDate(0, 0, 20), RenewalStatus: "NOT_STARTED"}, now)
+		EndDate: now.AddDate(0, 0, 20), RenewalStatus: "NOT_STARTED"}, now, today)
 	if got := signals[0].Description; !strings.Contains(got, "미착수") || strings.Contains(got, "NOT_STARTED") {
 		t.Fatalf("description = %q, want the Korean word and no enum code", got)
 	}

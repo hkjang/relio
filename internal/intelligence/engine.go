@@ -119,6 +119,13 @@ func (s *Service) scan(ctx context.Context, run *RunSummary) (RunSummary, error)
 	}
 
 	now := time.Now().UTC()
+	// A D-day is a calendar question, so it is answered on the calendar the
+	// business keeps: between 00:00 and 09:00 in Seoul the UTC clock is still on
+	// yesterday, which reported a contract expiring in two days as "만료 D-3"
+	// and hid a deal that went one day past its close date last midnight.
+	// Elapsed-time questions below stay with now — they are the same duration in
+	// every zone.
+	today := s.Clock.DateAt(ctx, now)
 	// live holds every dedupe key the rules produced this pass. Anything open in
 	// the database that is not in here no longer holds and gets resolved.
 	live := map[string]bool{}
@@ -135,12 +142,12 @@ func (s *Service) scan(ctx context.Context, run *RunSummary) (RunSummary, error)
 		}
 	}
 	for _, opportunity := range opportunities {
-		for _, signal := range opportunitySignals(opportunity, now) {
+		for _, signal := range opportunitySignals(opportunity, now, today) {
 			emit(signal)
 		}
 	}
 	for _, contract := range contracts {
-		for _, signal := range contractSignals(contract, now) {
+		for _, signal := range contractSignals(contract, now, today) {
 			emit(signal)
 		}
 	}
@@ -294,7 +301,7 @@ func accountSignals(a *accountFacts, now time.Time) []Signal {
 	return out
 }
 
-func opportunitySignals(o *opportunityFacts, now time.Time) []Signal {
+func opportunitySignals(o *opportunityFacts, now, today time.Time) []Signal {
 	out := []Signal{}
 	if o.Status != "OPEN" {
 		return out
@@ -317,7 +324,7 @@ func opportunitySignals(o *opportunityFacts, now time.Time) []Signal {
 	// A deal whose close date has passed while still open is a forecast lie. The
 	// close date itself is not late yet, so this counts whole days past it.
 	if o.CloseDate != nil {
-		if overdue := calendarDays(*o.CloseDate, now); overdue > 0 {
+		if overdue := calendarDays(*o.CloseDate, today); overdue > 0 {
 			out = append(out, Signal{
 				SignalType: "CLOSE_DATE_PASSED", Sentiment: "NEGATIVE", Severity: "HIGH",
 				EntityType: "OPPORTUNITY", EntityID: o.ID, AccountID: o.AccountID,
@@ -331,8 +338,8 @@ func opportunitySignals(o *opportunityFacts, now time.Time) []Signal {
 	return out
 }
 
-func contractSignals(c *contractFacts, now time.Time) []Signal {
-	remaining := calendarDays(now, c.EndDate)
+func contractSignals(c *contractFacts, now, today time.Time) []Signal {
+	remaining := calendarDays(today, c.EndDate)
 	if remaining > renewalDays || remaining < 0 {
 		return nil
 	}
@@ -604,6 +611,11 @@ func daysSince(at *time.Time, now time.Time) int {
 // most of a day and then truncates the remainder toward zero, which reported a
 // contract expiring tomorrow as "만료 D-0". Elapsed-time questions ("how long
 // has this stage been quiet") stay with daysSince; this is for date questions.
+//
+// Both sides must already be calendar dates at midnight UTC, the way pgx hands
+// back a DATE. An instant is not one: reduce it with Loader.DateAt first, or
+// the answer is a day out for as long as the configured zone and UTC disagree
+// on the date.
 func calendarDays(from, to time.Time) int {
 	from, to = from.UTC(), to.UTC()
 	fromDay := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.UTC)

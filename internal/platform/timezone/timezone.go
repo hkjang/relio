@@ -131,6 +131,14 @@ func (l *Loader) Date(ctx context.Context) time.Time {
 	return DateOf(time.Now(), l.Location(ctx))
 }
 
+// DateAt is the calendar date the configured zone is on at instant t. A caller
+// that already holds an instant — because it also answers elapsed-time
+// questions from it — uses this instead of Date so its two kinds of answer
+// cannot end up on opposite sides of midnight.
+func (l *Loader) DateAt(ctx context.Context, t time.Time) time.Time {
+	return DateOf(t, l.Location(ctx))
+}
+
 // DateStamp is today's calendar date in the configured zone as YYYYMMDD, the
 // form contract numbers, quotation numbers and export filenames use.
 func (l *Loader) DateStamp(ctx context.Context) string { return l.Date(ctx).Format("20060102") }

@@ -78,7 +78,7 @@ func main() {
 	// once and every date the server derives from now agrees.
 	clock := &timezone.Loader{DB: db, Log: logger}
 	crmService := &crm.Service{DB: db, Audit: auditService, Clock: clock}
-	intelligenceService := &intelligence.Service{DB: db, CRM: crmService, Audit: auditService}
+	intelligenceService := &intelligence.Service{DB: db, CRM: crmService, Audit: auditService, Clock: clock}
 	relationshipService := &relationship.Service{DB: db, CRM: crmService, Audit: auditService, Clock: clock}
 	crmService.StageGuard = intelligenceService
 	settingsService := &admin.SettingsService{DB: db, Secrets: secretManager, Audit: auditService}
