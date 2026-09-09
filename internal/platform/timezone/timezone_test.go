@@ -221,6 +221,27 @@ func TestUnwiredLoaderStillAnswersTheDefault(t *testing.T) {
 	}
 }
 
+func TestDateAtAnswersForACallersOwnInstant(t *testing.T) {
+	ctx := context.Background()
+	// 15:30 UTC is 00:30 the next day in Seoul. A caller that answers both
+	// elapsed-time and calendar questions holds one instant and reduces it here,
+	// so its two kinds of answer cannot land on opposite sides of midnight.
+	instant := time.Date(2026, time.August, 12, 15, 30, 0, 0, time.UTC)
+	seoul := (&Loader{DB: &stubDB{row: stubRow{value: []byte(`"Asia/Seoul"`)}}}).DateAt(ctx, instant)
+	if want := time.Date(2026, time.August, 13, 0, 0, 0, 0, time.UTC); !seoul.Equal(want) {
+		t.Fatalf("DateAt in Seoul = %s, want %s", seoul.Format(time.RFC3339), want.Format(time.RFC3339))
+	}
+	utc := (&Loader{DB: &stubDB{row: stubRow{value: []byte(`"UTC"`)}}}).DateAt(ctx, instant)
+	if want := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC); !utc.Equal(want) {
+		t.Fatalf("DateAt in UTC = %s, want %s", utc.Format(time.RFC3339), want.Format(time.RFC3339))
+	}
+	var missing *Loader
+	if got := missing.DateAt(ctx, instant); !got.Equal(seoul) {
+		t.Fatalf("a nil Loader answered %s, want the %s date %s",
+			got.Format("2006-01-02"), DefaultName, seoul.Format("2006-01-02"))
+	}
+}
+
 func TestQueryNamesTheSettingTheAdminScreenWrites(t *testing.T) {
 	// AdminPages.tsx saves namespace "system", key "timezone"; migration 001
 	// seeds the same pair. A rename on either side must fail here rather than

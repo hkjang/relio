@@ -466,6 +466,12 @@ func (s *Service) ListOpportunities(ctx context.Context, p *auth.Principal, f Op
 		order = "o.updated_at DESC,o.id"
 	}
 	query := `SELECT o.id,o.name,o.customer_id,c.name,o.owner_id,u.display_name,COALESCE(o.organization_id::text,''),o.pipeline_id,o.stage_id,ps.name,ps.color,o.expected_amount,o.currency_code,o.exchange_rate,o.base_expected_amount,o.probability,o.weighted_amount,o.base_weighted_amount,o.expected_close_date,o.forecast_category,COALESCE(o.competitor,''),COALESCE(o.next_action,''),o.next_action_date,o.status,COALESCE(o.lost_reason,''),COALESCE(o.win_reason,''),o.stage_entered_at,o.last_activity_at,o.custom_fields,o.version,o.created_at,o.updated_at FROM opportunities o JOIN customers c ON c.id=o.customer_id JOIN users u ON u.id=o.owner_id JOIN pipeline_stages ps ON ps.id=o.stage_id WHERE ` + scopeSQL("o") + ` AND ($4='' OR lower(o.name) LIKE $4 ESCAPE '\' OR lower(c.name) LIKE $4 ESCAPE '\') AND ($5='' OR o.customer_id::text=$5) AND ($6='' OR o.status=$6) AND ($7='' OR o.stage_id::text=$7) AND ($8='' OR o.forecast_category=$8) AND (NOT $9 OR o.last_activity_at IS NULL OR o.last_activity_at<now()-interval '30 days') ORDER BY ` + order + ` LIMIT $10 OFFSET $11`
+	// Read once for the whole page so two rows cannot be judged against
+	// different dates, and so a page does not repeat the settings lookup.
+	// Read before the rows open: the zone lookup is its own query and would
+	// otherwise take a second pooled connection while these rows are held.
+	now := time.Now()
+	today := s.Clock.DateAt(ctx, now)
 	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), searchPattern(f.Query), f.CustomerID, f.Status, f.StageID, strings.ToUpper(f.ForecastCategory), f.StaleOnly, f.Limit+1, offset)
 	if err != nil {
 		return Page[Opportunity]{}, err
@@ -477,7 +483,7 @@ func (s *Service) ListOpportunities(ctx context.Context, p *auth.Principal, f Op
 		if err != nil {
 			return Page[Opportunity]{}, err
 		}
-		x.Health = opportunityHealth(x)
+		x.Health = opportunityHealth(x, now, today)
 		items = append(items, x)
 	}
 	if err = rows.Err(); err != nil {
@@ -503,13 +509,20 @@ func scanOpportunity(row rowScanner) (Opportunity, error) {
 	_ = json.Unmarshal(raw, &x.CustomFields)
 	return x, err
 }
-func opportunityHealth(o Opportunity) []string {
-	now := time.Now()
+
+// opportunityHealth flags what a salesperson should look at. now answers the
+// elapsed-time questions, which are the same duration in any zone; today is the
+// calendar date the configured system.timezone is on, and answers the date
+// question. expected_close_date is a DATE, so it arrives at midnight UTC:
+// comparing it against an instant marked every deal due today as overdue from
+// one second past midnight, and did so on the UTC calendar, which is still on
+// yesterday between 00:00 and 09:00 in Seoul.
+func opportunityHealth(o Opportunity, now, today time.Time) []string {
 	out := []string{}
 	if o.LastActivityAt == nil || now.Sub(*o.LastActivityAt) > 30*24*time.Hour {
 		out = append(out, "NO_RECENT_ACTIVITY")
 	}
-	if o.ExpectedCloseDate != nil && o.ExpectedCloseDate.Before(now) && o.Status == "OPEN" {
+	if o.ExpectedCloseDate != nil && o.ExpectedCloseDate.Before(today) && o.Status == "OPEN" {
 		out = append(out, "CLOSE_DATE_OVERDUE")
 	}
 	if o.NextAction == "" && o.Status == "OPEN" {
@@ -527,7 +540,8 @@ func (s *Service) GetOpportunity(ctx context.Context, p *auth.Principal, id stri
 	}
 	row := s.DB.QueryRow(ctx, `SELECT o.id,o.name,o.customer_id,c.name,o.owner_id,u.display_name,COALESCE(o.organization_id::text,''),o.pipeline_id,o.stage_id,ps.name,ps.color,o.expected_amount,o.currency_code,o.exchange_rate,o.base_expected_amount,o.probability,o.weighted_amount,o.base_weighted_amount,o.expected_close_date,o.forecast_category,COALESCE(o.competitor,''),COALESCE(o.next_action,''),o.next_action_date,o.status,COALESCE(o.lost_reason,''),COALESCE(o.win_reason,''),o.stage_entered_at,o.last_activity_at,o.custom_fields,o.version,o.created_at,o.updated_at FROM opportunities o JOIN customers c ON c.id=o.customer_id JOIN users u ON u.id=o.owner_id JOIN pipeline_stages ps ON ps.id=o.stage_id WHERE o.id=$4 AND `+scopeSQL("o"), p.DataScope, p.UserID, nullable(p.OrganizationID), id)
 	x, err := scanOpportunity(row)
-	x.Health = opportunityHealth(x)
+	now := time.Now()
+	x.Health = opportunityHealth(x, now, s.Clock.DateAt(ctx, now))
 	return x, err
 }
 
