@@ -65,6 +65,29 @@ func asNumber(v any) (float64, bool) {
 	}
 }
 
+// The windows the seeded rules declare. A rule whose threshold omits its window
+// key — or carries one that cannot bound anything, such as zero, a negative
+// number or a value that is not a number at all — is read as the seeded window
+// rather than as a rule that can never fire.
+const (
+	slippageWindowDays = 180
+	dropWindowDays     = 90
+	// historyWindowDays is how far back DealHealth has always read opportunity
+	// history. It stays the floor of the fetch so no rule sees less than before.
+	historyWindowDays = 365
+)
+
+// windowDays reads a rule's lookback window in days. Unlike thresholdNumber it
+// also rejects values that cannot bound a window, because a window of zero or
+// less silently switches the rule off instead of widening or narrowing it.
+func windowDays(values map[string]any, fallback float64) float64 {
+	days := thresholdNumber(values, "days", fallback)
+	if !(days > 0) {
+		return fallback
+	}
+	return days
+}
+
 func asDate(v any) (time.Time, bool) {
 	s, ok := v.(string)
 	if !ok || s == "" {
@@ -191,6 +214,128 @@ func (s *Service) changes(ctx context.Context, opportunityID string, since time.
 	return out, rows.Err()
 }
 
+// healthFacts is everything the rules read besides the rule itself. Collecting
+// it in one place keeps evaluateHealthRule a pure function of (rule, facts), so
+// every rule type and threshold can be checked without a database.
+type healthFacts struct {
+	Opportunity    crm.Opportunity
+	History        []opportunityChange
+	DecisionMakers int
+	Champions      int
+	StageMaxDays   *int
+	// Now is the instant the elapsed-time rules measure from. Today is the
+	// calendar date the configured zone is on, which is what the DATE columns
+	// (expected_close_date) have to be compared against.
+	Now   time.Time
+	Today time.Time
+}
+
+// historySince is how far back the history has to be read for these rules. Each
+// history rule bounds itself by its own configured window, so the fetch has to
+// cover the widest of them; it never reads less than the year it always has.
+func historySince(rules []HealthRule, now time.Time) time.Time {
+	widest := float64(historyWindowDays)
+	for _, rule := range rules {
+		switch rule.RuleType {
+		case "CLOSE_DATE_SLIPPAGE":
+			widest = math.Max(widest, windowDays(rule.Threshold, slippageWindowDays))
+		case "AMOUNT_DROP", "PROBABILITY_DROP":
+			widest = math.Max(widest, windowDays(rule.Threshold, dropWindowDays))
+		}
+	}
+	return now.Add(-time.Duration(widest * float64(24*time.Hour)))
+}
+
+// evaluateHealthRule reports whether a rule fires for these facts, along with
+// the evidence shown to the salesperson for why it did or did not.
+func evaluateHealthRule(rule HealthRule, facts healthFacts) (bool, map[string]any) {
+	opp, now := facts.Opportunity, facts.Now
+	switch rule.RuleType {
+	case "NO_ACTIVITY":
+		days := thresholdNumber(rule.Threshold, "days", 14)
+		age := math.Inf(1)
+		if opp.LastActivityAt != nil {
+			age = now.Sub(*opp.LastActivityAt).Hours() / 24
+		}
+		return age >= days, map[string]any{"daysWithoutActivity": func() any {
+			if math.IsInf(age, 1) {
+				return nil
+			}
+			return int(age)
+		}(), "thresholdDays": days, "lastActivityAt": opp.LastActivityAt}
+	case "CLOSE_DATE_PASSED":
+		// expected_close_date is a DATE, so comparing it against an instant
+		// called every deal due today overdue from one second after midnight.
+		// It is late once the configured zone is on a later date than it.
+		return opp.ExpectedCloseDate != nil && opp.ExpectedCloseDate.Before(facts.Today),
+			map[string]any{"expectedCloseDate": opp.ExpectedCloseDate}
+	case "NO_NEXT_ACTION":
+		return strings.TrimSpace(opp.NextAction) == "" || opp.NextActionDate == nil,
+			map[string]any{"nextAction": opp.NextAction, "nextActionDate": opp.NextActionDate}
+	case "STAGE_STALLED":
+		threshold := int(thresholdNumber(rule.Threshold, "defaultDays", 30))
+		if facts.StageMaxDays != nil && *facts.StageMaxDays > 0 {
+			threshold = *facts.StageMaxDays
+		}
+		age := int(now.Sub(opp.StageEnteredAt).Hours() / 24)
+		return age > threshold, map[string]any{"daysInStage": age, "thresholdDays": threshold, "stage": opp.StageName}
+	case "CLOSE_DATE_SLIPPAGE":
+		limit := int(thresholdNumber(rule.Threshold, "count", 3))
+		days := windowDays(rule.Threshold, slippageWindowDays)
+		count := 0
+		for _, change := range facts.withinWindow(days) {
+			before, bok := asDate(change.Before["expectedCloseDate"])
+			after, aok := asDate(change.After["expectedCloseDate"])
+			if bok && aok && after.After(before) {
+				count++
+			}
+		}
+		return count >= limit, map[string]any{"slippageCount": count, "thresholdCount": limit, "windowDays": days}
+	case "AMOUNT_DROP":
+		limit := thresholdNumber(rule.Threshold, "percent", 30)
+		days := windowDays(rule.Threshold, dropWindowDays)
+		maxDrop := 0.0
+		for _, change := range facts.withinWindow(days) {
+			before, bok := asNumber(change.Before["expectedAmount"])
+			after, aok := asNumber(change.After["expectedAmount"])
+			if bok && aok && before > 0 && after < before {
+				maxDrop = math.Max(maxDrop, (before-after)/before*100)
+			}
+		}
+		return maxDrop >= limit, map[string]any{"largestDropPercent": math.Round(maxDrop*10) / 10, "thresholdPercent": limit, "windowDays": days}
+	case "PROBABILITY_DROP":
+		limit := thresholdNumber(rule.Threshold, "points", 20)
+		days := windowDays(rule.Threshold, dropWindowDays)
+		maxDrop := 0.0
+		for _, change := range facts.withinWindow(days) {
+			before, bok := asNumber(change.Before["probability"])
+			after, aok := asNumber(change.After["probability"])
+			if bok && aok {
+				maxDrop = math.Max(maxDrop, before-after)
+			}
+		}
+		return maxDrop >= limit, map[string]any{"largestDropPoints": maxDrop, "thresholdPoints": limit, "windowDays": days}
+	case "NO_DECISION_MAKER":
+		return facts.DecisionMakers == 0, map[string]any{"decisionMakerCount": facts.DecisionMakers}
+	case "NO_CHAMPION":
+		return facts.Champions == 0, map[string]any{"championCount": facts.Champions}
+	}
+	return false, map[string]any{}
+}
+
+// withinWindow is the history a rule with this window may count. A deal that
+// lost half its amount a year ago is not a deal whose amount is dropping now.
+func (f healthFacts) withinWindow(days float64) []opportunityChange {
+	window := time.Duration(days * float64(24*time.Hour))
+	out := make([]opportunityChange, 0, len(f.History))
+	for _, change := range f.History {
+		if f.Now.Sub(change.ChangedAt) <= window {
+			out = append(out, change)
+		}
+	}
+	return out
+}
+
 func (s *Service) DealHealth(ctx context.Context, p *auth.Principal, opportunityID string) (DealHealth, error) {
 	opp, err := s.CRM.GetOpportunity(ctx, p, opportunityID)
 	if err != nil {
@@ -210,92 +355,14 @@ func (s *Service) DealHealth(ctx context.Context, p *auth.Principal, opportunity
 	_ = s.DB.QueryRow(ctx, `SELECT count(*) FILTER (WHERE decision_maker=true),count(*) FILTER (WHERE relationship_role='CHAMPION') FROM contacts WHERE customer_id=$1`, opp.CustomerID).Scan(&decisionMakers, &champions)
 	var maxDays *int
 	_ = s.DB.QueryRow(ctx, `SELECT max_days FROM pipeline_stages WHERE id=$1`, opp.StageID).Scan(&maxDays)
-	history, err := s.changes(ctx, opp.ID, now.Add(-365*24*time.Hour))
+	history, err := s.changes(ctx, opp.ID, historySince(rules, now))
 	if err != nil {
 		return DealHealth{}, err
 	}
+	facts := healthFacts{Opportunity: opp, History: history, DecisionMakers: decisionMakers, Champions: champions, StageMaxDays: maxDays, Now: now, Today: today}
 	recommendations := map[string]bool{}
 	for _, rule := range rules {
-		triggered := false
-		evidence := map[string]any{}
-		switch rule.RuleType {
-		case "NO_ACTIVITY":
-			days := thresholdNumber(rule.Threshold, "days", 14)
-			age := math.Inf(1)
-			if opp.LastActivityAt != nil {
-				age = now.Sub(*opp.LastActivityAt).Hours() / 24
-			}
-			triggered = age >= days
-			evidence = map[string]any{"daysWithoutActivity": func() any {
-				if math.IsInf(age, 1) {
-					return nil
-				}
-				return int(age)
-			}(), "thresholdDays": days, "lastActivityAt": opp.LastActivityAt}
-		case "CLOSE_DATE_PASSED":
-			// expected_close_date is a DATE, so comparing it against an instant
-			// called every deal due today overdue from one second after midnight.
-			// It is late once the configured zone is on a later date than it.
-			triggered = opp.ExpectedCloseDate != nil && opp.ExpectedCloseDate.Before(today)
-			evidence = map[string]any{"expectedCloseDate": opp.ExpectedCloseDate}
-		case "NO_NEXT_ACTION":
-			triggered = strings.TrimSpace(opp.NextAction) == "" || opp.NextActionDate == nil
-			evidence = map[string]any{"nextAction": opp.NextAction, "nextActionDate": opp.NextActionDate}
-		case "STAGE_STALLED":
-			threshold := int(thresholdNumber(rule.Threshold, "defaultDays", 30))
-			if maxDays != nil && *maxDays > 0 {
-				threshold = *maxDays
-			}
-			age := int(now.Sub(opp.StageEnteredAt).Hours() / 24)
-			triggered = age > threshold
-			evidence = map[string]any{"daysInStage": age, "thresholdDays": threshold, "stage": opp.StageName}
-		case "CLOSE_DATE_SLIPPAGE":
-			limit := int(thresholdNumber(rule.Threshold, "count", 3))
-			window := time.Duration(thresholdNumber(rule.Threshold, "days", 180)) * 24 * time.Hour
-			count := 0
-			for _, change := range history {
-				if now.Sub(change.ChangedAt) > window {
-					continue
-				}
-				before, bok := asDate(change.Before["expectedCloseDate"])
-				after, aok := asDate(change.After["expectedCloseDate"])
-				if bok && aok && after.After(before) {
-					count++
-				}
-			}
-			triggered = count >= limit
-			evidence = map[string]any{"slippageCount": count, "thresholdCount": limit}
-		case "AMOUNT_DROP":
-			limit := thresholdNumber(rule.Threshold, "percent", 30)
-			maxDrop := 0.0
-			for _, change := range history {
-				before, bok := asNumber(change.Before["expectedAmount"])
-				after, aok := asNumber(change.After["expectedAmount"])
-				if bok && aok && before > 0 && after < before {
-					maxDrop = math.Max(maxDrop, (before-after)/before*100)
-				}
-			}
-			triggered = maxDrop >= limit
-			evidence = map[string]any{"largestDropPercent": math.Round(maxDrop*10) / 10, "thresholdPercent": limit}
-		case "PROBABILITY_DROP":
-			limit := thresholdNumber(rule.Threshold, "points", 20)
-			maxDrop := 0.0
-			for _, change := range history {
-				before, bok := asNumber(change.Before["probability"])
-				after, aok := asNumber(change.After["probability"])
-				if bok && aok {
-					maxDrop = math.Max(maxDrop, before-after)
-				}
-			}
-			triggered = maxDrop >= limit
-			evidence = map[string]any{"largestDropPoints": maxDrop, "thresholdPoints": limit}
-		case "NO_DECISION_MAKER":
-			triggered = decisionMakers == 0
-			evidence = map[string]any{"decisionMakerCount": decisionMakers}
-		case "NO_CHAMPION":
-			triggered = champions == 0
-			evidence = map[string]any{"championCount": champions}
-		}
+		triggered, evidence := evaluateHealthRule(rule, facts)
 		if triggered {
 			result.RiskScore += rule.RiskScore
 			result.Factors = append(result.Factors, HealthFactor{Code: rule.Code, Name: rule.Name, Description: rule.Description, RiskScore: rule.RiskScore, Evidence: evidence, RecommendedAction: rule.RecommendedAction})
