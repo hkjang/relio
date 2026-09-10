@@ -195,23 +195,95 @@ func (s *Service) SaveHealthRule(ctx context.Context, p *auth.Principal, id stri
 }
 
 func (s *Service) changes(ctx context.Context, opportunityID string, since time.Time) ([]opportunityChange, error) {
-	rows, err := s.DB.Query(ctx, `SELECT h.before_data,h.after_data,h.changed_at,COALESCE(u.display_name,'') FROM opportunity_history h LEFT JOIN users u ON u.id=h.changed_by WHERE h.opportunity_id=$1 AND h.changed_at>=$2 ORDER BY h.changed_at DESC`, opportunityID, since)
+	grouped, err := s.changesFor(ctx, []string{opportunityID}, since)
+	if err != nil {
+		return nil, err
+	}
+	if grouped[opportunityID] == nil {
+		return []opportunityChange{}, nil
+	}
+	return grouped[opportunityID], nil
+}
+
+// changesFor reads the history of every deal in the set at once, keyed by deal.
+// The id lists travel as text[] and are cast in the statement because pgx has no
+// binary encoding for a []string bound straight to uuid[]; the cast still lets
+// the opportunity_id index answer the lookup.
+func (s *Service) changesFor(ctx context.Context, opportunityIDs []string, since time.Time) (map[string][]opportunityChange, error) {
+	out := map[string][]opportunityChange{}
+	if len(opportunityIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.DB.Query(ctx, `SELECT h.opportunity_id::text,h.before_data,h.after_data,h.changed_at,COALESCE(u.display_name,'') FROM opportunity_history h LEFT JOIN users u ON u.id=h.changed_by WHERE h.opportunity_id=ANY($1::text[]::uuid[]) AND h.changed_at>=$2 ORDER BY h.changed_at DESC`, opportunityIDs, since)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []opportunityChange{}
 	for rows.Next() {
 		var beforeRaw, afterRaw []byte
+		var opportunityID string
 		var item opportunityChange
-		if err = rows.Scan(&beforeRaw, &afterRaw, &item.ChangedAt, &item.Actor); err != nil {
+		if err = rows.Scan(&opportunityID, &beforeRaw, &afterRaw, &item.ChangedAt, &item.Actor); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(beforeRaw, &item.Before)
 		_ = json.Unmarshal(afterRaw, &item.After)
-		out = append(out, item)
+		out[opportunityID] = append(out[opportunityID], item)
 	}
 	return out, rows.Err()
+}
+
+type contactRoles struct {
+	DecisionMakers int
+	Champions      int
+}
+
+// contactRoles counts the decision makers and champions of every customer in
+// the set. Like the per-deal query it replaces it is best effort: a deal whose
+// count could not be read is judged as having none, which is what the rules
+// already did when this query failed.
+func (s *Service) contactRoles(ctx context.Context, customerIDs []string) map[string]contactRoles {
+	out := map[string]contactRoles{}
+	if len(customerIDs) == 0 {
+		return out
+	}
+	rows, err := s.DB.Query(ctx, `SELECT customer_id::text,count(*) FILTER (WHERE decision_maker=true),count(*) FILTER (WHERE relationship_role='CHAMPION') FROM contacts WHERE customer_id=ANY($1::text[]::uuid[]) GROUP BY customer_id`, customerIDs)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var customerID string
+		var roles contactRoles
+		if rows.Scan(&customerID, &roles.DecisionMakers, &roles.Champions) != nil {
+			return out
+		}
+		out[customerID] = roles
+	}
+	return out
+}
+
+// stageLimits reads the max_days of every stage in the set. A stage without a
+// limit stays absent, which leaves STAGE_STALLED on its configured default.
+func (s *Service) stageLimits(ctx context.Context, stageIDs []string) map[string]*int {
+	out := map[string]*int{}
+	if len(stageIDs) == 0 {
+		return out
+	}
+	rows, err := s.DB.Query(ctx, `SELECT id::text,max_days FROM pipeline_stages WHERE id=ANY($1::text[]::uuid[])`, stageIDs)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var stageID string
+		var maxDays *int
+		if rows.Scan(&stageID, &maxDays) != nil {
+			return out
+		}
+		out[stageID] = maxDays
+	}
+	return out
 }
 
 // healthFacts is everything the rules read besides the rule itself. Collecting
@@ -336,30 +408,16 @@ func (f healthFacts) withinWindow(days float64) []opportunityChange {
 	return out
 }
 
-func (s *Service) DealHealth(ctx context.Context, p *auth.Principal, opportunityID string) (DealHealth, error) {
-	opp, err := s.CRM.GetOpportunity(ctx, p, opportunityID)
-	if err != nil {
-		return DealHealth{}, err
-	}
-	now := time.Now().UTC()
-	today := s.Clock.DateAt(ctx, now)
-	result := DealHealth{OpportunityID: opp.ID, OpportunityName: opp.Name, CustomerID: opp.CustomerID, CustomerName: opp.CustomerName, OwnerID: opp.OwnerID, OwnerName: opp.OwnerName, HealthScore: 100, RiskLevel: "HEALTHY", Factors: []HealthFactor{}, Recommendations: []string{}, CalculatedAt: now}
+// scoreDealHealth is the whole of the scoring: which rules fired, what that
+// adds up to and what it is called. Keeping it a pure function of (rules,
+// facts) is what lets one deal and a dashboard of two hundred share a verdict
+// while reading their facts through different queries.
+func scoreDealHealth(rules []HealthRule, facts healthFacts) DealHealth {
+	opp := facts.Opportunity
+	result := DealHealth{OpportunityID: opp.ID, OpportunityName: opp.Name, CustomerID: opp.CustomerID, CustomerName: opp.CustomerName, OwnerID: opp.OwnerID, OwnerName: opp.OwnerName, HealthScore: 100, RiskLevel: "HEALTHY", Factors: []HealthFactor{}, Recommendations: []string{}, CalculatedAt: facts.Now}
 	if opp.Status != "OPEN" {
-		return result, nil
+		return result
 	}
-	rules, err := s.rules(ctx)
-	if err != nil {
-		return DealHealth{}, err
-	}
-	var decisionMakers, champions int
-	_ = s.DB.QueryRow(ctx, `SELECT count(*) FILTER (WHERE decision_maker=true),count(*) FILTER (WHERE relationship_role='CHAMPION') FROM contacts WHERE customer_id=$1`, opp.CustomerID).Scan(&decisionMakers, &champions)
-	var maxDays *int
-	_ = s.DB.QueryRow(ctx, `SELECT max_days FROM pipeline_stages WHERE id=$1`, opp.StageID).Scan(&maxDays)
-	history, err := s.changes(ctx, opp.ID, historySince(rules, now))
-	if err != nil {
-		return DealHealth{}, err
-	}
-	facts := healthFacts{Opportunity: opp, History: history, DecisionMakers: decisionMakers, Champions: champions, StageMaxDays: maxDays, Now: now, Today: today}
 	recommendations := map[string]bool{}
 	for _, rule := range rules {
 		triggered, evidence := evaluateHealthRule(rule, facts)
@@ -384,14 +442,105 @@ func (s *Service) DealHealth(ctx context.Context, p *auth.Principal, opportunity
 	case result.RiskScore >= 20:
 		result.RiskLevel = "WATCH"
 	}
-	s.saveHealthSnapshot(ctx, result)
-	return result, nil
+	return result
 }
 
-func (s *Service) saveHealthSnapshot(ctx context.Context, health DealHealth) {
-	factors, _ := json.Marshal(health.Factors)
-	recommendations, _ := json.Marshal(health.Recommendations)
-	_, _ = s.DB.Exec(ctx, `INSERT INTO opportunity_health_snapshots(id,opportunity_id,risk_score,health_score,risk_level,factors,recommendations) SELECT $1,$2,$3,$4,$5,$6,$7 WHERE NOT EXISTS (SELECT 1 FROM opportunity_health_snapshots WHERE opportunity_id=$2 AND risk_score=$3 AND calculated_at>now()-interval '6 hours')`, ids.New(), health.OpportunityID, health.RiskScore, health.HealthScore, health.RiskLevel, factors, recommendations)
+// healthInputs is the set of rows the rules need for these deals: one entry per
+// distinct customer, stage and deal. A pipeline usually crowds many deals onto
+// a few stages and customers, so collapsing the duplicates keeps the batched
+// lookups smaller than the deal list itself.
+func healthInputs(opportunities []crm.Opportunity) (customerIDs, stageIDs, opportunityIDs []string) {
+	seenCustomer, seenStage := map[string]bool{}, map[string]bool{}
+	for _, opp := range opportunities {
+		if opp.CustomerID != "" && !seenCustomer[opp.CustomerID] {
+			seenCustomer[opp.CustomerID] = true
+			customerIDs = append(customerIDs, opp.CustomerID)
+		}
+		if opp.StageID != "" && !seenStage[opp.StageID] {
+			seenStage[opp.StageID] = true
+			stageIDs = append(stageIDs, opp.StageID)
+		}
+		if opp.ID != "" {
+			opportunityIDs = append(opportunityIDs, opp.ID)
+		}
+	}
+	return customerIDs, stageIDs, opportunityIDs
+}
+
+// healthOf scores a whole set of deals, returning one verdict per deal in the
+// order they were given. The rules, the contact roles, the stage limits and the
+// history are each read once for the entire set instead of once per deal, and
+// the snapshots are written in a single round trip.
+func (s *Service) healthOf(ctx context.Context, opportunities []crm.Opportunity) ([]DealHealth, error) {
+	out := make([]DealHealth, len(opportunities))
+	// One instant for the whole set, so two deals on the same dashboard cannot
+	// be judged against different days or different ages.
+	now := time.Now().UTC()
+	today := s.Clock.DateAt(ctx, now)
+	open := make([]int, 0, len(opportunities))
+	for i, opp := range opportunities {
+		if opp.Status == "OPEN" {
+			open = append(open, i)
+			continue
+		}
+		out[i] = scoreDealHealth(nil, healthFacts{Opportunity: opp, Now: now, Today: today})
+	}
+	if len(open) == 0 {
+		return out, nil
+	}
+	rules, err := s.rules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	scoring := make([]crm.Opportunity, 0, len(open))
+	for _, i := range open {
+		scoring = append(scoring, opportunities[i])
+	}
+	customerIDs, stageIDs, opportunityIDs := healthInputs(scoring)
+	roles := s.contactRoles(ctx, customerIDs)
+	limits := s.stageLimits(ctx, stageIDs)
+	history, err := s.changesFor(ctx, opportunityIDs, historySince(rules, now))
+	if err != nil {
+		return nil, err
+	}
+	scored := make([]DealHealth, 0, len(open))
+	for _, i := range open {
+		opp := opportunities[i]
+		facts := healthFacts{Opportunity: opp, History: history[opp.ID], DecisionMakers: roles[opp.CustomerID].DecisionMakers, Champions: roles[opp.CustomerID].Champions, StageMaxDays: limits[opp.StageID], Now: now, Today: today}
+		out[i] = scoreDealHealth(rules, facts)
+		scored = append(scored, out[i])
+	}
+	s.saveHealthSnapshots(ctx, scored)
+	return out, nil
+}
+
+func (s *Service) DealHealth(ctx context.Context, p *auth.Principal, opportunityID string) (DealHealth, error) {
+	opp, err := s.CRM.GetOpportunity(ctx, p, opportunityID)
+	if err != nil {
+		return DealHealth{}, err
+	}
+	health, err := s.healthOf(ctx, []crm.Opportunity{opp})
+	if err != nil {
+		return DealHealth{}, err
+	}
+	return health[0], nil
+}
+
+// saveHealthSnapshots records the verdicts in one round trip. The write stays
+// best effort as it always was, and each row still skips itself if the same
+// score was already recorded in the last six hours; a batch that fails leaves
+// the whole set for the next refresh to record instead of half of it.
+func (s *Service) saveHealthSnapshots(ctx context.Context, healths []DealHealth) {
+	if len(healths) == 0 {
+		return
+	}
+	batch := &pgx.Batch{}
+	for _, health := range healths {
+		factors, _ := json.Marshal(health.Factors)
+		recommendations, _ := json.Marshal(health.Recommendations)
+		batch.Queue(`INSERT INTO opportunity_health_snapshots(id,opportunity_id,risk_score,health_score,risk_level,factors,recommendations) SELECT $1,$2,$3,$4,$5,$6,$7 WHERE NOT EXISTS (SELECT 1 FROM opportunity_health_snapshots WHERE opportunity_id=$2 AND risk_score=$3 AND calculated_at>now()-interval '6 hours')`, ids.New(), health.OpportunityID, health.RiskScore, health.HealthScore, health.RiskLevel, factors, recommendations)
+	}
+	_ = s.DB.SendBatch(ctx, batch).Close()
 }
 
 func (s *Service) DealInspection(ctx context.Context, p *auth.Principal, opportunityID string, days int) (DealInspection, error) {
@@ -437,12 +586,12 @@ func (s *Service) DealsAtRisk(ctx context.Context, p *auth.Principal, minimum, l
 	if err != nil {
 		return nil, err
 	}
+	healths, err := s.healthOf(ctx, page.Items)
+	if err != nil {
+		return nil, err
+	}
 	out := []DealHealth{}
-	for _, opportunity := range page.Items {
-		health, healthErr := s.DealHealth(ctx, p, opportunity.ID)
-		if healthErr != nil {
-			return nil, healthErr
-		}
+	for _, health := range healths {
 		if health.RiskScore >= minimum {
 			out = append(out, health)
 		}

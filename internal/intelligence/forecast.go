@@ -260,11 +260,12 @@ func (s *Service) Coaching(ctx context.Context, p *auth.Principal) (CoachingDash
 	}
 	owners := map[string]*aggregate{}
 	attention := []DealHealth{}
-	for _, opp := range page.Items {
-		health, healthErr := s.DealHealth(ctx, p, opp.ID)
-		if healthErr != nil {
-			return CoachingDashboard{}, healthErr
-		}
+	healths, err := s.healthOf(ctx, page.Items)
+	if err != nil {
+		return CoachingDashboard{}, err
+	}
+	for i, opp := range page.Items {
+		health := healths[i]
 		a := owners[opp.OwnerID]
 		if a == nil {
 			a = &aggregate{item: CoachingOwner{OwnerID: opp.OwnerID, OwnerName: opp.OwnerName}}
