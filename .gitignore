@@ -12,3 +12,5 @@ web/*.tsbuildinfo
 dist/
 .env
 *.tar.gz
+
+scripts/guide/node_modules/
