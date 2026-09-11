@@ -24,4 +24,16 @@ if grep -RInoE 'https?://[A-Za-z0-9.-]+' web/src web/index.html |
   echo "A tracking vendor host is referenced by the frontend; it must come from admin configuration" >&2
   exit 1
 fi
+# `go:embed dist/*` must match a file before the web build has run, so one anchor
+# is committed under dist/. The build empties that directory and copies web/public/
+# back in, so the anchor has to be identical there or a build dirties the checkout.
+anchor=internal/webui/dist/README
+if ! git ls-files --error-unmatch "$anchor" >/dev/null 2>&1; then
+  echo "$anchor must be committed so go:embed dist/* matches before the web build" >&2
+  exit 1
+fi
+if ! cmp -s "$anchor" web/public/README; then
+  echo "$anchor and web/public/README differ; the web build would rewrite the committed copy" >&2
+  exit 1
+fi
 echo "Static assets are self-contained"

@@ -161,6 +161,13 @@ func (s *Server) spaHandler() http.Handler {
 	if err != nil {
 		panic(err)
 	}
+	return spaHandlerFor(assets)
+}
+
+// spaHandlerFor serves the single-page shell out of assets, whose root is the
+// React build output. It is separate from spaHandler so tests can hand it a
+// fake build and run before the frontend has been built.
+func spaHandlerFor(assets fs.FS) http.Handler {
 	files := http.FileServer(http.FS(assets))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Anything a machine talks to must never fall through to the single-page

@@ -1,0 +1,17 @@
+This file is the one path that `//go:embed dist/*` in internal/webui/assets.go
+can always match.
+
+The React build (`npm run build` in web/) writes into internal/webui/dist and
+empties that directory first, so nothing in it is committed except this file,
+and the Go toolchain rejects an embed pattern that matches no file at all.
+Without this anchor a fresh checkout cannot `go build ./...` or
+`go test ./...` until the frontend has been built once.
+
+Vite copies web/public/ into the output verbatim after emptying it, so every
+build puts this exact file back. The two copies, web/public/README and
+internal/webui/dist/README, must stay byte-identical or a build would leave
+the checkout dirty; internal/webui/assets_test.go and
+scripts/check-static-assets.sh fail when they drift.
+
+The server never serves it: internal/server/public.go only looks up asset
+paths that contain a dot, so `/README` falls through to the SPA shell.
