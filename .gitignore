@@ -9,6 +9,9 @@ coverage.out
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
-dist/
+/dist/
+# The React build output, except the anchor that lets go:embed match before a build.
+internal/webui/dist/*
+!internal/webui/dist/README
 .env
 *.tar.gz
