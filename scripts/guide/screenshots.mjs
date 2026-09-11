@@ -132,8 +132,10 @@ async function seed(me) {
     await post(`/api/v1/customers/${demo.id}/relationships`, { sourceContactId: contacts['이철수'].id, targetContactId: contacts['김영희'].id, relationshipType: 'TRUSTS', strength: 75, description: '기술 검토 신뢰', active: true, version: 0 })
     await post(`/api/v1/customers/${demo.id}/relationships`, { sourceContactId: contacts['박민수'].id, targetContactId: contacts['홍길동'].id, relationshipType: 'REPORTS_TO', strength: 60, description: '재무 검토 보고 라인', active: true, version: 0 })
   }
+  // A customer without a plan still answers status=DRAFT (an empty template);
+  // only a stored row carries an id.
   const plan = await get(`/api/v1/customers/${demo.id}/account-plan`).catch(() => null)
-  if (!plan || !plan.status || plan.status === 'NONE') {
+  if (!plan || !plan.id) {
     await put(`/api/v1/customers/${demo.id}/account-plan`, { planYear: today.getFullYear(), status: 'ACTIVE', strategy: 'CRM 도입 성공을 발판으로 매출 분석 모듈까지 확장', customerGoals: ['영업 전망 정확도 개선', '사내 AI 도입'], strategicInitiatives: ['전사 CRM 현대화'], ourObjectives: ['Relio를 실행 시스템으로 정착'], whiteSpaces: [{ productName: 'Revenue Intelligence', status: 'NOT_OFFERED', potentialAmount: 250000000, notes: '4분기 검증' }, { productName: 'CRM Core', status: 'CUSTOMER', potentialAmount: 0 }], competitors: ['레거시 CRM'], risks: ['예산 시기'], targetRevenue: 500000000, potentialRevenue: 750000000, version: plan?.version ?? 0 })
   }
 
@@ -268,6 +270,7 @@ function shots({ demo }) {
     { name: 'customers', route: '/app/customers' },
     { name: 'customer-360', route: `/app/customers/${demo.id}` },
     { name: 'customer-360-relationships', route: `/app/customers/${demo.id}`, act: async (p) => { await scrollToHeading(p, '의사결정 관계도'); await sleep(500) } },
+    { name: 'customer-360-plan', route: `/app/customers/${demo.id}`, act: async (p) => { await scrollToHeading(p, '전략 고객 계획'); await sleep(500) } },
     { name: 'opportunities', route: '/app/opportunities' },
     { name: 'opportunity-detail', route: '/app/opportunities', act: async (p) => { await clickText(p, 'tbody tr', '데모전자 CRM 전사 확산'); await settle(p) } },
     { name: 'pipeline', route: '/app/pipeline' },
