@@ -194,7 +194,8 @@ relio-v1.11.4.tar.gz
 
 - [Architecture](docs/architecture.md)
 - [Security Model](docs/security.md)
-- [Administrator Guide](docs/admin-guide.md)
+- [사용자 가이드](docs/USER_GUIDE.md) ([PDF](docs/USER_GUIDE.pdf))
+- [관리자 가이드](docs/ADMIN_GUIDE.md) ([PDF](docs/ADMIN_GUIDE.pdf))
 - [REST API and MCP](docs/api-mcp.md)
 
 ## 라이선스

@@ -7,8 +7,8 @@ import sys
 DOCS_DIR = "/mnt/c/Users/USER/projects/relio/docs"
 
 FILES = [
-    ("ADMIN_GUIDE", "Relio 엔터프라이즈 관리자 가이드 (Admin Guide)", "v1.6.0-ENTERPRISE", "시스템 관리자, Security/DevOps"),
-    ("USER_GUIDE", "Relio 영업대표 및 팀장 사용자 가이드 (User Guide)", "v1.6.0", "영업대표, 영업팀장, Presales"),
+    # USER_GUIDE and ADMIN_GUIDE are rendered with the shared guide tool
+    # (see the appendix of docs/ADMIN_GUIDE.md); only the reports go through here.
     ("EXECUTIVE_REPORT", "Relio 엔터프라이즈 도입 경영진 보고서 (Executive Summary)", "v1.6.0", "CEO, CIO, CISO, 영업총괄 VP"),
     ("ROADMAP_PLAN", "Relio 제품 로드맵 및 향후 발전 계획 (Roadmap Plan)", "v1.6.0", "Product Manager, Lead Dev, 경영진"),
     ("USER_GROUPS_ANALYSIS", "Relio 사용자 그룹 및 페르소나 분석 명세서 (User Analysis)", "v1.6.0", "UX Designer, PM, Business Analyst")

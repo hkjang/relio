@@ -15,3 +15,5 @@ internal/webui/dist/*
 !internal/webui/dist/README
 .env
 *.tar.gz
+
+scripts/guide/node_modules/

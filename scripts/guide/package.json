@@ -1,0 +1,12 @@
+{
+  "name": "relio-guide-screenshots",
+  "private": true,
+  "type": "module",
+  "description": "가이드 문서용 화면 캡처 — 버려도 되는 Relio 배포에 가짜 데이터를 채우고 headless Chrome 으로 찍는다.",
+  "scripts": {
+    "screenshots": "node screenshots.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^24.0.0"
+  }
+}
