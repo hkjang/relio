@@ -32,8 +32,20 @@ type Service struct {
 	// The policy is needed on every response, so it is cached and refreshed on
 	// change rather than queried per request.
 	mu       sync.RWMutex
-	cached   *Policy
+	cached   *snapshot
 	cachedAt time.Time
+}
+
+// snapshot is everything a request path needs from the enabled providers: the
+// policy sources for the header and the collector the /momento proxy forwards
+// to. Both come from the same rows, so they are cached and invalidated together
+// — a proxy that pointed at a collector the policy no longer knew would be a
+// silent way to leak requests after a provider was disabled.
+type snapshot struct {
+	policy Policy
+	// momentoUpstream is the origin of the first enabled Momento provider with
+	// the same-origin proxy on, or "" when /momento should answer 404.
+	momentoUpstream string
 }
 
 // cacheTTL bounds how long another replica's change takes to appear. Writes on
@@ -52,9 +64,21 @@ type Provider struct {
 	ScriptAttributes  map[string]string `json:"scriptAttributes"`
 	RespectDNT        bool              `json:"respectDnt"`
 	AuthenticatedOnly bool              `json:"authenticatedOnly"`
-	DisplayOrder      int               `json:"displayOrder"`
-	UpdatedAt         time.Time         `json:"updatedAt"`
+	// SameOriginProxy (Momento only) routes the tracker and its events through
+	// /momento on this origin, so the policy need not name the collector.
+	SameOriginProxy bool      `json:"sameOriginProxy"`
+	DisplayOrder    int       `json:"displayOrder"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
+
+// ProviderMomento is the in-house collector. It is the only provider whose data
+// stays on the network, which is why it leads the vendor list and is the only
+// one offered the same-origin proxy.
+const ProviderMomento = "MOMENTO"
+
+// MomentoProxyPath is where the same-origin proxy answers; the tracker is told
+// to load from and report to this path instead of the collector's origin.
+const MomentoProxyPath = "/momento"
 
 // Policy is the set of extra CSP sources the enabled providers require.
 type Policy struct {
@@ -72,21 +96,31 @@ var vendors = map[string]struct {
 	needsOrigin  bool
 	defaultPath  string
 	pixelOrigins []string
+	// order puts the in-house collector first; the rest are alphabetical.
+	order int
 }{
-	"GA4":       {"Google Analytics 4", true, false, "", []string{"https://www.googletagmanager.com", "https://www.google-analytics.com", "https://region1.google-analytics.com"}},
-	"MATOMO":    {"Matomo", true, true, "/matomo.js", nil},
-	"PLAUSIBLE": {"Plausible", false, true, "/js/script.js", nil},
-	"UMAMI":     {"Umami", true, true, "/script.js", nil},
-	"SCRIPT":    {"직접 지정 스크립트", false, true, "", nil},
+	ProviderMomento: {"Momento (사내 수집기)", true, true, "/tracker.js", nil, 0},
+	"GA4":           {"Google Analytics 4", true, false, "", []string{"https://www.googletagmanager.com", "https://www.google-analytics.com", "https://region1.google-analytics.com"}, 1},
+	"MATOMO":        {"Matomo", true, true, "/matomo.js", nil, 1},
+	"PLAUSIBLE":     {"Plausible", false, true, "/js/script.js", nil, 1},
+	"UMAMI":         {"Umami", true, true, "/script.js", nil, 1},
+	"SCRIPT":        {"직접 지정 스크립트", false, true, "", nil, 1},
 }
 
 func Vendors() []map[string]any {
 	out := []map[string]any{}
 	for code, v := range vendors {
 		out = append(out, map[string]any{"code": code, "label": v.label,
-			"needsSiteId": v.needsSiteID, "needsOrigin": v.needsOrigin, "defaultPath": v.defaultPath})
+			"needsSiteId": v.needsSiteID, "needsOrigin": v.needsOrigin, "defaultPath": v.defaultPath,
+			"supportsProxy": code == ProviderMomento})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i]["code"].(string) < out[j]["code"].(string) })
+	sort.Slice(out, func(i, j int) bool {
+		a, b := vendors[out[i]["code"].(string)].order, vendors[out[j]["code"].(string)].order
+		if a != b {
+			return a < b
+		}
+		return out[i]["code"].(string) < out[j]["code"].(string)
+	})
 	return out
 }
 
@@ -99,7 +133,7 @@ func (s *Service) List(ctx context.Context, p *auth.Principal) ([]Provider, erro
 
 func (s *Service) load(ctx context.Context, enabledOnly bool) ([]Provider, error) {
 	rows, err := s.DB.Query(ctx, `SELECT id,provider,name,enabled,COALESCE(site_id,''),COALESCE(script_origin,''),
-		COALESCE(script_path,''),collect_origins,script_attributes,respect_dnt,authenticated_only,display_order,updated_at
+		COALESCE(script_path,''),collect_origins,script_attributes,respect_dnt,authenticated_only,same_origin_proxy,display_order,updated_at
 		FROM analytics_providers WHERE (enabled OR NOT $1) ORDER BY display_order,name`, enabledOnly)
 	if err != nil {
 		return nil, err
@@ -110,7 +144,7 @@ func (s *Service) load(ctx context.Context, enabledOnly bool) ([]Provider, error
 		var x Provider
 		var raw []byte
 		if err = rows.Scan(&x.ID, &x.Provider, &x.Name, &x.Enabled, &x.SiteID, &x.ScriptOrigin, &x.ScriptPath,
-			&x.CollectOrigins, &raw, &x.RespectDNT, &x.AuthenticatedOnly, &x.DisplayOrder, &x.UpdatedAt); err != nil {
+			&x.CollectOrigins, &raw, &x.RespectDNT, &x.AuthenticatedOnly, &x.SameOriginProxy, &x.DisplayOrder, &x.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(raw, &x.ScriptAttributes)
@@ -169,6 +203,12 @@ func validate(in *Provider) error {
 		return errors.New("직접 지정 스크립트는 스크립트 경로가 필요합니다")
 	}
 	in.ScriptPath = path
+	// The proxy forwards to one collector, and only Momento's tracker knows how
+	// to be told a different endpoint. Dropping the flag rather than rejecting
+	// it keeps an edit that switches vendor from failing on a stale checkbox.
+	if in.Provider != ProviderMomento {
+		in.SameOriginProxy = false
+	}
 
 	normalized := []string{}
 	seen := map[string]bool{}
@@ -222,19 +262,19 @@ func (s *Service) Save(ctx context.Context, p *auth.Principal, in Provider, m Me
 	if creating {
 		id = ids.New()
 		_, err := s.DB.Exec(ctx, `INSERT INTO analytics_providers(id,provider,name,enabled,site_id,script_origin,script_path,
-			collect_origins,script_attributes,respect_dnt,authenticated_only,display_order,updated_by)
-			VALUES($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''),$8,$9,$10,$11,$12,$13)`,
+			collect_origins,script_attributes,respect_dnt,authenticated_only,same_origin_proxy,display_order,updated_by)
+			VALUES($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''),$8,$9,$10,$11,$12,$13,$14)`,
 			id, in.Provider, in.Name, in.Enabled, in.SiteID, in.ScriptOrigin, in.ScriptPath,
-			in.CollectOrigins, attributes, in.RespectDNT, in.AuthenticatedOnly, in.DisplayOrder, p.UserID)
+			in.CollectOrigins, attributes, in.RespectDNT, in.AuthenticatedOnly, in.SameOriginProxy, in.DisplayOrder, p.UserID)
 		if err != nil {
 			return Provider{}, err
 		}
 	} else {
 		command, err := s.DB.Exec(ctx, `UPDATE analytics_providers SET provider=$2,name=$3,enabled=$4,site_id=NULLIF($5,''),
 			script_origin=NULLIF($6,''),script_path=NULLIF($7,''),collect_origins=$8,script_attributes=$9,
-			respect_dnt=$10,authenticated_only=$11,display_order=$12,updated_by=$13,updated_at=now() WHERE id=$1`,
+			respect_dnt=$10,authenticated_only=$11,same_origin_proxy=$12,display_order=$13,updated_by=$14,updated_at=now() WHERE id=$1`,
 			id, in.Provider, in.Name, in.Enabled, in.SiteID, in.ScriptOrigin, in.ScriptPath,
-			in.CollectOrigins, attributes, in.RespectDNT, in.AuthenticatedOnly, in.DisplayOrder, p.UserID)
+			in.CollectOrigins, attributes, in.RespectDNT, in.AuthenticatedOnly, in.SameOriginProxy, in.DisplayOrder, p.UserID)
 		if err != nil {
 			return Provider{}, err
 		}
@@ -251,7 +291,8 @@ func (s *Service) Save(ctx context.Context, p *auth.Principal, in Provider, m Me
 	s.Audit.Record(ctx, audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "ADMIN", Action: action,
 		Resource: "analytics_provider", ResourceID: id,
 		After: map[string]any{"provider": in.Provider, "name": in.Name, "enabled": in.Enabled,
-			"scriptOrigin": in.ScriptOrigin, "collectOrigins": in.CollectOrigins, "siteId": in.SiteID},
+			"scriptOrigin": in.ScriptOrigin, "collectOrigins": in.CollectOrigins, "siteId": in.SiteID,
+			"sameOriginProxy": in.SameOriginProxy},
 		IP: m.IP, RequestID: m.RequestID, UserAgent: m.UserAgent})
 	in.ID = id
 	return in, nil
@@ -291,6 +332,18 @@ func (s *Service) invalidate() {
 // called on every response, so a failure degrades to the strict default rather
 // than blocking the request.
 func (s *Service) CurrentPolicy(ctx context.Context) Policy {
+	return s.current(ctx).policy
+}
+
+// MomentoUpstream is the collector origin /momento/* forwards to, or "" when no
+// enabled Momento provider asks for the same-origin proxy. Like the policy it
+// falls back to "off" on a read failure: an unreachable database must not turn
+// the proxy into an open relay to a collector that may since have been removed.
+func (s *Service) MomentoUpstream(ctx context.Context) string {
+	return s.current(ctx).momentoUpstream
+}
+
+func (s *Service) current(ctx context.Context) snapshot {
 	s.mu.RLock()
 	cached, at := s.cached, s.cachedAt
 	s.mu.RUnlock()
@@ -302,13 +355,31 @@ func (s *Service) CurrentPolicy(ctx context.Context) Policy {
 		if cached != nil {
 			return *cached
 		}
-		return Policy{}
+		return snapshot{}
 	}
-	policy := buildPolicy(providers)
+	fresh := snapshot{policy: buildPolicy(providers), momentoUpstream: momentoUpstream(providers)}
 	s.mu.Lock()
-	s.cached, s.cachedAt = &policy, time.Now()
+	s.cached, s.cachedAt = &fresh, time.Now()
 	s.mu.Unlock()
-	return policy
+	return fresh
+}
+
+// proxied reports whether a provider is reached through /momento, in which
+// case its origin belongs in the proxy, not in the policy.
+func (x Provider) proxied() bool {
+	return x.Provider == ProviderMomento && x.SameOriginProxy && x.ScriptOrigin != ""
+}
+
+// momentoUpstream picks the collector for the proxy. Rows arrive in display
+// order, so with two proxied Momento providers the first one shown wins — the
+// loader only ever tells the tracker about one /momento anyway.
+func momentoUpstream(providers []Provider) string {
+	for _, x := range providers {
+		if x.Enabled && x.proxied() {
+			return x.ScriptOrigin
+		}
+	}
+	return ""
 }
 
 func buildPolicy(providers []Provider) Policy {
@@ -317,7 +388,9 @@ func buildPolicy(providers []Provider) Policy {
 		if !x.Enabled {
 			continue
 		}
-		if x.ScriptOrigin != "" {
+		// A proxied collector is same-origin from the browser's point of view;
+		// naming it here would widen the policy for nothing.
+		if x.ScriptOrigin != "" && !x.proxied() {
 			script[x.ScriptOrigin] = true
 			// A vendor almost always posts events back to the host that served
 			// its script, so allow that without extra configuration.

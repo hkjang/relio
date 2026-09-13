@@ -149,6 +149,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/mcp", s.mcpEntry())
 	mux.Handle("/mcp/", s.mcpEntry())
 	mux.HandleFunc("GET /analytics.js", s.analyticsLoader)
+	// Same-origin proxy to the Momento collector; 404 until an administrator
+	// enables a Momento provider with the proxy on. Unauthenticated like the
+	// loader, because the login screen may be tracked too.
+	mux.Handle(analytics.MomentoProxyPath, s.momentoProxyHandler())
+	mux.Handle(analytics.MomentoProxyPath+"/", s.momentoProxyHandler())
 	mux.HandleFunc("POST /api/v1/csp-report", s.cspReport)
 	mux.HandleFunc("GET /api/openapi.json", func(w http.ResponseWriter, r *http.Request) { httpx.JSON(w, 200, api.OpenAPI()) })
 	mux.HandleFunc("GET /api/docs", s.apiDocs)

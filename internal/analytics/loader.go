@@ -59,6 +59,29 @@ func (s *Service) Loader(ctx context.Context) (string, error) {
 
 func renderProvider(p Provider) (string, error) {
 	switch p.Provider {
+	case ProviderMomento:
+		if p.ScriptOrigin == "" || p.SiteID == "" {
+			return "", fmt.Errorf("origin 또는 site id가 없습니다")
+		}
+		// The published tag is
+		//   <script async src="<url>/tracker.js" data-site-id=".." data-environment="prd" data-contract-version="1">
+		// An administrator may override the defaults through script attributes
+		// (a staging collector wants data-environment=stg), but not the site id.
+		attributes := map[string]string{"data-environment": "prd", "data-contract-version": "1"}
+		for name, value := range p.ScriptAttributes {
+			attributes[name] = value
+		}
+		attributes["data-site-id"] = p.SiteID
+		src := p.ScriptOrigin + p.ScriptPath
+		if p.proxied() {
+			// Through the proxy the tracker is same-origin, and data-endpoint
+			// tells it to post events to /momento too, so the policy never
+			// has to name the collector.
+			src = MomentoProxyPath + p.ScriptPath
+			attributes["data-endpoint"] = MomentoProxyPath
+		}
+		return fmt.Sprintf("    inject(%s, %s);\n", jsString(src), jsObject(attributes)), nil
+
 	case "GA4":
 		if p.SiteID == "" {
 			return "", fmt.Errorf("measurement id가 없습니다")
