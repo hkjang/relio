@@ -451,10 +451,10 @@ function VoiceCategoryModal({category,onClose,onSaved,notify}:{category?:VoiceCa
     <div className="modal-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>취소</button><button className="btn btn-primary" disabled={busy}>{busy?'저장 중…':editing?'변경 저장':'유형 추가'}</button></div></form></Modal>
 }
 
-type AnalyticsProvider={id:string;provider:string;name:string;enabled:boolean;siteId?:string;scriptOrigin?:string;scriptPath?:string;collectOrigins:string[];scriptAttributes:Record<string,string>;respectDnt:boolean;authenticatedOnly:boolean;displayOrder:number}
-type Vendor={code:string;label:string;needsSiteId:boolean;needsOrigin:boolean;defaultPath:string}
+type AnalyticsProvider={id:string;provider:string;name:string;enabled:boolean;siteId?:string;scriptOrigin?:string;scriptPath?:string;collectOrigins:string[];scriptAttributes:Record<string,string>;respectDnt:boolean;authenticatedOnly:boolean;sameOriginProxy:boolean;displayOrder:number}
+type Vendor={code:string;label:string;needsSiteId:boolean;needsOrigin:boolean;defaultPath:string;supportsProxy:boolean}
 type CSPViolation={directive:string;blockedOrigin:string;documentUri?:string;occurrences:number;firstSeenAt:string;lastSeenAt:string;resolved:boolean;suggested:boolean}
-type AnalyticsData={items:AnalyticsProvider[];vendors:Vendor[];violations:CSPViolation[];policy:{scriptSrc:string[];connectSrc:string[];imgSrc:string[];enabled:boolean};loaderPath:string}
+type AnalyticsData={items:AnalyticsProvider[];vendors:Vendor[];violations:CSPViolation[];policy:{scriptSrc:string[];connectSrc:string[];imgSrc:string[];enabled:boolean};loaderPath:string;proxyPath:string;proxyUpstream:string}
 
 function Analytics(props:Props){
   const [data,setData]=useState<AnalyticsData|null>(null);const [modal,setModal]=useState<null|{provider?:AnalyticsProvider;prefillOrigin?:string}>(null);const [remove,setRemove]=useState<AnalyticsProvider|null>(null);const [busy,setBusy]=useState(false)
@@ -464,7 +464,7 @@ function Analytics(props:Props){
   async function dismiss(v:CSPViolation){try{await api('/api/v1/admin/analytics/violations/resolve',{method:'POST',body:JSON.stringify({directive:v.directive,blockedOrigin:v.blockedOrigin})});await load()}catch(e){props.notify(errorMessage(e),true)}}
   const active=(data?.items||[]).filter(x=>x.enabled).length
   const blocked=(data?.violations||[]).filter(v=>!v.resolved)
-  return <Frame {...props} title="방문자 분석" subtitle="사내 Matomo나 자체 수집기를 연결합니다. 설정하지 않으면 Relio는 어떤 외부 요청도 하지 않습니다."
+  return <Frame {...props} title="방문자 분석" subtitle="사내 Momento 수집기나 Matomo 등을 연결합니다. 설정하지 않으면 Relio는 어떤 외부 요청도 하지 않습니다."
     actions={<button className="btn btn-primary" onClick={()=>setModal({})}>＋ 공급자 추가</button>}>
     {!data?<Spinner/>:<div className="settings-stack">
       <section className={`panel analytics-state ${active?'on':''}`}>
@@ -478,6 +478,7 @@ function Analytics(props:Props){
           <div><small>script-src</small><code>{data.policy.scriptSrc.join(' ')||'추가 없음'}</code></div>
           <div><small>connect-src</small><code>{data.policy.connectSrc.join(' ')||'추가 없음'}</code></div>
           <div><small>로더</small><code>{data.loaderPath}</code></div>
+          {data.proxyUpstream&&<div><small>같은 오리진 프록시</small><code>{data.proxyPath}/* → {data.proxyUpstream}</code></div>}
         </div>}
       </section>
 
@@ -502,11 +503,11 @@ function Analytics(props:Props){
             <td>{data.vendors.find(v=>v.code===x.provider)?.label||x.provider}</td>
             <td><code className="truncate">{x.scriptOrigin?`${x.scriptOrigin}${x.scriptPath||''}`:'공급자 기본 주소'}</code></td>
             <td><code className="truncate">{x.collectOrigins.length?x.collectOrigins.join(', '):'스크립트 출처와 동일'}</code></td>
-            <td><small>{[x.respectDnt?'DNT 준수':null,x.authenticatedOnly?'로그인 후에만':null].filter(Boolean).join(' · ')||'제한 없음'}</small></td>
+            <td><small>{[x.sameOriginProxy?'같은 오리진 프록시':null,x.respectDnt?'DNT 준수':null,x.authenticatedOnly?'로그인 후에만':null].filter(Boolean).join(' · ')||'제한 없음'}</small></td>
             <td><Status value={x.enabled?'ACTIVE':'DISABLED'}/></td>
             <td><div className="row-menu"><button onClick={()=>setModal({provider:x})}>편집</button><button className="danger" onClick={()=>setRemove(x)}>삭제</button></div></td>
           </tr>)}</tbody></table>
-          :<Empty icon="◔" title="연결된 방문자 분석이 없습니다" description="사내 Matomo, Plausible, Umami, GA4 또는 직접 지정한 스크립트를 연결할 수 있습니다."
+          :<Empty icon="◔" title="연결된 방문자 분석이 없습니다" description="사내 Momento 수집기를 첫 선택지로, Matomo, Plausible, Umami, GA4 또는 직접 지정한 스크립트를 연결할 수 있습니다."
             action={<button className="btn btn-primary" onClick={()=>setModal({})}>첫 공급자 추가</button>}/>}
       </section>
 
@@ -520,14 +521,14 @@ function Analytics(props:Props){
 
 function AnalyticsModal({provider,prefillOrigin,vendors,onClose,onSaved,notify}:{provider?:AnalyticsProvider;prefillOrigin?:string;vendors:Vendor[];onClose:()=>void;onSaved:()=>void;notify:Props['notify']}){
   const editing=Boolean(provider?.id)
-  const [code,setCode]=useState(provider?.provider||'MATOMO');const [busy,setBusy]=useState(false)
+  const [code,setCode]=useState(provider?.provider||vendors[0]?.code||'MOMENTO');const [busy,setBusy]=useState(false)
   const vendor=vendors.find(v=>v.code===code)
   async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);setBusy(true)
     const body={provider:code,name:f.get('name'),enabled:f.get('enabled')==='on',siteId:f.get('siteId'),
       scriptOrigin:f.get('scriptOrigin'),scriptPath:f.get('scriptPath'),
       collectOrigins:String(f.get('collectOrigins')||'').split(/[\s,]+/).filter(Boolean),
       scriptAttributes:Object.fromEntries(String(f.get('attributes')||'').split('\n').map(l=>l.split('=')).filter(p=>p.length===2).map(([k,v])=>[k.trim(),v.trim()])),
-      respectDnt:f.get('dnt')==='on',authenticatedOnly:f.get('authOnly')==='on',displayOrder:Number(f.get('order'))}
+      respectDnt:f.get('dnt')==='on',authenticatedOnly:f.get('authOnly')==='on',sameOriginProxy:Boolean(vendor?.supportsProxy)&&f.get('proxy')==='on',displayOrder:Number(f.get('order'))}
     try{await api(editing?`/api/v1/admin/analytics/${provider!.id}`:'/api/v1/admin/analytics',{method:editing?'PUT':'POST',body:JSON.stringify(body)})
       notify(editing?'방문자 분석 설정을 저장했습니다.':'방문자 분석 공급자를 추가했습니다. 다음 페이지 로드부터 적용됩니다.');onSaved()}
     catch(err){notify(errorMessage(err),true)}finally{setBusy(false)}}
@@ -540,7 +541,7 @@ function AnalyticsModal({provider,prefillOrigin,vendors,onClose,onSaved,notify}:
       <label>표시 순서<input name="order" type="number" defaultValue={provider?.displayOrder??100}/></label>
       <label className="span-2">스크립트 출처{vendor?.needsOrigin?' *':''}
         <input name="scriptOrigin" defaultValue={provider?.scriptOrigin||prefillOrigin||''} required={vendor?.needsOrigin}
-          placeholder="https://matomo.example.com" pattern="https?://.+"/>
+          placeholder={code==='MOMENTO'?'https://momento.example.com':'https://matomo.example.com'} pattern="https?://.+"/>
         <small>스킴과 호스트까지만 입력합니다. 경로·와일드카드는 사용할 수 없습니다.</small></label>
       <label className="span-2">스크립트 경로<input name="scriptPath" defaultValue={provider?.scriptPath||vendor?.defaultPath||''} placeholder="/matomo.js"/>
         <small>비우면 공급자 기본 경로를 사용합니다.</small></label>
@@ -551,6 +552,7 @@ function AnalyticsModal({provider,prefillOrigin,vendors,onClose,onSaved,notify}:
           defaultValue={Object.entries(provider?.scriptAttributes||{}).map(([k,v])=>`${k}=${v}`).join('\n')}
           placeholder={'data-website-id=abc\ndata-host-url=https://umami.example.com'}/>
         <small><code>data-*</code> 속성만 한 줄에 하나씩 <code>이름=값</code> 형식으로 입력합니다.</small></label>
+      {vendor?.supportsProxy&&<label className="check-label span-2"><input type="checkbox" name="proxy" defaultChecked={provider?provider.sameOriginProxy:true}/> 같은 오리진 프록시 사용 — 추적기와 이벤트를 <code>/momento</code> 로 넘겨 보안 정책에 외부 출처를 넣지 않습니다 (권장)</label>}
       <label className="check-label"><input type="checkbox" name="dnt" defaultChecked={provider?provider.respectDnt:true}/> Do Not Track 요청 존중</label>
       <label className="check-label"><input type="checkbox" name="authOnly" defaultChecked={provider?.authenticatedOnly}/> 로그인 후 화면만 추적</label>
       <label className="check-label span-2"><input type="checkbox" name="enabled" defaultChecked={provider?.enabled}/> 이 공급자 활성화</label>

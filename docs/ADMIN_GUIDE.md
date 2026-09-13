@@ -200,6 +200,59 @@ Keycloak 에 이미 로그인한 사람이 Relio 를 열면 로그인 화면 없
 
 ![승인 절차 — 정책이 없으면 승인 UI 가 숨겨진다](assets/guide/admin-approval.png)
 
+### 3.5 방문자 분석 · CSP (추적 스크립트)
+
+**기본 설정 → 방문자 분석 · CSP** 에서 방문 추적 도구를 붙입니다. **기본값은 꺼짐**입니다 — 공급자를 하나도 등록하지 않은 설치는 런타임에 어떤 외부 요청도 하지 않고, 아래 설명은 아무것도 바꾸지 않습니다. 변경에는 `analytics:manage` 권한(기본 Role 중 시스템 관리자)이 필요하고 모든 변경은 감사 로그 `ANALYTICS_PROVIDER_CREATE/UPDATE/DELETE` 에 남습니다. REST 로는 `GET/POST /api/v1/admin/analytics`, `PUT/DELETE /api/v1/admin/analytics/{id}` 입니다.
+
+#### 왜 그냥 `<script>` 를 붙여 넣지 않는가 — CSP
+
+Relio 의 모든 응답에는 `script-src 'self'` 로 잠긴 Content Security Policy 가 붙습니다. 이 상태에서 추적 스니펫을 화면에 붙여 넣으면 브라우저가 **조용히 차단**하고, 관리자는 수집이 비어 있는 이유를 각 사용자의 개발자 콘솔을 열어 보기 전에는 알 수 없습니다. `'unsafe-inline'` 으로 정책을 푸는 방법은 쓰지 않습니다 — 한 번 풀면 그 앱의 모든 인라인 스크립트가 함께 허용되고, 추적을 끈 뒤에도 정책은 느슨한 채 남기 때문입니다.
+
+대신 Relio 는 두 가지를 동시에 합니다.
+
+1. **스니펫을 서버가 생성해 자기 출처에서 제공**합니다(`/analytics.js`). 관리자가 입력한 값(사이트 ID, 수집기 주소)으로 로더를 만들고, 붙여 넣은 JavaScript 는 받지 않습니다. 로더는 `'self'` 에 이미 포함되므로 nonce 도 `'unsafe-inline'` 도 필요 없고, 관리자 권한이 곧 전체 사용자 세션에 대한 스크립트 실행 권한이 되지 않습니다.
+2. **정책은 같은 설정에서 계산**합니다. 공급자를 켜면 그 공급자가 필요로 하는 출처만 `script-src`·`connect-src`·`img-src` 에 더해지고, 끄면 즉시 원래대로 좁아집니다. 헤더를 손으로 고칠 일이 없습니다.
+
+#### 공급자
+
+| 공급자 | 필요한 값 | 정책에 더해지는 출처 |
+|---|---|---|
+| **Momento (사내 수집기)** — 목록의 첫 자리 | 사이트 ID, 수집기 주소(예: `https://momento.company.internal`) | **같은 오리진 프록시**가 켜져 있으면 없음(기본·권장). 끄면 수집기 주소 |
+| Google Analytics 4 | 측정 ID | googletagmanager.com, google-analytics.com |
+| Matomo / Plausible / Umami | 사이트 ID, 스크립트 출처 | 스크립트 출처 |
+| 직접 지정 스크립트 | 스크립트 출처·경로 | 스크립트 출처 |
+
+Momento 는 사내 자체 호스팅 수집기라 데이터가 밖으로 나가지 않는 유일한 선택지이며, 그래서 첫 자리에 있습니다. 생성되는 태그는 다음과 같습니다.
+
+```html
+<script async src="<수집기 주소>/tracker.js"
+        data-site-id="<사이트 ID>" data-environment="prd" data-contract-version="1"></script>
+```
+
+`data-environment` 는 **스크립트 속성**에 `data-environment=stg` 처럼 적어 바꿀 수 있습니다. `data-site-id` 는 항상 검증된 사이트 ID 로 채워지며 속성으로 덮어쓸 수 없습니다.
+
+#### 같은 오리진 프록시 (`/momento`)
+
+Momento 를 추가할 때 **같은 오리진 프록시 사용** 이 기본으로 켜져 있습니다. 켜져 있으면:
+
+- 추적기는 `/momento/tracker.js` 에서 로드되고 `data-endpoint="/momento"` 를 받아 이벤트도 `/momento/…` 로 보냅니다.
+- Relio 가 `/momento/*` 를 수집기 주소로 넘깁니다. 브라우저 입장에서 모든 요청이 같은 출처이므로 **정책에 외부 출처가 아예 등장하지 않고** `script-src 'self'` 가 출하 상태 그대로입니다. 정책을 넓힐 수 없는 설치에서도 추적이 됩니다.
+- 넘길 때 `Cookie`·`Authorization`·`X-CSRF-Token` 을 떼어 **사용자의 Relio 세션이 수집기로 가지 않게** 하고, 수집기의 `Set-Cookie` 와 정책 헤더는 브라우저에 전달하지 않습니다. 방문자 주소는 `X-Forwarded-For` 로 넘겨 수집기가 방문을 구분할 수 있게 합니다.
+- `GET`·`HEAD`·`POST`·`OPTIONS` 만 통과하고 본문은 256 KB 로 제한합니다. 수집기가 응답하지 않으면 10초 뒤 `502` 로 끊어 화면이 분석 때문에 기다리지 않습니다.
+- 공급자를 끄거나 지우면 정책이 좁아지는 것과 같은 순간에 `/momento` 도 `404` 로 닫힙니다. 아무 공급자도 켜지 않은 설치에서 `/momento` 는 처음부터 `404` 입니다.
+
+프록시를 끄면 추적기가 수집기 주소에서 직접 로드되고 그 주소가 `script-src` 와 `connect-src` 에 들어갑니다. 수집기가 Relio 와 다른 네트워크 경로에 있어 Relio 서버에서는 닿지 않고 브라우저에서는 닿는 경우에만 끕니다.
+
+#### 차단된 요청 확인
+
+공급자가 켜져 있는 동안 정책에 `report-uri /api/v1/csp-report` 가 붙어 브라우저가 거부한 요청을 Relio 로 신고합니다. 같은 화면 상단의 **차단된 요청** 에 **지시어와 출처** 가 모입니다(같은 출처는 횟수만 늘어나 쌓이지 않습니다). 추적기가 스크립트 출처와 다른 주소로 이벤트를 보내면 여기 `connect-src` 로 나타나므로, **이 출처 허용** 을 눌러 공급자의 추가 수집 출처에 넣으면 됩니다. 신고 경로는 브라우저가 자격 증명 없이 보내므로 인증이 없고, 본문은 크기 제한·재검증을 거쳐 출처 단위로만 저장됩니다.
+
+#### 붙지 않는 곳
+
+- `/api/*`·`/mcp`·`/health/*` 같은 비화면 응답에는 스크립트가 들어갈 자리가 없습니다.
+- **로그인 후 화면만 추적** 을 켜면 세션 쿠키가 없는 로그인 화면에서는 추적기를 로드하지 않습니다. 기본은 꺼짐입니다. 추적기는 페이지 안에서 실행되는 스크립트이므로, 자격 증명을 다루는 화면까지 추적할지는 수집기를 신뢰하는 정도에 따라 정합니다 — 확신이 없으면 켭니다.
+- **Do Not Track 요청 존중** 이 기본으로 켜져 있어 브라우저가 DNT 를 보내면 로드하지 않습니다.
+
 ---
 
 ## 4. 계정과 권한
@@ -343,6 +396,7 @@ docker rm relio-old             # 확인 뒤
 | MCP 도구가 안 보임 | `mcp.tool_allowlist`, 키의 범위와 채널, `mcp.allowed_origins` | 허용 목록·범위·Origin 세 가지 교집합입니다 |
 | 로그 `capture forecast snapshot` / `run intelligence analysis` / `expire rotated keys` 오류 | 시스템 진단 → Background Job 카드 | 다음 주기에 재시도됩니다. `snapshot ran without the lock`·`take maintenance lock` 은 DB 잠금 문제이므로 PostgreSQL 상태를 봅니다 |
 | 사용자가 `서버 오류가 발생했습니다.` 와 요청 ID 를 전달 | `docker logs relio \| grep <requestId>` | `service error` 줄의 `error` 필드가 원인입니다 |
+| 방문자 분석을 켰는데 수집기에 아무것도 안 들어옴 | 방문자 분석 · CSP → 차단된 요청, 브라우저 개발자 콘솔의 `Content Security Policy` 오류 | 차단된 출처가 보이면 **이 출처 허용**. Momento 는 **같은 오리진 프록시** 를 켜면 정책과 무관해집니다. 프록시를 켰는데 `/momento/tracker.js` 가 `502` 면 Relio 서버에서 수집기 주소로 닿지 않는 것이고(로그 `momento proxy upstream failed`), `404` 면 켜진 Momento 공급자가 없는 것입니다. DNT 를 켠 브라우저는 의도적으로 로드하지 않습니다 |
 
 ---
 
@@ -367,7 +421,7 @@ docker rm relio-old             # 확인 뒤
 ![보안 · 파일 · 접속 — 로컬 로그인, 세션, API 한도, 내보내기 정책과 기본 보호 장치 요약](assets/guide/admin-security.png)
 
 - 비밀번호는 argon2id 로 저장하며 원문을 보관하지 않습니다. 존재하지 않는 계정·비활성 계정도 같은 시간을 들여 거절해 아이디 열거를 막습니다.
-- 세션 쿠키는 HttpOnly·SameSite, 상태 변경 요청은 CSRF 토큰, 응답에는 CSP 가 붙습니다. 기본 상태에서 외부 CDN·폰트·분석 스크립트가 없고, 방문자 분석은 **방문자 분석 · CSP** 에서 출처별로 명시적으로 허용한 것만 CSP 에 추가됩니다.
+- 세션 쿠키는 HttpOnly·SameSite, 상태 변경 요청은 CSRF 토큰, 응답에는 CSP 가 붙습니다. 기본 상태에서 외부 CDN·폰트·분석 스크립트가 없고, 방문자 분석은 **방문자 분석 · CSP** 에서 출처별로 명시적으로 허용한 것만 CSP 에 추가됩니다. `'unsafe-inline'` 스크립트는 어떤 설정으로도 허용되지 않으며, Momento 의 같은 오리진 프록시(`/momento`)는 세션 쿠키를 떼고 넘깁니다(3.5).
 - SSO Client Secret 은 AES-256-GCM 으로, 개인 연동 키는 HMAC Digest 로만 저장됩니다.
 - MCP 는 Origin 검사, 개인 연동 키 인증, 도구 허용 목록, 감사 로그를 거칩니다.
 - 주요 보안 설정 변경은 모두 감사 로그에 남습니다.

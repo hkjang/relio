@@ -135,6 +135,9 @@ func (s *Server) listAnalyticsProviders(w http.ResponseWriter, r *http.Request) 
 		"violations": violations,
 		"policy":     s.Analytics.CurrentPolicy(r.Context()),
 		"loaderPath": "/analytics.js",
+		"proxyPath":  analytics.MomentoProxyPath,
+		// Shown so an administrator can see where /momento actually goes.
+		"proxyUpstream": s.Analytics.MomentoUpstream(r.Context()),
 	})
 }
 
