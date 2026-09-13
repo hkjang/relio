@@ -22,6 +22,17 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test ./... && \
       -o /out/relio ./cmd/relio
 
 FROM debian:bookworm-slim
+# 떠 있는 이미지에서 어느 소스로 만든 것인지 알 수 있게 한다. ARG 는
+# 스테이지마다 다시 선언해야 값이 넘어온다.
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.title="Relio" \
+      org.opencontainers.image.description="Relio release and delivery server" \
+      org.opencontainers.image.source="https://github.com/hkjang/relio" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --gid 10001 relio && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin relio && \
