@@ -35,6 +35,10 @@ type Discovery struct {
 	JWKSURI               string `json:"jwks_uri"`
 	EndSessionEndpoint    string `json:"end_session_endpoint,omitempty"`
 }
+
+// Config is the stored provider. AutoLogin lets the browser try prompt=none
+// before it shows the login screen, so a visitor with a live Keycloak session
+// enters directly; it is off unless the administrator turns it on.
 type Config struct {
 	ID                     string     `json:"id,omitempty"`
 	Version                int        `json:"version"`
@@ -50,6 +54,7 @@ type Config struct {
 	GroupClaim             string     `json:"groupClaim"`
 	RoleClaim              string     `json:"roleClaim"`
 	AutoProvision          bool       `json:"autoProvision"`
+	AutoLogin              bool       `json:"autoLogin"`
 	DefaultRoleID          string     `json:"defaultRoleId,omitempty"`
 	RootCAPEM              string     `json:"rootCaPem,omitempty"`
 	CallbackURL            string     `json:"callbackUrl"`
@@ -110,7 +115,7 @@ func (s *Service) Get(ctx context.Context) (Config, error) {
 	var scopes []string
 	var role *string
 	var discovery, result []byte
-	err := s.DB.QueryRow(ctx, `SELECT id,version,enabled,issuer_url,client_id,client_secret_encrypted,scopes,username_claim,email_claim,name_claim,group_claim,role_claim,auto_provision,default_role_id,COALESCE(root_ca_pem,''),discovery,last_tested_at,last_test_result FROM oidc_providers ORDER BY created_at LIMIT 1`).Scan(&c.ID, &c.Version, &c.Enabled, &c.IssuerURL, &c.ClientID, &secret, &scopes, &c.UsernameClaim, &c.EmailClaim, &c.NameClaim, &c.GroupClaim, &c.RoleClaim, &c.AutoProvision, &role, &c.RootCAPEM, &discovery, &c.LastTestedAt, &result)
+	err := s.DB.QueryRow(ctx, `SELECT id,version,enabled,issuer_url,client_id,client_secret_encrypted,scopes,username_claim,email_claim,name_claim,group_claim,role_claim,auto_provision,auto_login,default_role_id,COALESCE(root_ca_pem,''),discovery,last_tested_at,last_test_result FROM oidc_providers ORDER BY created_at LIMIT 1`).Scan(&c.ID, &c.Version, &c.Enabled, &c.IssuerURL, &c.ClientID, &secret, &scopes, &c.UsernameClaim, &c.EmailClaim, &c.NameClaim, &c.GroupClaim, &c.RoleClaim, &c.AutoProvision, &c.AutoLogin, &role, &c.RootCAPEM, &discovery, &c.LastTestedAt, &result)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.CallbackURL = s.callbackURL(ctx)
 		defaults(&c)
@@ -195,7 +200,7 @@ func (s *Service) Save(ctx context.Context, p *auth.Principal, c Config, ip, req
 	id := existing.ID
 	if id == "" {
 		id = ids.New()
-		_, err := s.DB.Exec(ctx, `INSERT INTO oidc_providers(id,enabled,issuer_url,client_id,client_secret_encrypted,scopes,username_claim,email_claim,name_claim,group_claim,role_claim,auto_provision,default_role_id,root_ca_pem,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, id, c.Enabled, strings.TrimRight(c.IssuerURL, "/"), c.ClientID, encrypted, c.Scopes, c.UsernameClaim, c.EmailClaim, c.NameClaim, c.GroupClaim, c.RoleClaim, c.AutoProvision, nullString(c.DefaultRoleID), nullString(c.RootCAPEM), p.UserID)
+		_, err := s.DB.Exec(ctx, `INSERT INTO oidc_providers(id,enabled,issuer_url,client_id,client_secret_encrypted,scopes,username_claim,email_claim,name_claim,group_claim,role_claim,auto_provision,auto_login,default_role_id,root_ca_pem,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, id, c.Enabled, strings.TrimRight(c.IssuerURL, "/"), c.ClientID, encrypted, c.Scopes, c.UsernameClaim, c.EmailClaim, c.NameClaim, c.GroupClaim, c.RoleClaim, c.AutoProvision, c.AutoLogin, nullString(c.DefaultRoleID), nullString(c.RootCAPEM), p.UserID)
 		if err != nil {
 			return Config{}, err
 		}
@@ -204,7 +209,7 @@ func (s *Service) Save(ctx context.Context, p *auth.Principal, c Config, ip, req
 		if expectedVersion == 0 {
 			expectedVersion = existing.Version
 		}
-		result, err := s.DB.Exec(ctx, `UPDATE oidc_providers SET enabled=$2,issuer_url=$3,client_id=$4,client_secret_encrypted=$5,scopes=$6,username_claim=$7,email_claim=$8,name_claim=$9,group_claim=$10,role_claim=$11,auto_provision=$12,default_role_id=$13,root_ca_pem=$14,updated_by=$15,updated_at=now(),version=version+1 WHERE id=$1 AND version=$16`, id, c.Enabled, strings.TrimRight(c.IssuerURL, "/"), c.ClientID, encrypted, c.Scopes, c.UsernameClaim, c.EmailClaim, c.NameClaim, c.GroupClaim, c.RoleClaim, c.AutoProvision, nullString(c.DefaultRoleID), nullString(c.RootCAPEM), p.UserID, expectedVersion)
+		result, err := s.DB.Exec(ctx, `UPDATE oidc_providers SET enabled=$2,issuer_url=$3,client_id=$4,client_secret_encrypted=$5,scopes=$6,username_claim=$7,email_claim=$8,name_claim=$9,group_claim=$10,role_claim=$11,auto_provision=$12,auto_login=$13,default_role_id=$14,root_ca_pem=$15,updated_by=$16,updated_at=now(),version=version+1 WHERE id=$1 AND version=$17`, id, c.Enabled, strings.TrimRight(c.IssuerURL, "/"), c.ClientID, encrypted, c.Scopes, c.UsernameClaim, c.EmailClaim, c.NameClaim, c.GroupClaim, c.RoleClaim, c.AutoProvision, c.AutoLogin, nullString(c.DefaultRoleID), nullString(c.RootCAPEM), p.UserID, expectedVersion)
 		if err != nil {
 			return Config{}, err
 		}
@@ -212,7 +217,7 @@ func (s *Service) Save(ctx context.Context, p *auth.Principal, c Config, ip, req
 			return Config{}, errors.New("OIDC configuration was changed by another user")
 		}
 	}
-	s.Audit.Record(ctx, audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "ADMIN", Action: "OIDC_CONFIG_UPDATE", Resource: "oidc_provider", ResourceID: id, Before: map[string]any{"enabled": existing.Enabled, "issuerUrl": existing.IssuerURL, "clientId": existing.ClientID}, After: map[string]any{"enabled": c.Enabled, "issuerUrl": c.IssuerURL, "clientId": c.ClientID, "clientSecret": "***"}, IP: ip, RequestID: requestID, UserAgent: ua})
+	s.Audit.Record(ctx, audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "ADMIN", Action: "OIDC_CONFIG_UPDATE", Resource: "oidc_provider", ResourceID: id, Before: map[string]any{"enabled": existing.Enabled, "issuerUrl": existing.IssuerURL, "clientId": existing.ClientID, "autoLogin": existing.AutoLogin}, After: map[string]any{"enabled": c.Enabled, "issuerUrl": c.IssuerURL, "clientId": c.ClientID, "clientSecret": "***", "autoLogin": c.AutoLogin}, IP: ip, RequestID: requestID, UserAgent: ua})
 	return s.Get(ctx)
 }
 func nullString(v string) any {
@@ -363,7 +368,74 @@ func (s *Service) storeTest(ctx context.Context, id string, result TestResult) {
 	_, _ = s.DB.Exec(ctx, `UPDATE oidc_providers SET discovery=$2,last_tested_at=$3,last_test_result=$4,updated_at=now() WHERE id=$1`, id, disc, result.TestedAt, raw)
 }
 
-func (s *Service) LoginURL(ctx context.Context) (string, error) {
+// LoginRequest carries what the browser asked for when it started a login.
+type LoginRequest struct {
+	// Silent asks for prompt=none: the provider answers from an existing
+	// session only and never renders a screen. Honoured only while the
+	// administrator has turned auto login on, so a "?prompt=none" pasted into
+	// the address bar cannot change the flow by itself.
+	Silent bool
+	// ReturnTo is where the browser lands after the callback. Anything that is
+	// not a same-origin application path falls back to DefaultReturnTo.
+	ReturnTo string
+}
+
+// DefaultReturnTo is where a login lands when the browser did not say.
+const DefaultReturnTo = "/app"
+
+// SafeReturnTo reports whether value may be used as a post-login redirect: a
+// same-origin path that starts with "/" but not "//" (a scheme-relative URL
+// would leave the site), and that the single-page application answers. The
+// API, MCP and login paths are refused because landing a fresh session on
+// /api/v1/auth/oidc/start or /login would start the very loop silent SSO
+// must avoid.
+func SafeReturnTo(value string) bool {
+	if value == "" || !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") || strings.ContainsAny(value, "\\\r\n") {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || parsed.User != nil {
+		return false
+	}
+	path := parsed.Path
+	switch {
+	case strings.HasPrefix(path, "/api/"), path == "/api":
+		return false
+	case strings.HasPrefix(path, "/mcp/"), path == "/mcp":
+		return false
+	case strings.HasPrefix(path, "/.well-known/"):
+		return false
+	case strings.HasPrefix(path, "/login/"), path == "/login":
+		return false
+	}
+	return true
+}
+
+// returnToOrDefault keeps a valid destination and replaces everything else.
+func returnToOrDefault(value string) string {
+	if SafeReturnTo(value) {
+		return value
+	}
+	return DefaultReturnTo
+}
+
+// silentAllowed is the one place that decides whether a prompt=none attempt
+// goes out. The browser's request alone is never enough.
+func silentAllowed(c Config, req LoginRequest) bool {
+	return req.Silent && c.Enabled && c.AutoLogin
+}
+
+// authorizeQuery builds the authorization request. prompt=none is appended
+// only for a permitted silent attempt.
+func authorizeQuery(c Config, callback, state, nonce, challenge string, silent bool) url.Values {
+	q := url.Values{"client_id": {c.ClientID}, "response_type": {"code"}, "scope": {strings.Join(c.Scopes, " ")}, "redirect_uri": {callback}, "state": {state}, "nonce": {nonce}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}}
+	if silent {
+		q.Set("prompt", "none")
+	}
+	return q
+}
+
+func (s *Service) LoginURL(ctx context.Context, req LoginRequest) (string, error) {
 	c, err := s.privateConfig(ctx)
 	if err != nil {
 		return "", errors.New("SSO is not configured")
@@ -375,18 +447,60 @@ func (s *Service) LoginURL(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	silent := silentAllowed(c, req)
+	returnTo := returnToOrDefault(req.ReturnTo)
 	state, nonce, verifier := ids.Token(32), ids.Token(24), ids.Token(48)
 	challengeRaw := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(challengeRaw[:])
 	stateHash := sha256.Sum256([]byte(state))
 	callback := s.callbackURL(ctx)
-	_, err = s.DB.Exec(ctx, `INSERT INTO oidc_login_states(state_hash,provider_id,nonce,code_verifier,redirect_uri,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '10 minutes')`, stateHash[:], c.ID, nonce, verifier, callback)
+	_, err = s.DB.Exec(ctx, `INSERT INTO oidc_login_states(state_hash,provider_id,nonce,code_verifier,redirect_uri,silent,return_to,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '10 minutes')`, stateHash[:], c.ID, nonce, verifier, callback, silent, returnTo)
 	if err != nil {
 		return "", err
 	}
-	q := url.Values{"client_id": {c.ClientID}, "response_type": {"code"}, "scope": {strings.Join(c.Scopes, " ")}, "redirect_uri": {callback}, "state": {state}, "nonce": {nonce}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}}
-	return d.AuthorizationEndpoint + "?" + q.Encode(), nil
+	return d.AuthorizationEndpoint + "?" + authorizeQuery(c, callback, state, nonce, challenge, silent).Encode(), nil
 }
+
+// Refusal describes a callback the provider answered with an error instead of
+// a code. For a silent attempt that is the ordinary "no session" answer.
+type Refusal struct {
+	Silent   bool
+	ReturnTo string
+}
+
+// AbandonLogin consumes the state row of a login the provider refused and
+// reports whether the attempt was silent. An unknown or expired state reads
+// as a non-silent refusal, which is the safe side: the browser shows the
+// error and never retries on its own.
+func (s *Service) AbandonLogin(ctx context.Context, state string) Refusal {
+	if state == "" {
+		return Refusal{ReturnTo: DefaultReturnTo}
+	}
+	stateHash := sha256.Sum256([]byte(state))
+	var r Refusal
+	if err := s.DB.QueryRow(ctx, `DELETE FROM oidc_login_states WHERE state_hash=$1 RETURNING silent,return_to`, stateHash[:]).Scan(&r.Silent, &r.ReturnTo); err != nil {
+		return Refusal{ReturnTo: DefaultReturnTo}
+	}
+	r.ReturnTo = returnToOrDefault(r.ReturnTo)
+	return r
+}
+
+// RefusalRedirect is where the browser goes after the provider refused. A
+// silent attempt lands on the login screen with the "sso=none" marker that
+// tells the browser not to try again — even when its sessionStorage was
+// cleared in between — so a signed-out visitor is never bounced in a loop.
+// An interactive attempt keeps its error code so the login screen can
+// explain what went wrong.
+func RefusalRedirect(r Refusal, providerError string) string {
+	if r.Silent {
+		return "/login?sso=none"
+	}
+	return "/login?sso_error=" + url.QueryEscape(providerError)
+}
+
+// SilentRefusalCodes are the answers prompt=none gives when the provider has
+// no usable session. They are outcomes, not failures, and are logged as such.
+var SilentRefusalCodes = map[string]bool{"login_required": true, "interaction_required": true, "consent_required": true, "account_selection_required": true}
 
 type callbackResult struct {
 	AccessToken      string `json:"access_token"`
@@ -397,58 +511,69 @@ type callbackResult struct {
 	ErrorDescription string `json:"error_description"`
 }
 
-func (s *Service) Callback(ctx context.Context, state, code, ip, ua string) (string, *auth.Principal, error) {
+// Session is a completed SSO login: the cookie value, who signed in, and where
+// the browser should land.
+type Session struct {
+	Token     string
+	Principal *auth.Principal
+	// Silent records that the session came from a prompt=none attempt.
+	Silent   bool
+	ReturnTo string
+}
+
+func (s *Service) Callback(ctx context.Context, state, code, ip, ua string) (Session, error) {
 	if state == "" || code == "" {
-		return "", nil, errors.New("OIDC callback is missing state or code")
+		return Session{}, errors.New("OIDC callback is missing state or code")
 	}
 	stateHash := sha256.Sum256([]byte(state))
-	var providerID, nonce, verifier, redirect string
-	err := s.DB.QueryRow(ctx, `DELETE FROM oidc_login_states WHERE state_hash=$1 AND expires_at>now() RETURNING provider_id,nonce,code_verifier,redirect_uri`, stateHash[:]).Scan(&providerID, &nonce, &verifier, &redirect)
+	var providerID, nonce, verifier, redirect, returnTo string
+	var silent bool
+	err := s.DB.QueryRow(ctx, `DELETE FROM oidc_login_states WHERE state_hash=$1 AND expires_at>now() RETURNING provider_id,nonce,code_verifier,redirect_uri,silent,return_to`, stateHash[:]).Scan(&providerID, &nonce, &verifier, &redirect, &silent, &returnTo)
 	if err != nil {
-		return "", nil, errors.New("OIDC state is invalid or expired")
+		return Session{}, errors.New("OIDC state is invalid or expired")
 	}
 	c, err := s.privateConfig(ctx)
 	if err != nil || c.ID != providerID || !c.Enabled {
-		return "", nil, errors.New("OIDC provider is unavailable")
+		return Session{}, errors.New("OIDC provider is unavailable")
 	}
 	d, err := fetchDiscovery(ctx, c)
 	if err != nil {
-		return "", nil, err
+		return Session{}, err
 	}
 	client, err := newHTTPClient(c.RootCAPEM)
 	if err != nil {
-		return "", nil, err
+		return Session{}, err
 	}
 	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {c.ClientID}, "client_secret": {c.ClientSecret}, "code": {code}, "redirect_uri": {redirect}, "code_verifier": {verifier}}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, d.TokenEndpoint, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", nil, err
+		return Session{}, err
 	}
 	defer resp.Body.Close()
 	var tokens callbackResult
 	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tokens); err != nil {
-		return "", nil, err
+		return Session{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", nil, fmt.Errorf("token exchange failed: %s", tokens.Error)
+		return Session{}, fmt.Errorf("token exchange failed: %s", tokens.Error)
 	}
 	claims, err := verifyToken(ctx, client, d, tokens.IDToken, c.ClientID, nonce)
 	if err != nil {
-		return "", nil, err
+		return Session{}, err
 	}
 	userID, err := s.resolveUser(ctx, c, claims)
 	if err != nil {
-		return "", nil, err
+		return Session{}, err
 	}
 	token, p, err := s.Auth.CreateSession(ctx, userID, "OIDC", ip, ua)
 	if err != nil {
-		return "", nil, err
+		return Session{}, err
 	}
 	_, _ = s.DB.Exec(ctx, `UPDATE users SET last_login_at=now() WHERE id=$1`, userID)
-	s.Audit.Record(ctx, audit.Event{ActorID: userID, ActorName: p.Username, Channel: "SSO", Action: "LOGIN", Resource: "session", IP: ip, UserAgent: ua})
-	return token, p, nil
+	s.Audit.Record(ctx, audit.Event{ActorID: userID, ActorName: p.Username, Channel: "SSO", Action: "LOGIN", Resource: "session", IP: ip, UserAgent: ua, Metadata: map[string]any{"silent": silent}})
+	return Session{Token: token, Principal: p, Silent: silent, ReturnTo: returnToOrDefault(returnTo)}, nil
 }
 
 func verifyToken(ctx context.Context, client *http.Client, d Discovery, raw, clientID, nonce string) (map[string]any, error) {
@@ -747,7 +872,9 @@ func (s *Service) PublicStatus(ctx context.Context) map[string]any {
 	if err != nil || c.ID == "" {
 		return map[string]any{"enabled": false}
 	}
-	return map[string]any{"enabled": c.Enabled, "issuer": c.IssuerURL}
+	// autoLogin is published so the browser knows whether to try a silent
+	// sign-in before it renders the login screen.
+	return map[string]any{"enabled": c.Enabled, "issuer": c.IssuerURL, "autoLogin": c.Enabled && c.AutoLogin}
 }
 
 func (s *Service) ValidateAccessToken(ctx context.Context, raw string) (string, error) {
