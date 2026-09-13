@@ -31,6 +31,9 @@ jobs:
       - name: Frontend typecheck and build
         working-directory: web
         run: npm run typecheck && npm run build
+      - name: Frontend decision tests
+        working-directory: web
+        run: npm test
       - name: Backend tests
         run: go test -race -coverprofile=coverage.out ./...
       - name: Backend static analysis

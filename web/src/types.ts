@@ -1,6 +1,6 @@
 export type Version = { name: string; version: string; gitCommit: string; buildDate: string; edition: string }
 export type User = { id: string; username: string; displayName: string; email?: string; organizationId?: string; authMethod: string; isBootstrap: boolean; mustChangePassword: boolean; dataScope: string; permissions: string[]; csrfToken?: string }
-export type AuthStatus = { localLoginEnabled: boolean; sso: { enabled: boolean; issuer?: string }; version: Version }
+export type AuthStatus = { localLoginEnabled: boolean; sso: { enabled: boolean; issuer?: string; autoLogin?: boolean }; version: Version }
 export type Customer = { id: string; name: string; registrationNo?: string; customerType: string; grade?: string; industry?: string; website?: string; phone?: string; email?: string; address?: string; ownerId: string; ownerName: string; health: string; annualRevenue?: number; employeeCount?: number; customFields: Record<string, unknown>; version: number; createdAt: string; updatedAt: string }
 export type Stage = { id: string; pipelineId: string; name: string; order: number; probability: number; forecastCategory: string; isWon: boolean; isLost: boolean; active: boolean; color: string; minDays?: number; maxDays?: number }
 export type Pipeline = { id: string; name: string; active: boolean; default: boolean; stages: Stage[] }

@@ -173,6 +173,19 @@ Bootstrap 관리자는 **삭제되지 않는 비상 계정(Break Glass)** 입니
 - Keycloak 클라이언트의 Redirect URI 는 `<system.service_url>/api/v1/auth/oidc/callback` 입니다.
 - SSO 로 처음 로그인한 사용자는 **권한 · 데이터 범위** 에서 기본으로 지정한 Role(`영업 담당자`)을 자동으로 받습니다. 클레임 → Role/조직 매핑은 `GET/PUT /api/v1/admin/oidc/mappings` 로 다룹니다.
 
+#### 자동 로그인 (silent SSO, `auto_login`)
+
+Keycloak 에 이미 로그인한 사람이 Relio 를 열면 로그인 화면 없이 바로 본 화면으로 들어가게 하는 설정입니다. 같은 화면의 **자동 로그인** 체크박스로 켜고, REST 로는 `PUT /api/v1/admin/oidc` 의 `autoLogin` 입니다. **기본값은 꺼짐**이며 SSO 자체가 비활성이면 켜 두어도 동작하지 않습니다. 켜고 끈 이력은 감사 로그 `OIDC_CONFIG_UPDATE` 에 남습니다.
+
+동작은 다음과 같습니다.
+
+1. 세션이 없는 브라우저가 앱 경로(`/app/…`, `/admin/…`, `/me/…`)를 열면, 로그인 화면을 그리기 전에 `GET /api/v1/auth/oidc/start?prompt=none&return_to=<원래 경로>` 로 **최상위 이동**합니다. 숨은 iframe 을 쓰지 않으므로 서드파티 쿠키가 막힌 브라우저에서도 동작하고 Keycloak 의 프레임 정책과 무관합니다.
+2. Keycloak 은 `prompt=none` 요청에 화면을 절대 그리지 않습니다. 세션이 있으면 인가 코드가 바로 돌아와 평소 SSO 로그인과 같은 절차로 세션이 만들어지고, 브라우저는 `return_to` 자리로 돌아갑니다(깊은 링크 유지). 세션이 없으면 `error=login_required` 로 돌아오는데 이것은 실패가 아니라 "세션 없음" 이라는 평범한 대답이므로 콜백은 오류 없이 `/login?sso=none` 으로 보냅니다.
+3. 같은 시도를 반복하면 브라우저가 Keycloak 과 Relio 사이를 끝없이 오가므로 세 겹으로 막습니다. (1) 탭 세션마다 한 번만 시도하고 그 표시를 `sessionStorage` 에 남깁니다 — 새 탭은 다시 시도하고, 거절 뒤 새로고침은 시도하지 않습니다. (2) 사용자가 스스로 로그아웃하면 다음 로그인까지 시도하지 않습니다. (3) 콜백이 거절을 받으면 주소에 `?sso=none` 을 남겨 저장소가 지워졌더라도 다시 시도하지 않습니다. 브라우저 저장소를 읽을 수 없는 사생활 보호 모드에서는 "이미 시도했다" 로 간주해 시도하지 않습니다.
+4. 서버는 이 설정이 꺼져 있으면 `?prompt=none` 이 붙어 와도 조용히 평범한 로그인으로 바꿉니다. 주소를 손봐서 흐름을 바꿀 수는 없습니다. `return_to` 는 `/` 로 시작하고 `//` 로 시작하지 않는 같은 출처의 앱 경로만 받으며, API·MCP·로그인 경로나 그 밖의 값은 `/app` 으로 대체됩니다.
+
+로그인·콜백 경로와 API·MCP·헬스 경로에서는 시도하지 않습니다. 켜기 전에 **연결 테스트** 가 통과하고 수동 **사내 SSO로 로그인** 이 되는지 먼저 확인하세요 — 조용한 시도는 화면을 보여 주지 않으므로 설정 오류가 사용자에게는 "그냥 로그인 화면이 떴다" 로만 보이고, 원인은 서버 로그 `silent SSO attempt failed` 에 남습니다.
+
 ### 3.4 영업 정책
 
 **영업 단계 설정**(단계·성공확률·전망 분류), **영업 실행 정책**(단계별 Playbook 과 전환 조건 `OFF`/`WARNING`/`BLOCK`, Deal Health 규칙과 배점), **승인 절차**, **사용자 정의 항목**, **상품 카탈로그**, **고객 요청 유형 · SLA** 가 여기 있습니다. 모두 코드 변경 없이 화면에서 바꾸고 즉시 반영됩니다.
@@ -324,6 +337,7 @@ docker rm relio-old             # 확인 뒤
 | 사용자가 `로그인 시도가 너무 많습니다` 를 봄 | 감사 로그 `LOGIN_FAILED` 의 IP | 같은 주소의 실패 반복. 공용 NAT 뒤라면 정상 사용자도 걸릴 수 있습니다. 잠시 기다리면 풀립니다 |
 | 사용자가 `일반 로컬 로그인이 비활성화되어 있습니다` 를 봄 | 보안 · 파일 · 접속 → 일반 로컬 로그인 허용 | SSO 가 죽어 로컬로 들어와야 하면 Bootstrap 관리자로 로그인해 켭니다. Bootstrap 은 이 설정과 무관하게 항상 로그인됩니다 |
 | SSO 로그인 후 "아직 사용 권한이 없습니다" | 권한 · 데이터 범위의 기본 Role 지정 | 기본 Role 이 비어 있으면 지정. 이미 들어온 사용자는 사용자 · 조직 → 권한에서 부여 |
+| 자동 로그인을 켰는데 로그인 화면이 뜸 | 서버 로그 `silent SSO declined` / `silent SSO attempt failed`, 주소의 `?sso=none` | `?sso=none` 은 Keycloak 이 세션 없음(`login_required`)으로 답했다는 뜻이며 정상입니다. 로그아웃 직후에는 의도적으로 시도하지 않습니다. 세션이 있는데도 뜬다면 로그의 오류 코드를 봅니다 — `consent_required` 면 Keycloak 클라이언트의 Consent Required 를 끄고, `attempt failed` 로 남은 다른 코드는 클라이언트 설정 오류입니다 |
 | SSO 콜백이 실패 | 사내 SSO 연결 → 연결 테스트 결과(Discovery/TLS/JWKS/Callback) | Keycloak 의 Redirect URI 가 `<service_url>/api/v1/auth/oidc/callback` 인지, `system.service_url` 이 실제 접속 주소인지, 사내 CA 인증서가 컨테이너에 있는지 확인 |
 | API 클라이언트가 HTTP 429 | 보안 · 파일 · 접속 → API 요청 한도 / 분, 연동 키 · API · MCP → MCP 요청 한도 | 신원당 한도입니다. 정당한 배치 작업이면 한도를 올리거나 키를 나눕니다 |
 | MCP 도구가 안 보임 | `mcp.tool_allowlist`, 키의 범위와 채널, `mcp.allowed_origins` | 허용 목록·범위·Origin 세 가지 교집합입니다 |

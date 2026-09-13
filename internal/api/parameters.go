@@ -128,6 +128,10 @@ var fieldsParameter = map[string]any{
 }
 
 var queryParameters = map[string][]query{
+	"GET /auth/oidc/start": {
+		choice("prompt", "none이면 Keycloak 세션이 있을 때만 화면 없이 로그인하는 silent SSO 시도입니다. 관리자가 SSO 설정에서 자동 로그인을 켜지 않았으면 무시하고 일반 로그인으로 진행합니다.", "none"),
+		text("return_to", "로그인 뒤 돌아갈 같은 출처의 경로입니다. '/'로 시작하고 '//'로 시작하지 않는 애플리케이션 경로만 받으며, 그 밖의 값은 /app으로 대체됩니다."),
+	},
 	"GET /auth/oidc/callback": {
 		text("code", "Keycloak가 돌려준 Authorization Code입니다."),
 		text("state", "로그인 시작 시 발급한 state 값입니다."),

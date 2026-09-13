@@ -8,6 +8,7 @@ import AdminPages from './pages/AdminPages'
 import VoicePages from './pages/VoicePages'
 import IntelligencePages from './pages/IntelligencePages'
 import { navigate, Spinner } from './components/Layout'
+import { beginSilentSso, clearSilentSsoState, markSignedOut, shouldAttemptSilentSso } from './silentSso'
 
 const emptyVersion: Version = { name: 'Relio', version: '…', gitCommit: 'unknown', buildDate: 'unknown', edition: 'Community' }
 const normalizeUser = (user: User): User => ({ ...user, permissions: Array.isArray(user.permissions) ? user.permissions : [] })
@@ -26,6 +27,12 @@ function takeReturn(): string {
   sessionStorage.removeItem(RETURN_KEY)
   return target && isReturnable(new URL(target, location.origin).pathname) ? target : '/app/dashboard'
 }
+// The SSO button hands the remembered target to the server, which brings the
+// browser back there after the callback instead of the dashboard.
+export function pendingReturn(): string {
+  const target = sessionStorage.getItem(RETURN_KEY)
+  return target && isReturnable(new URL(target, location.origin).pathname) ? target : '/app/dashboard'
+}
 
 export default function App() {
   const [path, setPath] = useState(location.pathname)
@@ -39,21 +46,36 @@ export default function App() {
   useEffect(() => { bootstrap() }, [])
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 4000); return () => clearTimeout(t) }, [toast])
   async function bootstrap() {
+    // Set when the browser is leaving for a silent SSO attempt: the boot
+    // spinner stays up rather than flashing the login screen on the way out.
+    let leaving = false
     try {
       const authStatus = await api<AuthStatus>('/api/v1/auth/status')
       setStatus(authStatus); setVersion(authStatus.version)
       try {
         const me = await api<{user:User;version:Version}>('/api/v1/auth/me')
         const currentUser = normalizeUser(me.user)
+        // A session exists again, so a sign-out no longer suppresses auto login.
+        clearSilentSsoState()
         setUser(currentUser); setCSRF(currentUser.csrfToken); setVersion(me.version)
         if (currentUser.mustChangePassword && location.pathname !== '/me/password') navigate('/me/password')
         else if (location.pathname === '/' || location.pathname === '/login') navigate('/app/dashboard')
         try { const wf = await api<{enabled:boolean}>('/api/v1/approvals/status'); setApprovalEnabled(wf.enabled) } catch { /* permission-specific */ }
-      } catch { if (location.pathname !== '/login') { rememberReturn(); navigate('/login') } }
-    } finally { setLoading(false) }
+      } catch {
+        if (location.pathname !== '/login') {
+          rememberReturn()
+          // With auto login on, try the provider's existing session once before
+          // drawing the login screen; the deep link rides along as return_to.
+          if (shouldAttemptSilentSso(authStatus, location) && beginSilentSso(location.pathname + location.search)) { leaving = true; return }
+          navigate('/login')
+        }
+      }
+    } finally { if (!leaving) setLoading(false) }
   }
-  function loggedIn(next: User) { const currentUser=normalizeUser(next); setUser(currentUser); setCSRF(currentUser.csrfToken); if (currentUser.mustChangePassword) navigate('/me/password'); else navigate(takeReturn()) }
-  async function logout() { try { await api('/api/v1/auth/logout', { method:'POST' }) } finally { sessionStorage.removeItem(RETURN_KEY); setUser(null); setCSRF(); navigate('/login') } }
+  function loggedIn(next: User) { const currentUser=normalizeUser(next); clearSilentSsoState(); setUser(currentUser); setCSRF(currentUser.csrfToken); if (currentUser.mustChangePassword) navigate('/me/password'); else navigate(takeReturn()) }
+  // A deliberate sign-out must not be undone by a silent sign-in on the next
+  // load, so it suppresses auto login until a session exists again.
+  async function logout() { try { await api('/api/v1/auth/logout', { method:'POST' }) } finally { markSignedOut(); sessionStorage.removeItem(RETURN_KEY); setUser(null); setCSRF(); navigate('/login') } }
   const notify = (message:string,error=false) => setToast({message,error})
   if (loading) return <div className="boot"><div className="brand-mark big">R</div><Spinner /></div>
   if (!user) return <Login status={status} version={version} onLogin={loggedIn} notify={notify} />

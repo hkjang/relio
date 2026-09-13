@@ -111,7 +111,10 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, 200, map[string]any{"changed": true})
 }
 func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
-	target, err := s.OIDC.LoginURL(r.Context())
+	// prompt=none is a silent attempt: the provider answers from an existing
+	// session or comes back with login_required, and never draws a screen.
+	// The service ignores it unless the administrator turned auto login on.
+	target, err := s.OIDC.LoginURL(r.Context(), oidc.LoginRequest{Silent: r.URL.Query().Get("prompt") == "none", ReturnTo: r.URL.Query().Get("return_to")})
 	if err != nil {
 		httpx.ErrorJSON(w, r, 503, "sso_unavailable", err.Error(), nil)
 		return
@@ -120,17 +123,27 @@ func (s *Server) oidcStart(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	if oauthErr := r.URL.Query().Get("error"); oauthErr != "" {
-		http.Redirect(w, r, "/login?sso_error="+urlQuery(oauthErr), http.StatusFound)
+		refusal := s.OIDC.AbandonLogin(r.Context(), r.URL.Query().Get("state"))
+		if refusal.Silent {
+			// No provider session is the ordinary answer to prompt=none, not
+			// a failure; anything else on a silent attempt is worth a line.
+			if oidc.SilentRefusalCodes[oauthErr] {
+				s.Log.Info("silent SSO declined", "error", oauthErr)
+			} else {
+				s.Log.Warn("silent SSO attempt failed", "error", oauthErr)
+			}
+		}
+		http.Redirect(w, r, oidc.RefusalRedirect(refusal, oauthErr), http.StatusFound)
 		return
 	}
-	token, _, err := s.OIDC.Callback(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("code"), httpx.ClientIP(r), r.UserAgent())
+	session, err := s.OIDC.Callback(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("code"), httpx.ClientIP(r), r.UserAgent())
 	if err != nil {
 		s.Log.Warn("OIDC callback failed", "error", err, "reason", oidc.CallbackReason(err))
 		http.Redirect(w, r, "/login?sso_error="+urlQuery(oidc.CallbackReason(err)), http.StatusFound)
 		return
 	}
-	s.Auth.SetSessionCookie(w, r, token)
-	http.Redirect(w, r, "/app", http.StatusFound)
+	s.Auth.SetSessionCookie(w, r, session.Token)
+	http.Redirect(w, r, session.ReturnTo, http.StatusFound)
 }
 func urlQuery(v string) string { return strings.NewReplacer(" ", "%20", "&", "", "?", "").Replace(v) }
 
