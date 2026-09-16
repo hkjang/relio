@@ -84,6 +84,46 @@ func (s *SettingsService) Get(ctx context.Context, namespace, key string, target
 	return json.Unmarshal(raw, target)
 }
 
+// Values reads one namespace as a map keyed without the namespace prefix, with
+// secrets decrypted. It is for server-internal consumers such as the mail
+// transport, never for a response: List is what the settings API answers with,
+// and it only ever says a secret is configured. A secret that cannot be
+// decrypted is left out rather than failing the whole namespace, so a lost
+// password disables authentication instead of every setting beside it.
+func (s *SettingsService) Values(ctx context.Context, namespace string) (map[string]any, error) {
+	rows, err := s.DB.Query(ctx, `SELECT key,value,secret_yn FROM system_settings WHERE namespace=$1`, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]any{}
+	for rows.Next() {
+		var key string
+		var raw []byte
+		var secret bool
+		if err = rows.Scan(&key, &raw, &secret); err != nil {
+			return nil, err
+		}
+		if secret {
+			var encrypted string
+			if json.Unmarshal(raw, &encrypted) != nil || encrypted == "" || s.Secrets == nil {
+				continue
+			}
+			plain, err := s.Secrets.Decrypt(encrypted)
+			if err != nil {
+				continue
+			}
+			raw = []byte(plain)
+		}
+		var value any
+		if json.Unmarshal(raw, &value) != nil {
+			continue
+		}
+		out[key] = value
+	}
+	return out, rows.Err()
+}
+
 func validSettingName(v string) bool {
 	if v == "" || len(v) > 80 {
 		return false

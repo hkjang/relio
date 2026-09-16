@@ -237,9 +237,14 @@ var queryParameters = map[string][]query{
 		text("entityType", "판정 대상 자원 유형입니다."),
 		text("entityId", "판정 대상 자원 ID입니다."),
 	},
-	"GET /me/views":                {text("resource", "이 자원의 저장된 검색만 반환합니다.")},
-	"GET /me/favorites":            {text("resource", "이 자원의 즐겨찾기만 반환합니다.")},
-	"GET /admin/settings":          {text("namespace", "이 Namespace의 설정만 반환합니다.")},
+	"GET /me/views":       {text("resource", "이 자원의 저장된 검색만 반환합니다.")},
+	"GET /me/favorites":   {text("resource", "이 자원의 즐겨찾기만 반환합니다.")},
+	"GET /admin/settings": {text("namespace", "이 Namespace의 설정만 반환합니다.")},
+	"GET /admin/mail/deliveries": {
+		choice("status", "발송 상태입니다.", "queued", "sent", "failed"),
+		text("event", "이 이벤트의 발송 기록만 반환합니다."),
+		limit(50, 200),
+	},
 	"GET /admin/approval-policies": {text("entityType", "이 자원 유형의 정책만 반환합니다.")},
 	"GET /admin/personal-keys":     {text("userId", "이 사용자의 Key만 반환합니다.")},
 	"GET /admin/audit": {

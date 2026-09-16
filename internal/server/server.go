@@ -25,6 +25,7 @@ import (
 	"github.com/hkjang/relio/internal/auth"
 	"github.com/hkjang/relio/internal/crm"
 	"github.com/hkjang/relio/internal/intelligence"
+	"github.com/hkjang/relio/internal/mail"
 	"github.com/hkjang/relio/internal/mcp"
 	"github.com/hkjang/relio/internal/oidc"
 	"github.com/hkjang/relio/internal/personal"
@@ -53,6 +54,9 @@ type Server struct {
 	Voices    *voice.Service
 	Personal  *personal.Service
 	Analytics *analytics.Service
+	// Mail is the SMTP notification service; nil answers the admin screen with
+	// an empty log and refuses the test send.
+	Mail *mail.Service
 	// Clock supplies the calendar date of the configured system.timezone. A nil
 	// Clock answers with the default zone rather than the process clock.
 	Clock *timezone.Loader
@@ -332,6 +336,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/admin/analytics/{id}", s.requireAuth(http.HandlerFunc(s.saveAnalyticsProvider), false))
 	mux.Handle("DELETE /api/v1/admin/analytics/{id}", s.requireAuth(http.HandlerFunc(s.deleteAnalyticsProvider), false))
 	mux.Handle("POST /api/v1/admin/analytics/violations/resolve", s.requireAuth(http.HandlerFunc(s.resolveCSPViolation), false))
+	mux.Handle("GET /api/v1/admin/mail/deliveries", s.requireAuth(http.HandlerFunc(s.adminMailDeliveries), false))
+	mux.Handle("POST /api/v1/admin/mail/test", s.requireAuth(http.HandlerFunc(s.adminSendTestMail), false))
 	mux.Handle("GET /api/v1/admin/voice-categories", s.requireAuth(http.HandlerFunc(s.adminVoiceCategories), false))
 	mux.Handle("POST /api/v1/admin/voice-categories", s.requireAuth(http.HandlerFunc(s.createVoiceCategory), false))
 	mux.Handle("PUT /api/v1/admin/voice-categories/{id}", s.requireAuth(http.HandlerFunc(s.updateVoiceCategory), false))
