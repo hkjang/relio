@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -63,18 +64,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	var local = true
 	_ = s.DB.QueryRow(r.Context(), `SELECT (value #>> '{}')::boolean FROM system_settings WHERE namespace='auth' AND key='local_login_enabled'`).Scan(&local)
-	if !local {
-		var bootstrap bool
-		_ = s.DB.QueryRow(r.Context(), `SELECT is_bootstrap FROM users WHERE lower(username)=lower($1) AND active=true`, in.Username).Scan(&bootstrap)
-		if !bootstrap {
-			httpx.ErrorJSON(w, r, 403, "local_login_disabled", "일반 로컬 로그인이 비활성화되어 있습니다.", nil)
-			return
-		}
-	}
-	token, p, err := s.Auth.Login(r.Context(), in.Username, in.Password, ip, r.UserAgent())
+	// The policy is enforced inside Login, after the password check, so that
+	// with local login off an unknown username and a non-bootstrap user still
+	// get the same 401 as a wrong password — only a caller who has proven the
+	// credentials of a non-bootstrap account is told the policy is what stopped
+	// them.
+	token, p, err := s.Auth.Login(r.Context(), in.Username, in.Password, ip, r.UserAgent(), !local)
 	if err != nil {
-		s.Audit.Record(r.Context(), audit.Event{ActorName: in.Username, Channel: "LOGIN", Action: "LOGIN_FAILED", Resource: "session", IP: ip, RequestID: httpx.RequestID(r.Context()), UserAgent: r.UserAgent()})
-		httpx.ErrorJSON(w, r, 401, "invalid_credentials", "아이디 또는 비밀번호가 올바르지 않습니다.", nil)
+		status, code, message := loginFailure(err)
+		s.Audit.Record(r.Context(), audit.Event{ActorName: in.Username, Channel: "LOGIN", Action: "LOGIN_FAILED", Resource: "session", IP: ip, RequestID: httpx.RequestID(r.Context()), UserAgent: r.UserAgent(), Metadata: map[string]any{"reason": code}})
+		httpx.ErrorJSON(w, r, status, code, message, nil)
 		return
 	}
 	s.limiter.success(ip)
@@ -82,6 +81,18 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.Audit.Record(r.Context(), audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "LOGIN", Action: "LOGIN", Resource: "session", IP: ip, RequestID: httpx.RequestID(r.Context()), UserAgent: r.UserAgent(), Metadata: map[string]any{"bootstrap": p.IsBootstrap}})
 	httpx.JSON(w, 200, map[string]any{"user": p})
 }
+
+// loginFailure maps a Login error to the wire. Only the policy refusal, which
+// auth.Service hands out solely for a verified password, is allowed to differ
+// from the generic 401 — every other error, whatever its cause, collapses into
+// invalid_credentials.
+func loginFailure(err error) (status int, code, message string) {
+	if errors.Is(err, auth.ErrLocalLoginDisabled) {
+		return 403, "local_login_disabled", "일반 로컬 로그인이 비활성화되어 있습니다."
+	}
+	return 401, "invalid_credentials", "아이디 또는 비밀번호가 올바르지 않습니다."
+}
+
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, 200, map[string]any{"user": principal(r), "version": version.Current()})
 }
