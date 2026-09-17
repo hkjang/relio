@@ -104,6 +104,8 @@ func apiPaths() map[string]any {
 		"/admin/analytics":                               methods("방문자 분석 공급자 조회 및 추가", "analytics:manage", "analytics:manage"),
 		"/admin/analytics/{id}":                          map[string]any{"put": operation("방문자 분석 공급자 변경", "analytics:manage"), "delete": operation("방문자 분석 공급자 삭제", "analytics:manage")},
 		"/admin/analytics/violations/resolve":            map[string]any{"post": operation("차단 보고 무시 처리", "analytics:manage")},
+		"/admin/mail/deliveries":                         get("메일 알림 발송 기록", "admin:read"),
+		"/admin/mail/test":                               map[string]any{"post": operation("메일 알림 시험 발송", "admin:write")},
 		"/csp-report":                                    map[string]any{"post": operation("브라우저 CSP 위반 보고 수집", "")},
 		"/admin/voice-categories/{id}":                   map[string]any{"put": operation("요청 유형·SLA 변경", "admin:write"), "delete": operation("요청 유형 삭제 또는 사용중지", "admin:write")},
 		"/reports/win-loss":                              get("Win/Loss 분석", "report:read"),

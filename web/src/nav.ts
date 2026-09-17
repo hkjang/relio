@@ -45,6 +45,7 @@ export const adminNav: NavItem[] = [
   { to: '/admin/oidc', key: 'me', label: '사내 SSO 연결', group: '기본 설정', keywords: 'sso issuer client claim' },
   { to: '/admin/security', key: 'security', label: '보안 · 파일 · 접속', group: '기본 설정', keywords: 'local login rate export' },
   { to: '/admin/analytics', key: 'operations', label: '방문자 분석 · CSP', group: '기본 설정', keywords: 'analytics ga matomo plausible umami csp 추적 스크립트 차단' },
+  { to: '/admin/mail', key: 'activities', label: '메일 알림', group: '기본 설정', keywords: 'mail smtp 메일 알림 릴레이 발송 기록 시험 발송' },
   { to: '/admin/users', key: 'customers', label: '사용자 · 조직', group: '조직 · 권한', keywords: 'user organization team' },
   { to: '/admin/roles', key: 'approvals', label: '권한 · 데이터 범위', group: '조직 · 권한', keywords: 'permission rbac' },
   { to: '/admin/pipeline', key: 'pipeline', label: '영업 단계 설정', group: '영업 정책', keywords: 'stage probability forecast' },
