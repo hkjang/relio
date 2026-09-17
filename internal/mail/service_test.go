@@ -219,6 +219,34 @@ func TestLogKeepsSuccessAndFailureWithoutTheBody(t *testing.T) {
 	}
 }
 
+// The renewal digest writes its ledger from dispatch's count, so that count
+// must be deliveries the relay accepted — a failed attempt is logged but has
+// notified nobody, and the next tick has to try again.
+func TestDispatchCountsOnlyAcceptedDeliveries(t *testing.T) {
+	h := newHarness(enabled(nil), people)
+	digest := ContractsDueForRenewal(digest2())
+	if sent := h.service.dispatch(context.Background(), digest, "", []string{"u-approver", "u-requester"}); sent != 2 {
+		t.Fatalf("two working recipients should count as 2, got %d", sent)
+	}
+	h.mu.Lock()
+	h.fail = errors.New("SMTP 연결 실패: connection refused")
+	h.mu.Unlock()
+	if sent := h.service.dispatch(context.Background(), digest, "", []string{"u-approver"}); sent != 0 {
+		t.Fatalf("a relay that is down must count as nobody notified, got %d", sent)
+	}
+	log := h.log()
+	if len(log) != 3 || log[2].Status != "failed" || log[2].Attempts != 2 {
+		t.Fatalf("the failed attempt must still be in the log after two tries, got %+v", log)
+	}
+	if sent := h.service.dispatch(context.Background(), digest, "", []string{"u-noaddress"}); sent != 0 {
+		t.Fatalf("a recipient without an address counts as nobody notified, got %d", sent)
+	}
+	incomplete := newHarness(fakeSettings{mail: map[string]any{"enabled": true}}, people)
+	if sent := incomplete.service.dispatch(context.Background(), digest, "", []string{"u-approver"}); sent != 0 {
+		t.Fatalf("an incomplete configuration records a failed row but notifies nobody, got %d", sent)
+	}
+}
+
 // mail.base_url falls back to system.service_url, so links work without a
 // second copy of the address; a settings read failure sends nothing.
 func TestBaseURLFallsBackToServiceURL(t *testing.T) {

@@ -188,19 +188,39 @@ func startSession(client *smtp.Client, config Config) error {
 	if !supported {
 		return fmt.Errorf("%w: 서버가 인증을 지원하지 않습니다. 사용자 이름을 비우고 사용하세요", ErrInvalid)
 	}
-	var err error
-	if strings.Contains(strings.ToUpper(mechanisms), "PLAIN") {
-		err = client.Auth(smtp.PlainAuth("", config.Username, config.Password, config.Host))
-	} else if strings.Contains(strings.ToUpper(mechanisms), "LOGIN") {
-		err = client.Auth(loginAuth{username: config.Username, password: config.Password, host: config.Host})
-	} else {
-		err = client.Auth(smtp.CRAMMD5Auth(config.Username, config.Password))
+	// The password leaves in the clear with PLAIN and LOGIN alike, so both
+	// follow one rule (ADMIN_GUIDE 3.6): only over TLS, unless the administrator
+	// chose security=none on purpose. CRAM-MD5 never sends the password itself,
+	// so it is the way out when a plaintext relay happens to offer it.
+	_, encrypted := client.TLSConnectionState()
+	plaintextAllowed := encrypted || config.Security == "none"
+	offered := strings.ToUpper(mechanisms)
+	var auth smtp.Auth
+	switch {
+	case strings.Contains(offered, "CRAM-MD5") && !plaintextAllowed:
+		auth = smtp.CRAMMD5Auth(config.Username, config.Password)
+	case strings.Contains(offered, "PLAIN"), strings.Contains(offered, "LOGIN"):
+		if !plaintextAllowed {
+			return fmt.Errorf("%w: %s", ErrInvalid, errUnencrypted)
+		}
+		// Each mechanism re-checks the same rule against what the client saw,
+		// so neither can be reused elsewhere without it.
+		if strings.Contains(offered, "PLAIN") {
+			auth = plainAuth{username: config.Username, password: config.Password, plaintext: config.Security == "none"}
+		} else {
+			auth = loginAuth{username: config.Username, password: config.Password, plaintext: config.Security == "none"}
+		}
+	default:
+		auth = smtp.CRAMMD5Auth(config.Username, config.Password)
 	}
-	if err != nil {
+	if err := client.Auth(auth); err != nil {
 		return fmt.Errorf("SMTP 인증 실패: %w", err)
 	}
 	return nil
 }
+
+// errUnencrypted is the policy in one sentence, reused by every mechanism.
+var errUnencrypted = errors.New("암호화되지 않은 연결에서는 자격증명을 보내지 않습니다. 릴레이가 STARTTLS 를 알리게 하거나, 평문 인증이 허용되는 릴레이라면 mail.security=none 을 명시하세요")
 
 func (c Config) tlsConfig() *tls.Config {
 	return &tls.Config{ServerName: c.Host, MinVersion: tls.VersionTLS12, InsecureSkipVerify: c.SkipVerify} //nolint:gosec // opt-in for internal relays with private certificates
@@ -215,13 +235,38 @@ func helloName(config Config) string {
 	return "localhost"
 }
 
+// plainAuth is PLAIN (RFC 4616) with Relio's own plaintext rule. The standard
+// library's PlainAuth hard-codes a localhost exception that ignores
+// security=none on any other host, so it cannot express the documented policy.
+type plainAuth struct {
+	username, password string
+	plaintext          bool
+}
+
+func (a plainAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	if !server.TLS && !a.plaintext {
+		return "", nil, errUnencrypted
+	}
+	return "PLAIN", []byte("\x00" + a.username + "\x00" + a.password), nil
+}
+
+func (a plainAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if more {
+		return nil, fmt.Errorf("예상하지 못한 PLAIN 요청: %s", fromServer)
+	}
+	return nil, nil
+}
+
 // loginAuth implements the LOGIN mechanism that several corporate relays use
 // instead of PLAIN. The standard library only ships PLAIN and CRAM-MD5.
-type loginAuth struct{ username, password, host string }
+type loginAuth struct {
+	username, password string
+	plaintext          bool
+}
 
 func (a loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
-	if !server.TLS && server.Name != a.host {
-		return "", nil, errors.New("LOGIN 인증은 신뢰할 수 있는 서버에서만 사용합니다")
+	if !server.TLS && !a.plaintext {
+		return "", nil, errUnencrypted
 	}
 	return "LOGIN", nil, nil
 }

@@ -30,6 +30,7 @@ func (s *Service) NotifyRenewals(ctx context.Context) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
+	s.PruneNotices(ctx)
 	rows, err := s.DB.Query(ctx, `SELECT ct.id::text,ct.contract_no,ct.title,c.name,ct.end_date,(ct.end_date-current_date)::int,ct.owner_id::text
 		FROM contracts ct JOIN customers c ON c.id=ct.customer_id
 		WHERE ct.status='ACTIVE' AND ct.end_date IS NOT NULL
@@ -62,6 +63,9 @@ func (s *Service) NotifyRenewals(ctx context.Context) error {
 		contracts := byOwner[owner]
 		// The digest is scheduled, not somebody's action, so there is no actor
 		// to exclude: the owner is told even when they created the contract.
+		// Only a delivery the relay accepted goes in the ledger; a failed one
+		// stays out so the next tick tries again instead of forgetting the
+		// contract for good.
 		if s.dispatch(ctx, ContractsDueForRenewal(contracts), "", []string{owner}) == 0 {
 			continue
 		}
@@ -81,7 +85,7 @@ const noticeAge = 400 * 24 * time.Hour
 
 // PruneNotices drops ledger rows for contracts that are no longer in the
 // window, once they are old enough that the same contract cannot still be the
-// one that was noticed.
+// one that was noticed. NotifyRenewals runs it on every tick.
 func (s *Service) PruneNotices(ctx context.Context) {
 	if s == nil || s.DB == nil {
 		return

@@ -3,9 +3,17 @@ package mail
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"strings"
 	"sync"
@@ -14,27 +22,88 @@ import (
 )
 
 // fakeRelay is a minimal SMTP server. It records the conversation so a test can
-// assert what Relio actually said, including whether it tried to authenticate.
+// assert what Relio actually said, including whether it tried to authenticate
+// and what it answered to a LOGIN challenge.
 type fakeRelay struct {
-	address    string
-	offerAuth  bool
+	address string
+	// mechanisms is the AUTH line advertised after EHLO; empty means no AUTH.
+	mechanisms string
+	// tlsConfig, when set, advertises STARTTLS and upgrades the socket on request.
+	tlsConfig  *tls.Config
 	rejectFrom bool
-	mu         sync.Mutex
-	commands   []string
-	body       string
-	listener   net.Listener
+	// silent accepts the connection and never says a word.
+	silent   bool
+	mu       sync.Mutex
+	commands []string
+	body     string
+	listener net.Listener
 }
 
 func startRelay(t *testing.T, offerAuth bool) *fakeRelay {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	relay := &fakeRelay{}
+	if offerAuth {
+		relay.mechanisms = "PLAIN LOGIN"
+	}
+	listenRelay(t, relay, "127.0.0.1:0")
+	return relay
+}
+
+// startRemoteRelay listens on a non-loopback address. The standard library
+// treats localhost as safe for plaintext credentials, so only a relay that is
+// not on loopback shows whether Relio's own rule holds.
+func startRemoteRelay(t *testing.T, relay *fakeRelay) *fakeRelay {
+	t.Helper()
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Skipf("interface addresses: %v", err)
+	}
+	for _, address := range addresses {
+		network, ok := address.(*net.IPNet)
+		if !ok || network.IP.To4() == nil || network.IP.IsLoopback() || network.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		listener, err := net.Listen("tcp", net.JoinHostPort(network.IP.String(), "0"))
+		if err != nil {
+			continue
+		}
+		relay.address, relay.listener = listener.Addr().String(), listener
+		go relay.serve()
+		t.Cleanup(func() { _ = listener.Close() })
+		return relay
+	}
+	t.Skip("no non-loopback IPv4 address to listen on")
+	return nil
+}
+
+func listenRelay(t *testing.T, relay *fakeRelay, address string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	relay := &fakeRelay{address: listener.Addr().String(), offerAuth: offerAuth, listener: listener}
+	relay.address, relay.listener = listener.Addr().String(), listener
 	go relay.serve()
 	t.Cleanup(func() { _ = listener.Close() })
-	return relay
+}
+
+// selfSignedTLS is a throwaway certificate for the relay's STARTTLS.
+func selfSignedTLS(t *testing.T) *tls.Config {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "relay.internal"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, MinVersion: tls.VersionTLS12}
 }
 
 func (f *fakeRelay) host() string { host, _, _ := net.SplitHostPort(f.address); return host }
@@ -74,9 +143,25 @@ func (f *fakeRelay) serve() {
 }
 
 func (f *fakeRelay) handle(connection net.Conn) {
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
+	if f.silent {
+		// Hold the socket open until the client gives up.
+		_, _ = bufio.NewReader(connection).ReadString('\n')
+		return
+	}
 	reader := bufio.NewReader(connection)
 	write := func(line string) { _, _ = connection.Write([]byte(line + "\r\n")) }
+	// challenge sends a 334 and records the client's answer under a label, so a
+	// test can see exactly which bytes carried the password.
+	challenge := func(label, prompt string) bool {
+		write("334 " + base64.StdEncoding.EncodeToString([]byte(prompt)))
+		answer, err := reader.ReadString('\n')
+		if err != nil {
+			return false
+		}
+		f.record("(" + label + ")" + strings.TrimSpace(answer))
+		return true
+	}
 	write("220 relay.internal ESMTP relio-test")
 	for {
 		line, err := reader.ReadString('\n')
@@ -89,12 +174,38 @@ func (f *fakeRelay) handle(connection net.Conn) {
 		switch {
 		case strings.HasPrefix(upper, "EHLO"):
 			write("250-relay.internal")
-			if f.offerAuth {
-				write("250-AUTH PLAIN LOGIN")
+			if f.tlsConfig != nil {
+				if _, already := connection.(*tls.Conn); !already {
+					write("250-STARTTLS")
+				}
+			}
+			if f.mechanisms != "" {
+				write("250-AUTH " + f.mechanisms)
 			}
 			write("250 SIZE 35882577")
 		case strings.HasPrefix(upper, "HELO"):
 			write("250 relay.internal")
+		case upper == "STARTTLS":
+			if f.tlsConfig == nil {
+				write("502 5.5.1 STARTTLS not offered")
+				continue
+			}
+			write("220 2.0.0 Ready to start TLS")
+			secured := tls.Server(connection, f.tlsConfig)
+			if err := secured.Handshake(); err != nil {
+				return
+			}
+			connection, reader = secured, bufio.NewReader(secured)
+		case upper == "AUTH LOGIN":
+			if !challenge("user", "Username:") || !challenge("pass", "Password:") {
+				return
+			}
+			write("235 2.7.0 Authentication successful")
+		case upper == "AUTH CRAM-MD5":
+			if !challenge("cram", "<1.relio-test@relay.internal>") {
+				return
+			}
+			write("235 2.7.0 Authentication successful")
 		case strings.HasPrefix(upper, "AUTH"):
 			write("235 2.7.0 Authentication successful")
 		case strings.HasPrefix(upper, "MAIL FROM"):
@@ -163,16 +274,159 @@ func TestDeliverWithoutAuthentication(t *testing.T) {
 	}
 }
 
+// Credentials go over plaintext only when the administrator said so with
+// security=none — and unlike the standard library, loopback is no exception.
 func TestDeliverAuthenticatesWhenConfigured(t *testing.T) {
 	relay := startRelay(t, true)
 	config := relayConfig(relay)
 	config.Username, config.Password = "relio", "secret"
+	err := Deliver(context.Background(), config, Message{To: "hong@corp.example", Subject: "x", Body: "y"})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "암호화되지 않은 연결") {
+		t.Fatalf("auto without STARTTLS must refuse to authenticate even on loopback, got %v", err)
+	}
+	if transcript := strings.Join(relay.transcript(), "\n"); strings.Contains(transcript, "AUTH") {
+		t.Fatalf("credentials went out in the clear:\n%s", transcript)
+	}
+	config.Security = "none"
 	if err := Deliver(context.Background(), config, Message{To: "hong@corp.example", Subject: "x", Body: "y"}); err != nil {
-		t.Fatalf("deliver: %v", err)
+		t.Fatalf("deliver with explicit none: %v", err)
 	}
 	if transcript := strings.Join(relay.transcript(), "\n"); !strings.Contains(transcript, "AUTH PLAIN") {
 		t.Fatalf("expected PLAIN authentication:\n%s", transcript)
 	}
+}
+
+// secret is what the tests hand the transport; its base64 form is what a
+// PLAIN initial response or a LOGIN answer would carry on the wire.
+const secret = "s3cret"
+
+var encodedSecret = base64.StdEncoding.EncodeToString([]byte(secret))
+
+func remoteConfig(relay *fakeRelay) Config {
+	config := relayConfig(relay)
+	config.Username, config.Password = "relio", secret
+	return config
+}
+
+func assertNoCredentialsOnTheWire(t *testing.T, relay *fakeRelay) {
+	t.Helper()
+	transcript := strings.Join(relay.transcript(), "\n")
+	if strings.Contains(transcript, "AUTH") || strings.Contains(transcript, encodedSecret) || strings.Contains(transcript, secret) {
+		t.Fatalf("credentials reached a plaintext relay:\n%s", transcript)
+	}
+}
+
+// (a) A non-loopback relay that offers only PLAIN and no STARTTLS: auto must
+// refuse with the policy in the error, and nothing that looks like AUTH may
+// leave. (Before, the standard library refused with a bare "unencrypted
+// connection" and nothing explained why.)
+func TestPlaintextRelayOfferingPlainGetsNoCredentials(t *testing.T) {
+	relay := startRemoteRelay(t, &fakeRelay{mechanisms: "PLAIN"})
+	err := Deliver(context.Background(), remoteConfig(relay), Message{To: "hong@corp.example", Subject: "x", Body: "y"})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "mail.security=none") {
+		t.Fatalf("expected the plaintext policy to be named, got %v", err)
+	}
+	assertNoCredentialsOnTheWire(t, relay)
+}
+
+// (b) The same relay offering only LOGIN. This is the case that used to leak:
+// the LOGIN mechanism's own guard compared two copies of the same host name
+// and never fired.
+func TestPlaintextRelayOfferingLoginGetsNoCredentials(t *testing.T) {
+	relay := startRemoteRelay(t, &fakeRelay{mechanisms: "LOGIN"})
+	err := Deliver(context.Background(), remoteConfig(relay), Message{To: "hong@corp.example", Subject: "x", Body: "y"})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "암호화되지 않은 연결") {
+		t.Fatalf("expected the plaintext policy to be named, got %v", err)
+	}
+	assertNoCredentialsOnTheWire(t, relay)
+}
+
+// A plaintext relay that also offers CRAM-MD5 is usable: the password itself
+// never leaves, so the policy lets that mechanism through.
+func TestPlaintextRelayOfferingCramMD5Authenticates(t *testing.T) {
+	relay := startRemoteRelay(t, &fakeRelay{mechanisms: "PLAIN LOGIN CRAM-MD5"})
+	if err := Deliver(context.Background(), remoteConfig(relay), Message{To: "hong@corp.example", Subject: "x", Body: "y"}); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	transcript := strings.Join(relay.transcript(), "\n")
+	if !strings.Contains(transcript, "AUTH CRAM-MD5") || !strings.Contains(transcript, "(cram)") {
+		t.Fatalf("expected CRAM-MD5:\n%s", transcript)
+	}
+	if strings.Contains(transcript, encodedSecret) || strings.Contains(transcript, "AUTH PLAIN") || strings.Contains(transcript, "AUTH LOGIN") {
+		t.Fatalf("the password itself went out:\n%s", transcript)
+	}
+}
+
+// security=none is the administrator's explicit choice to send credentials in
+// the clear. Both mechanisms then work, including PLAIN on a non-localhost
+// relay, which the standard library's PlainAuth would have refused.
+func TestExplicitNoneSendsCredentialsInTheClear(t *testing.T) {
+	for _, mechanism := range []string{"PLAIN", "LOGIN"} {
+		t.Run(mechanism, func(t *testing.T) {
+			relay := startRemoteRelay(t, &fakeRelay{mechanisms: mechanism})
+			config := remoteConfig(relay)
+			config.Security = "none"
+			if err := Deliver(context.Background(), config, Message{To: "hong@corp.example", Subject: "x", Body: "y"}); err != nil {
+				t.Fatalf("deliver: %v", err)
+			}
+			transcript := strings.Join(relay.transcript(), "\n")
+			if !strings.Contains(transcript, "AUTH "+mechanism) {
+				t.Fatalf("expected %s authentication:\n%s", mechanism, transcript)
+			}
+			if mechanism == "LOGIN" && !strings.Contains(transcript, "(pass)"+encodedSecret) {
+				t.Fatalf("LOGIN should have answered the password challenge:\n%s", transcript)
+			}
+		})
+	}
+}
+
+// (c) With STARTTLS on offer, auto upgrades first and only then authenticates,
+// with PLAIN and LOGIN alike. Everything after STARTTLS is inside TLS: the
+// relay records it from the decrypted side.
+func TestStartTLSRelayAuthenticatesAfterUpgrade(t *testing.T) {
+	for _, mechanism := range []string{"PLAIN", "LOGIN"} {
+		t.Run(mechanism, func(t *testing.T) {
+			relay := startRemoteRelay(t, &fakeRelay{mechanisms: mechanism, tlsConfig: selfSignedTLS(t)})
+			config := remoteConfig(relay)
+			config.SkipVerify = true
+			if err := Deliver(context.Background(), config, Message{To: "hong@corp.example", Subject: "x", Body: "y"}); err != nil {
+				t.Fatalf("deliver: %v", err)
+			}
+			transcript := relay.transcript()
+			upgraded, authenticated := -1, -1
+			for index, line := range transcript {
+				switch {
+				case line == "STARTTLS":
+					upgraded = index
+				case strings.HasPrefix(line, "AUTH "+mechanism):
+					authenticated = index
+				}
+			}
+			if upgraded < 0 || authenticated < 0 || authenticated < upgraded {
+				t.Fatalf("expected STARTTLS before AUTH %s:\n%s", mechanism, strings.Join(transcript, "\n"))
+			}
+			if relay.message() == "" {
+				t.Fatal("the message never arrived over TLS")
+			}
+		})
+	}
+}
+
+// (d) A relay that accepts the connection and then says nothing must time out
+// with an error, without ever getting as far as credentials.
+func TestSilentRelayTimesOutWithoutCredentials(t *testing.T) {
+	relay := startRemoteRelay(t, &fakeRelay{mechanisms: "PLAIN LOGIN", silent: true})
+	config := remoteConfig(relay)
+	config.Timeout = time.Second
+	started := time.Now()
+	err := Deliver(context.Background(), config, Message{To: "hong@corp.example", Subject: "x", Body: "y"})
+	if err == nil {
+		t.Fatal("expected the silent relay to fail")
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("a silent relay took %s to give up", elapsed)
+	}
+	assertNoCredentialsOnTheWire(t, relay)
 }
 
 func TestDeliverExplainsMissingAuthSupport(t *testing.T) {

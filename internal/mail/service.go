@@ -101,8 +101,9 @@ func (s *Service) Notify(ctx context.Context, notification Notification, actorID
 func (s *Service) wait() { s.pending.Wait() }
 
 // dispatch is Notify's background half. Its return is the number of
-// deliveries recorded, which the renewal digest uses to decide whether a
-// notice has actually been given.
+// deliveries the relay accepted (rows that ended "sent"), which the renewal
+// digest uses to decide whether a notice has actually been given: a failed
+// attempt is in the log but has told nobody anything.
 func (s *Service) dispatch(ctx context.Context, notification Notification, actorID string, recipients []string) int {
 	config, err := s.Config(ctx)
 	if err != nil {
@@ -120,6 +121,7 @@ func (s *Service) dispatch(ctx context.Context, notification Notification, actor
 	// the delivery log rather than a server log explains the silence.
 	invalid := config.Validate()
 	body := notification.Render(config)
+	sent := 0
 	for _, address := range addresses {
 		delivery := Delivery{
 			ID: ids.New(), Event: notification.Event, Recipient: address, Subject: notification.Subject,
@@ -130,9 +132,11 @@ func (s *Service) dispatch(ctx context.Context, notification Notification, actor
 			s.complete(ctx, delivery, invalid)
 			continue
 		}
-		s.deliver(ctx, delivery, config, Message{To: address, Subject: notification.Subject, Body: body})
+		if s.deliver(ctx, delivery, config, Message{To: address, Subject: notification.Subject, Body: body}) == nil {
+			sent++
+		}
 	}
-	return len(addresses)
+	return sent
 }
 
 // SendNow delivers immediately and reports the outcome, which is what the
@@ -157,8 +161,9 @@ func (s *Service) SendNow(ctx context.Context, notification Notification, actorI
 }
 
 // deliver retries once, because a relay that briefly refuses a connection is
-// common and losing the notification is worse than a short wait.
-func (s *Service) deliver(parent context.Context, delivery Delivery, config Config, message Message) {
+// common and losing the notification is worse than a short wait. It returns
+// the outcome of the last attempt after recording it.
+func (s *Service) deliver(parent context.Context, delivery Delivery, config Config, message Message) error {
 	ctx, cancel := context.WithTimeout(parent, 2*config.Timeout+15*time.Second)
 	defer cancel()
 	var err error
@@ -178,6 +183,7 @@ func (s *Service) deliver(parent context.Context, delivery Delivery, config Conf
 		}
 	}
 	s.complete(ctx, delivery, err)
+	return err
 }
 
 func (s *Service) complete(ctx context.Context, delivery Delivery, cause error) {
