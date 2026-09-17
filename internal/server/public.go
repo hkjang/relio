@@ -161,9 +161,11 @@ func isMachinePath(path string) bool {
 	case path == "/mcp" || strings.HasPrefix(path, "/mcp/"):
 		return true
 	case strings.HasPrefix(path, "/.well-known/"):
-		// Relio authenticates MCP with a static Personal Key. Answering an OAuth
-		// discovery probe with the HTML shell made clients try to parse it;
-		// a plain 404 tells them to fall back to the bearer token.
+		// OAuth discovery probes. The protected-resource document has its own
+		// route (mcp_oauth.go); anything else under here is a probe for
+		// metadata this server does not publish, and answering it with the
+		// HTML shell made clients try to parse it. A plain 404 tells them to
+		// fall back to the bearer token.
 		return true
 	}
 	return false

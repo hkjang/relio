@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -74,6 +75,10 @@ type Service struct {
 	Secrets *secrets.Manager
 	Auth    *auth.Service
 	Audit   *audit.Service
+	Log     *slog.Logger
+	// mcp caches Keycloak discovery and signing keys for the MCP resource
+	// server (mcp_oauth.go). Zero value is ready to use.
+	mcp mcpKeyCache
 }
 
 func defaults(c *Config) {
@@ -877,31 +882,4 @@ func (s *Service) PublicStatus(ctx context.Context) map[string]any {
 	return map[string]any{"enabled": c.Enabled, "issuer": c.IssuerURL, "autoLogin": c.Enabled && c.AutoLogin}
 }
 
-func (s *Service) ValidateAccessToken(ctx context.Context, raw string) (string, error) {
-	c, err := s.privateConfig(ctx)
-	if err != nil || !c.Enabled {
-		return "", errors.New("OIDC access tokens are disabled")
-	}
-	d, err := fetchDiscovery(ctx, c)
-	if err != nil {
-		return "", err
-	}
-	client, err := newHTTPClient(c.RootCAPEM)
-	if err != nil {
-		return "", err
-	}
-	claims, err := verifyToken(ctx, client, d, raw, c.ClientID, "")
-	if err != nil {
-		return "", err
-	}
-	subject := strings.TrimSpace(fmt.Sprint(claims["sub"]))
-	if subject == "" || subject == "<nil>" {
-		return "", errors.New("access token has no subject")
-	}
-	var userID string
-	if err = s.DB.QueryRow(ctx, `SELECT id FROM users WHERE oidc_subject=$1 AND active=true`, subject).Scan(&userID); err != nil {
-		return "", errors.New("OIDC access token user is not provisioned")
-	}
-	return userID, nil
-}
 func ClientIP(r *http.Request) string { return httpx.ClientIP(r) }

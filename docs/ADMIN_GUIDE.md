@@ -150,6 +150,10 @@ Bootstrap 관리자는 **삭제되지 않는 비상 계정(Break Glass)** 입니
 | | `mcp.rate_limit_per_minute` | `60` | MCP 요청 한도 |
 | | `mcp.allowed_origins` | `[]` | MCP 요청을 허용할 Origin |
 | | `mcp.tool_allowlist` | `[]` | 비어 있으면 모든 도구, 채우면 그 도구만 노출 |
+| 사내 SSO 연결 → MCP를 SSO 토큰으로 | `mcp.oauth.enabled` | `false` | **꺼짐이 기본.** 켜면 `/mcp` 가 개인 연동 키에 더해 사내 SSO 액세스 토큰도 받습니다(3.3) |
+| | `mcp.oauth.resource` | 빈 값 | 리소스 식별자(RFC 8707). 비면 `system.service_url` + `/mcp` |
+| | `mcp.oauth.audience` | 빈 값 | 공백 구분 허용 대상. 토큰의 `aud` 또는 `azp` 와 비교 |
+| | `mcp.oauth.scopes` | 조회 범위 전체 + `mcp:use` | 공백 구분. SSO 토큰 주체가 MCP 에서 쓸 수 있는 범위 상한 |
 | | `keys.max_per_user` | `10` | 사용자당 키 개수 |
 | | `keys.default_lifetime_days` / `keys.max_lifetime_days` | `365` / `730` | 키 기본·최대 수명 |
 | | `keys.rotation_grace_hours` | `24` | 회전 후 옛 Secret 이 함께 유효한 시간 |
@@ -185,6 +189,62 @@ Keycloak 에 이미 로그인한 사람이 Relio 를 열면 로그인 화면 없
 4. 서버는 이 설정이 꺼져 있으면 `?prompt=none` 이 붙어 와도 조용히 평범한 로그인으로 바꿉니다. 주소를 손봐서 흐름을 바꿀 수는 없습니다. `return_to` 는 `/` 로 시작하고 `//` 로 시작하지 않는 같은 출처의 앱 경로만 받으며, API·MCP·로그인 경로나 그 밖의 값은 `/app` 으로 대체됩니다.
 
 로그인·콜백 경로와 API·MCP·헬스 경로에서는 시도하지 않습니다. 켜기 전에 **연결 테스트** 가 통과하고 수동 **사내 SSO로 로그인** 이 되는지 먼저 확인하세요 — 조용한 시도는 화면을 보여 주지 않으므로 설정 오류가 사용자에게는 "그냥 로그인 화면이 떴다" 로만 보이고, 원인은 서버 로그 `silent SSO attempt failed` 에 남습니다.
+
+#### MCP 를 SSO 토큰으로 (OAuth 2.1 리소스 서버, `mcp.oauth.*`)
+
+`/mcp` 는 개인 연동 키(`relio_…`)로 들어갑니다. 이 절의 설정을 켜면 **키 체계는 그대로 둔 채** 사내 SSO(Keycloak) 가 발급한 액세스 토큰으로도 들어올 수 있습니다. MCP 인가 규격(2025-06-18 이후)은 OAuth 2.1 이라, OAuth 를 지원하는 MCP 클라이언트(Claude, Cursor 등)에 MCP 주소 하나만 주면 클라이언트가 스스로 로그인 화면을 띄우고 토큰을 받아 옵니다. 이미 Keycloak 에 로그인한 사람은 화면을 거의 보지 않습니다.
+
+Relio 는 **리소스 서버**입니다. 인증 서버가 아닙니다 — `/authorize`, `/token`, 동적 클라이언트 등록을 제공하지 않고 토큰을 저장하거나 세션으로 바꾸지도 않습니다. 하는 일은 셋뿐입니다.
+
+1. `GET /.well-known/oauth-protected-resource` 와 `…/oauth-protected-resource/mcp` 에서 인증 없이 맨 JSON 메타데이터(RFC 9728)를 냅니다: `resource`, `authorization_servers`(= `oidc.issuer_url`), `bearer_methods_supported`, `scopes_supported`. 꺼져 있으면 404 입니다.
+2. `/mcp` 의 401 에 `WWW-Authenticate: Bearer realm="Relio MCP", resource_metadata="…"` 를 붙입니다. 클라이언트는 이 주소를 읽어 OAuth 흐름을 시작합니다. **MCP 경로에서만** 붙고 REST 401 은 예전과 같습니다.
+3. 같은 `Authorization: Bearer` 헤더에서 값이 `relio_` 로 시작하면 키, JWT 모양이면 SSO 토큰으로 검사합니다. 둘 다 아니면 예전과 같은 거절입니다. SSO 토큰은 **`/mcp` 에서만** 받습니다 — REST·관리 API 는 지금처럼 키와 세션만 받습니다.
+
+**설정** — 사내 SSO 연결 화면 아래쪽 **MCP를 SSO 토큰으로** 카드입니다. 켜지는 조건은 셋이 다 있을 때입니다: SSO 주소(`oidc.issuer_url`)가 있고, 리소스 식별자를 만들 수 있고(`mcp.oauth.resource` 또는 절대 URL 인 `system.service_url`), `mcp.enabled` 가 켜져 있음. 하나라도 빠지면 켜 두어도 꺼진 것처럼 동작하고 화면에 이유가 뜨며 로그 `mcp oauth is enabled but cannot run` 에 남습니다. 리소스 식별자는 클라이언트가 실제로 접속하는 **공개 HTTPS 주소 + `/mcp`** 여야 합니다(프록시 뒤의 `http://127.0.0.1:8080/mcp` 가 아님) — 기본값 `http://localhost:8080` 인 채로는 켜지 마세요.
+
+**토큰 검사** — 서명(Keycloak JWKS, RS/ES/PS 계열만; HS*·none 거부), `iss`(= `oidc.issuer_url`), `exp`·`nbf`, `typ`(`ID` 면 거부 — ID 토큰은 로그인 증거지 API 자격이 아님), `cnf`(있으면 거부 — 검증할 수 없는 소지자 증명), `sub`, 그리고 **대상**. 대상 검사는 다른 앱용 토큰이 이 앱의 `/mcp` 를 열지 못하게 하는 핵심이며 다음 중 하나가 맞아야 합니다.
+
+- `aud` 에 리소스 식별자가 있다 — Keycloak 에 Audience 매퍼를 둔 정식 경로.
+- `aud` 또는 `azp` 가 `mcp.oauth.audience` 에 있다 — 매퍼 없이 쓰는 호환 경로. 실제 Keycloak 26 은 액세스 토큰의 `aud` 에 `account` 만 싣고 클라이언트 ID 는 `azp` 에 담으므로, MCP 클라이언트 ID 를 여기 적으면 됩니다.
+
+거절할 때는 본 `aud`/`azp` 와 고칠 값을 메시지에 넣습니다. 운영자는 그 메시지 하나로 설정을 끝냅니다. 원인(어느 검사가 실패했는지)은 서버 로그 `mcp oauth token refused` 에 남고, 토큰 원문은 어디에도 기록되지 않습니다. 검증에 필요한 Discovery 와 서명 키는 메모리에 캐시되며(Discovery 10분, 키는 모르는 `kid` 가 오면 다시 읽되 초당 1회) 키 교체는 재시작 없이 따라갑니다. `jwks_uri` 가 발급자와 다른 서버를 가리키면 거부합니다.
+
+**계정** — 토큰의 `sub` 로 **이미 등록된 활성** 계정(`users.oidc_subject`)만 찾습니다. 없으면 "먼저 웹으로 한 번 로그인하세요" 로 거부합니다. 웹 SSO 로그인이 등록이고 토큰은 등록의 자리가 아닙니다 — 정지된 계정이 MCP 로 되살아나거나 토큰의 role 로 관리자가 되는 일은 없습니다. SSO 로 들어온 주체는 그 사용자가 키를 만들어 들어왔을 때와 **같은 문**(채널 MCP, 범위 ∩ 사용자 권한 ∩ 도구 허용 목록, 요청 한도, 감사 로그)을 지나고, 범위는 토큰의 `scope` 가 아니라 `mcp.oauth.scopes` 가 정합니다(토큰이 Relio 의 범위 어휘를 싣고 오면 교집합).
+
+**Keycloak 쪽 할 일**
+
+1. MCP 클라이언트용 **공개(public) 클라이언트**를 새로 만듭니다(예: `relio-mcp`). Standard Flow 켬, PKCE `S256`, Direct Access Grants·Implicit·Service accounts 끔. 웹 로그인 클라이언트(`oidc.client_id`)와 **다른** 클라이언트입니다.
+2. Valid Redirect URIs 에 쓰는 MCP 클라이언트의 콜백을 정확히 적습니다(Claude 는 `https://claude.ai/api/mcp/auth_callback`, 로컬 클라이언트는 `http://127.0.0.1:*/callback` 류). `*` 하나로 다 여는 것은 금지.
+3. 정식 경로: 그 클라이언트(또는 전용 client scope)에 **Audience 매퍼** — Mapper type `Audience`, Included Custom Audience = 리소스 식별자(예: `https://crm.example.com/mcp`), Add to access token 켬, Add to ID token 끔. 호환 경로: 매퍼 없이 이 화면의 **허용 대상**에 클라이언트 ID(`relio-mcp`)를 적습니다.
+4. 액세스 토큰 수명은 짧게(5분 안팎). Relio 는 introspection 을 하지 않으므로 Keycloak 에서 로그아웃하거나 사용자를 끄더라도 **이미 발급된 토큰은 만료까지 삽니다.** 급하면 Relio 의 사용자 비활성화가 다음 요청부터 막습니다.
+
+**확인** — 설정을 저장한 뒤 서버 밖에서:
+
+```bash
+# 1) 메타데이터 — 200 이고 resource·authorization_servers 가 기대한 값인지
+curl -sS https://crm.example.com/.well-known/oauth-protected-resource/mcp
+# 2) 토큰 없는 401 이 메타데이터를 가리키는지
+curl -sS -i -X POST https://crm.example.com/mcp -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -i www-authenticate
+# → WWW-Authenticate: Bearer realm="Relio MCP", resource_metadata="https://crm.example.com/.well-known/oauth-protected-resource/mcp"
+# 3) 토큰으로 tools/list (토큰은 클라이언트가 받아 온 것을 그대로)
+curl -sS https://crm.example.com/mcp -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+**거절 메시지별 조치** (`401 invalid_token` 의 본문 `message`)
+
+| 메시지 | 뜻 | 조치 |
+|---|---|---|
+| `SSO 토큰이 이 서버를 위해 발급된 것이 아닙니다(aud […], azp "…")` | 대상 검사 실패 | 메시지의 `azp` 를 **허용 대상**에 적거나, Keycloak 클라이언트에 Audience 매퍼로 리소스 식별자를 더합니다 |
+| `이 SSO 계정은 Relio 에 등록되지 않았거나 비활성입니다` | `sub` 에 해당하는 활성 계정 없음 | 그 사용자가 웹으로 SSO 로그인을 한 번 합니다. 비활성이면 사용자 · 조직에서 활성화 |
+| `SSO 액세스 토큰이 만료되었습니다` | `exp` 지남 | 클라이언트가 토큰을 갱신하게 합니다(보통 자동) |
+| `SSO 액세스 토큰이 유효하지 않습니다(서명·발급자·만료)` | 서명·`iss`·`nbf`·알고리즘·키 | 로그 `mcp oauth token refused` 의 `error` 가 어느 검사인지 말합니다. 다른 realm 의 토큰, HS256 토큰, 회전 직후 1초 안의 새 키 등 |
+| `ID 토큰은 MCP 자격으로 쓸 수 없습니다` | 클라이언트가 ID 토큰을 보냄 | 클라이언트 설정에서 액세스 토큰을 보내게 합니다 |
+| `소지자 증명(cnf)이 묶인 토큰은 받지 않습니다` | DPoP·mTLS 바인딩 토큰 | Keycloak 클라이언트의 DPoP 를 끕니다 |
+| `Keycloak 발급자 정보를 읽지 못해 …` / `서명 키를 읽지 못해 …` | Relio → Keycloak 연결 실패 | 사내 SSO 연결 → 연결 테스트. 사내 CA 인증서, DNS, 방화벽 |
+| `Keycloak 의 jwks_uri 가 발급자와 다른 서버를 가리켜 …` | Discovery 의 `jwks_uri` 가 다른 origin | 키 집합을 CDN 등으로 옮긴 구성은 지원하지 않습니다. 발급자와 같은 서버에서 제공하게 합니다 |
+| `403 mcp_access_denied` | 토큰은 통과했으나 사용자 권한에 `mcp:use` 가 없음 | 그 사용자의 Role 에 `mcp:use` 를 줍니다. `mcp.oauth.scopes` 는 상한일 뿐 권한을 만들지 않습니다 |
 
 ### 3.4 영업 정책
 
@@ -393,7 +453,9 @@ docker rm relio-old             # 확인 뒤
 | 자동 로그인을 켰는데 로그인 화면이 뜸 | 서버 로그 `silent SSO declined` / `silent SSO attempt failed`, 주소의 `?sso=none` | `?sso=none` 은 Keycloak 이 세션 없음(`login_required`)으로 답했다는 뜻이며 정상입니다. 로그아웃 직후에는 의도적으로 시도하지 않습니다. 세션이 있는데도 뜬다면 로그의 오류 코드를 봅니다 — `consent_required` 면 Keycloak 클라이언트의 Consent Required 를 끄고, `attempt failed` 로 남은 다른 코드는 클라이언트 설정 오류입니다 |
 | SSO 콜백이 실패 | 사내 SSO 연결 → 연결 테스트 결과(Discovery/TLS/JWKS/Callback) | Keycloak 의 Redirect URI 가 `<service_url>/api/v1/auth/oidc/callback` 인지, `system.service_url` 이 실제 접속 주소인지, 사내 CA 인증서가 컨테이너에 있는지 확인 |
 | API 클라이언트가 HTTP 429 | 보안 · 파일 · 접속 → API 요청 한도 / 분, 연동 키 · API · MCP → MCP 요청 한도 | 신원당 한도입니다. 정당한 배치 작업이면 한도를 올리거나 키를 나눕니다 |
-| MCP 도구가 안 보임 | `mcp.tool_allowlist`, 키의 범위와 채널, `mcp.allowed_origins` | 허용 목록·범위·Origin 세 가지 교집합입니다 |
+| MCP 도구가 안 보임 | `mcp.tool_allowlist`, 키의 범위와 채널, `mcp.allowed_origins` | 허용 목록·범위·Origin 세 가지 교집합입니다. SSO 토큰으로 들어왔다면 범위는 `mcp.oauth.scopes` 입니다 |
+| MCP 클라이언트가 SSO 로그인 창을 띄우지 않고 키를 요구함 | `curl …/.well-known/oauth-protected-resource/mcp` 가 404 | `mcp.oauth.enabled` 가 꺼져 있거나 켜져 있어도 조건이 빠진 것입니다(로그 `mcp oauth is enabled but cannot run`). 3.3 의 켜지는 조건 세 가지 |
+| MCP 클라이언트가 로그인은 되는데 `401 invalid_token` | 응답 본문 `message`, 서버 로그 `mcp oauth token refused` | 3.3 의 거절 메시지별 조치 표. 가장 흔한 것은 대상 검사(허용 대상에 클라이언트 ID 적기)와 미등록 계정(웹으로 먼저 로그인) |
 | 로그 `capture forecast snapshot` / `run intelligence analysis` / `expire rotated keys` 오류 | 시스템 진단 → Background Job 카드 | 다음 주기에 재시도됩니다. `snapshot ran without the lock`·`take maintenance lock` 은 DB 잠금 문제이므로 PostgreSQL 상태를 봅니다 |
 | 사용자가 `서버 오류가 발생했습니다.` 와 요청 ID 를 전달 | `docker logs relio \| grep <requestId>` | `service error` 줄의 `error` 필드가 원인입니다 |
 | 방문자 분석을 켰는데 수집기에 아무것도 안 들어옴 | 방문자 분석 · CSP → 차단된 요청, 브라우저 개발자 콘솔의 `Content Security Policy` 오류 | 차단된 출처가 보이면 **이 출처 허용**. Momento 는 **같은 오리진 프록시** 를 켜면 정책과 무관해집니다. 프록시를 켰는데 `/momento/tracker.js` 가 `502` 면 Relio 서버에서 수집기 주소로 닿지 않는 것이고(로그 `momento proxy upstream failed`), `404` 면 켜진 Momento 공급자가 없는 것입니다. DNT 를 켠 브라우저는 의도적으로 로드하지 않습니다 |
@@ -423,7 +485,7 @@ docker rm relio-old             # 확인 뒤
 - 비밀번호는 argon2id 로 저장하며 원문을 보관하지 않습니다. 존재하지 않는 계정·비활성 계정도 같은 시간을 들여 거절해 아이디 열거를 막습니다.
 - 세션 쿠키는 HttpOnly·SameSite, 상태 변경 요청은 CSRF 토큰, 응답에는 CSP 가 붙습니다. 기본 상태에서 외부 CDN·폰트·분석 스크립트가 없고, 방문자 분석은 **방문자 분석 · CSP** 에서 출처별로 명시적으로 허용한 것만 CSP 에 추가됩니다. `'unsafe-inline'` 스크립트는 어떤 설정으로도 허용되지 않으며, Momento 의 같은 오리진 프록시(`/momento`)는 세션 쿠키를 떼고 넘깁니다(3.5).
 - SSO Client Secret 은 AES-256-GCM 으로, 개인 연동 키는 HMAC Digest 로만 저장됩니다.
-- MCP 는 Origin 검사, 개인 연동 키 인증, 도구 허용 목록, 감사 로그를 거칩니다.
+- MCP 는 Origin 검사, 개인 연동 키 인증, 도구 허용 목록, 감사 로그를 거칩니다. SSO 액세스 토큰(3.3, 기본 꺼짐)은 `/mcp` 에서만 받고, 서명·발급자·만료·대상을 요청마다 검사하며, 이미 등록된 활성 계정에만 관리자가 정한 범위 상한으로 연결합니다 — 계정을 만들거나 토큰의 role 을 권한으로 옮기지 않습니다.
 - 주요 보안 설정 변경은 모두 감사 로그에 남습니다.
 
 자세한 위협 모델과 근거는 [Security Model](security.md) 을 보세요.

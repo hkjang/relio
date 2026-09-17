@@ -84,8 +84,9 @@ func main() {
 	settingsService := &admin.SettingsService{DB: db, Secrets: secretManager, Audit: auditService}
 	keyService := &apikey.Service{DB: db, Secrets: secretManager, Audit: auditService}
 	approvalService := &approval.Service{DB: db, Audit: auditService}
-	oidcService := &oidc.Service{DB: db, Secrets: secretManager, Auth: authService, Audit: auditService}
-	authService.OIDCValidator = oidcService.ValidateAccessToken
+	oidcService := &oidc.Service{DB: db, Secrets: secretManager, Auth: authService, Audit: auditService, Log: logger}
+	// SSO access tokens open /mcp only (AuthenticateMCP); REST keeps keys and sessions.
+	authService.MCPOAuth = oidcService.AuthenticateMCPToken
 	personalService := &personal.Service{DB: db}
 	analyticsService := &analytics.Service{DB: db, Audit: auditService}
 	voiceService := &voice.Service{DB: db, CRM: crmService, Audit: auditService}

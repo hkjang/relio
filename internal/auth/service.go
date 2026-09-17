@@ -74,9 +74,49 @@ func (p *Principal) ChannelAllowed(channel string) bool {
 }
 
 type Service struct {
-	DB            *pgxpool.Pool
-	Secrets       *secrets.Manager
-	OIDCValidator func(context.Context, string) (string, error)
+	DB      *pgxpool.Pool
+	Secrets *secrets.Manager
+	// MCPOAuth verifies a Keycloak access token presented to /mcp and names the
+	// registered account and the scopes it may use. Nil, or a validator that
+	// refuses, means the bearer is treated exactly as an unknown key. It is
+	// consulted by AuthenticateMCP only: an SSO token is an MCP credential,
+	// never a REST or administrative one.
+	MCPOAuth func(context.Context, string) (OAuthGrant, error)
+}
+
+// OAuthGrant is what a verified SSO access token amounts to inside Relio: an
+// account that already exists and the scope ceiling the administrator set.
+type OAuthGrant struct {
+	UserID string
+	Scopes []string
+}
+
+// Refusal is an authentication failure whose Message may be shown to the
+// client verbatim — it names what was checked and what to change, never the
+// credential. Any other error is answered with the generic "sign in" message.
+type Refusal struct {
+	Message string
+	Cause   error
+}
+
+func (r *Refusal) Error() string {
+	if r.Cause == nil {
+		return r.Message
+	}
+	return r.Cause.Error()
+}
+func (r *Refusal) Unwrap() error { return r.Cause }
+
+// OAuthKeyID marks a principal that came in on an SSO access token. Setting
+// KeyID makes Has and ChannelAllowed apply KeyScopes and KeyChannels, so the
+// token passes through the same gate a Personal Key does; it is not a key row.
+const OAuthKeyID = "sso"
+
+// looksLikeJWT is the cheap shape test that separates a bearer that could be
+// an access token from one that is nothing this server accepts.
+func looksLikeJWT(token string) bool {
+	parts := strings.Split(token, ".")
+	return len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] != ""
 }
 
 func (s *Service) Bootstrap(ctx context.Context, cfg config.Config) error {
@@ -189,21 +229,27 @@ func (s *Service) CreateSession(ctx context.Context, userID, method, ip, ua stri
 	return token, p, nil
 }
 
+// Authenticate resolves the session cookie or the Personal Key on a request.
+// This is the door for REST, the web application and the administrative API:
+// a bearer that is not a key is refused here whatever else it might be.
 func (s *Service) Authenticate(r *http.Request) (*Principal, error) {
+	return s.authenticate(r, false)
+}
+
+// AuthenticateMCP is Authenticate plus the SSO access token. The same
+// Authorization: Bearer header carries either — a key by its prefix, a token
+// by its JWT shape — and only the MCP endpoint asks for this variant.
+func (s *Service) AuthenticateMCP(r *http.Request) (*Principal, error) {
+	return s.authenticate(r, true)
+}
+
+func (s *Service) authenticate(r *http.Request, oauth bool) (*Principal, error) {
 	if bearer := httpx.Bearer(r); bearer != "" {
 		if strings.HasPrefix(bearer, "relio_") {
 			return s.authenticateKey(r.Context(), bearer, httpx.ClientIP(r))
 		}
-		if s.OIDCValidator != nil {
-			userID, err := s.OIDCValidator(r.Context(), bearer)
-			if err == nil {
-				p, loadErr := s.loadPrincipal(r.Context(), userID)
-				if loadErr != nil {
-					return nil, loadErr
-				}
-				p.AuthMethod = "OIDC_ACCESS_TOKEN"
-				return p, nil
-			}
+		if oauth && s.MCPOAuth != nil && looksLikeJWT(bearer) {
+			return s.authenticateOAuth(r.Context(), bearer)
 		}
 		return nil, errors.New("invalid bearer token")
 	}
@@ -260,6 +306,26 @@ func (s *Service) authenticateKey(ctx context.Context, raw, ip string) (*Princip
 	p.KeyScopes = scopes
 	p.KeyChannels = channels
 	_, _ = s.DB.Exec(ctx, `UPDATE personal_keys SET last_used_at=now(),last_used_ip=NULLIF($2,'')::inet WHERE id=$1`, dbID, ip)
+	return p, nil
+}
+
+// authenticateOAuth turns a verified SSO token into the principal the same
+// person would have through a Personal Key limited to the administrator's
+// scopes and the MCP channel. The account is looked up, never created, and
+// nothing in the token — no role claim — reaches the permission set.
+func (s *Service) authenticateOAuth(ctx context.Context, token string) (*Principal, error) {
+	grant, err := s.MCPOAuth(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	p, err := s.loadPrincipal(ctx, grant.UserID)
+	if err != nil {
+		return nil, err
+	}
+	p.AuthMethod = "OIDC_ACCESS_TOKEN"
+	p.KeyID = OAuthKeyID
+	p.KeyScopes = grant.Scopes
+	p.KeyChannels = []string{"MCP"}
 	return p, nil
 }
 
