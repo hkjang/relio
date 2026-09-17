@@ -388,7 +388,7 @@ docker rm relio-old             # 확인 뒤
 | 로그 `bootstrap administrator initialization failed` | DB 권한, `BOOTSTRAP_ADMIN` 값 | 최초 기동에서만 나옵니다. DB 를 비우고 다시 시도 |
 | `/health/ready` 가 실패 | 응답 본문의 `postgres`, `schema.status` | DB 연결 또는 마이그레이션 문제. 위 항목 참고 |
 | 사용자가 `로그인 시도가 너무 많습니다` 를 봄 | 감사 로그 `LOGIN_FAILED` 의 IP | 같은 주소의 실패 반복. 공용 NAT 뒤라면 정상 사용자도 걸릴 수 있습니다. 잠시 기다리면 풀립니다 |
-| 사용자가 `일반 로컬 로그인이 비활성화되어 있습니다` 를 봄 | 보안 · 파일 · 접속 → 일반 로컬 로그인 허용 | SSO 가 죽어 로컬로 들어와야 하면 Bootstrap 관리자로 로그인해 켭니다. Bootstrap 은 이 설정과 무관하게 항상 로그인됩니다 |
+| 사용자가 `일반 로컬 로그인이 비활성화되어 있습니다` 를 봄 | 보안 · 파일 · 접속 → 일반 로컬 로그인 허용 | SSO 가 죽어 로컬로 들어와야 하면 Bootstrap 관리자로 로그인해 켭니다. Bootstrap 은 이 설정과 무관하게 항상 로그인됩니다. 이 안내는 비밀번호가 맞는 일반 계정에만 나가고, 틀린 비밀번호·없는 아이디는 설정과 무관하게 `아이디 또는 비밀번호가 올바르지 않습니다` 로 답해 어느 계정이 Bootstrap 인지 밖에서 알 수 없습니다. 두 경우 모두 `LOGIN_FAILED` 로 감사되며 `audit_logs.metadata.reason`(DB) 에 `local_login_disabled` / `invalid_credentials` 로 남습니다 |
 | SSO 로그인 후 "아직 사용 권한이 없습니다" | 권한 · 데이터 범위의 기본 Role 지정 | 기본 Role 이 비어 있으면 지정. 이미 들어온 사용자는 사용자 · 조직 → 권한에서 부여 |
 | 자동 로그인을 켰는데 로그인 화면이 뜸 | 서버 로그 `silent SSO declined` / `silent SSO attempt failed`, 주소의 `?sso=none` | `?sso=none` 은 Keycloak 이 세션 없음(`login_required`)으로 답했다는 뜻이며 정상입니다. 로그아웃 직후에는 의도적으로 시도하지 않습니다. 세션이 있는데도 뜬다면 로그의 오류 코드를 봅니다 — `consent_required` 면 Keycloak 클라이언트의 Consent Required 를 끄고, `attempt failed` 로 남은 다른 코드는 클라이언트 설정 오류입니다 |
 | SSO 콜백이 실패 | 사내 SSO 연결 → 연결 테스트 결과(Discovery/TLS/JWKS/Callback) | Keycloak 의 Redirect URI 가 `<service_url>/api/v1/auth/oidc/callback` 인지, `system.service_url` 이 실제 접속 주소인지, 사내 CA 인증서가 컨테이너에 있는지 확인 |
