@@ -196,7 +196,7 @@ Keycloak 에 이미 로그인한 사람이 Relio 를 열면 로그인 화면 없
 
 Relio 는 **리소스 서버**입니다. 인증 서버가 아닙니다 — `/authorize`, `/token`, 동적 클라이언트 등록을 제공하지 않고 토큰을 저장하거나 세션으로 바꾸지도 않습니다. 하는 일은 셋뿐입니다.
 
-1. `GET /.well-known/oauth-protected-resource` 와 `…/oauth-protected-resource/mcp` 에서 인증 없이 맨 JSON 메타데이터(RFC 9728)를 냅니다: `resource`, `authorization_servers`(= `oidc.issuer_url`), `bearer_methods_supported`, `scopes_supported`. 꺼져 있으면 404 입니다.
+1. `GET /.well-known/oauth-protected-resource` 와 `…/oauth-protected-resource/mcp`(리소스 경로가 다르면 그 경로) 에서 인증 없이 맨 JSON 메타데이터(RFC 9728)를 냅니다: `resource`, `authorization_servers`(= `oidc.issuer_url`), `bearer_methods_supported`, `scopes_supported`. 꺼져 있거나 다른 경로면 404 입니다.
 2. `/mcp` 의 401 에 `WWW-Authenticate: Bearer realm="Relio MCP", resource_metadata="…"` 를 붙입니다. 클라이언트는 이 주소를 읽어 OAuth 흐름을 시작합니다. **MCP 경로에서만** 붙고 REST 401 은 예전과 같습니다.
 3. 같은 `Authorization: Bearer` 헤더에서 값이 `relio_` 로 시작하면 키, JWT 모양이면 SSO 토큰으로 검사합니다. 둘 다 아니면 예전과 같은 거절입니다. SSO 토큰은 **`/mcp` 에서만** 받습니다 — REST·관리 API 는 지금처럼 키와 세션만 받습니다.
 
@@ -207,7 +207,7 @@ Relio 는 **리소스 서버**입니다. 인증 서버가 아닙니다 — `/aut
 - `aud` 에 리소스 식별자가 있다 — Keycloak 에 Audience 매퍼를 둔 정식 경로.
 - `aud` 또는 `azp` 가 `mcp.oauth.audience` 에 있다 — 매퍼 없이 쓰는 호환 경로. 실제 Keycloak 26 은 액세스 토큰의 `aud` 에 `account` 만 싣고 클라이언트 ID 는 `azp` 에 담으므로, MCP 클라이언트 ID 를 여기 적으면 됩니다.
 
-거절할 때는 본 `aud`/`azp` 와 고칠 값을 메시지에 넣습니다. 운영자는 그 메시지 하나로 설정을 끝냅니다. 원인(어느 검사가 실패했는지)은 서버 로그 `mcp oauth token refused` 에 남고, 토큰 원문은 어디에도 기록되지 않습니다. 검증에 필요한 Discovery 와 서명 키는 메모리에 캐시되며(Discovery 10분, 키는 모르는 `kid` 가 오면 다시 읽되 초당 1회) 키 교체는 재시작 없이 따라갑니다. `jwks_uri` 가 발급자와 다른 서버를 가리키면 거부합니다.
+거절할 때는 본 `aud`/`azp` 와 고칠 값을 메시지에 넣습니다. 운영자는 그 메시지 하나로 설정을 끝냅니다. 원인(어느 검사가 실패했는지)은 서버 로그 `mcp oauth token refused` 의 `detail` 에, 클라이언트가 받은 401 의 `requestId` 는 같은 줄의 `request_id` 에 남고, 토큰 원문은 어디에도 기록되지 않습니다. 검증에 필요한 Discovery 와 서명 키는 메모리에 캐시되며(Discovery 10분, 키는 모르는 `kid` 가 오면 다시 읽되 초당 1회; Discovery 읽기가 실패하면 30초 동안 다시 시도하지 않고 같은 이유로 거절) 키 교체는 재시작 없이 따라갑니다. Keycloak 이 느리거나 닿지 않아도 동시에 온 요청들은 한 번의 읽기를 함께 기다립니다. `jwks_uri` 가 발급자와 다른 서버를 가리키면 거부합니다.
 
 **계정** — 토큰의 `sub` 로 **이미 등록된 활성** 계정(`users.oidc_subject`)만 찾습니다. 없으면 "먼저 웹으로 한 번 로그인하세요" 로 거부합니다. 웹 SSO 로그인이 등록이고 토큰은 등록의 자리가 아닙니다 — 정지된 계정이 MCP 로 되살아나거나 토큰의 role 로 관리자가 되는 일은 없습니다. SSO 로 들어온 주체는 그 사용자가 키를 만들어 들어왔을 때와 **같은 문**(채널 MCP, 범위 ∩ 사용자 권한 ∩ 도구 허용 목록, 요청 한도, 감사 로그)을 지나고, 범위는 토큰의 `scope` 가 아니라 `mcp.oauth.scopes` 가 정합니다(토큰이 Relio 의 범위 어휘를 싣고 오면 교집합).
 
@@ -239,7 +239,7 @@ curl -sS https://crm.example.com/mcp -H "Authorization: Bearer $TOKEN" -H 'Conte
 | `SSO 토큰이 이 서버를 위해 발급된 것이 아닙니다(aud […], azp "…")` | 대상 검사 실패 | 메시지의 `azp` 를 **허용 대상**에 적거나, Keycloak 클라이언트에 Audience 매퍼로 리소스 식별자를 더합니다 |
 | `이 SSO 계정은 Relio 에 등록되지 않았거나 비활성입니다` | `sub` 에 해당하는 활성 계정 없음 | 그 사용자가 웹으로 SSO 로그인을 한 번 합니다. 비활성이면 사용자 · 조직에서 활성화 |
 | `SSO 액세스 토큰이 만료되었습니다` | `exp` 지남 | 클라이언트가 토큰을 갱신하게 합니다(보통 자동) |
-| `SSO 액세스 토큰이 유효하지 않습니다(서명·발급자·만료)` | 서명·`iss`·`nbf`·알고리즘·키 | 로그 `mcp oauth token refused` 의 `error` 가 어느 검사인지 말합니다. 다른 realm 의 토큰, HS256 토큰, 회전 직후 1초 안의 새 키 등 |
+| `SSO 액세스 토큰이 유효하지 않습니다(서명·발급자·만료)` | 서명·`iss`·`nbf`·알고리즘·키 | 로그 `mcp oauth token refused` 의 `detail` 이 어느 검사인지 말합니다. 다른 realm 의 토큰, HS256 토큰, 회전 직후 1초 안의 새 키 등 |
 | `ID 토큰은 MCP 자격으로 쓸 수 없습니다` | 클라이언트가 ID 토큰을 보냄 | 클라이언트 설정에서 액세스 토큰을 보내게 합니다 |
 | `소지자 증명(cnf)이 묶인 토큰은 받지 않습니다` | DPoP·mTLS 바인딩 토큰 | Keycloak 클라이언트의 DPoP 를 끕니다 |
 | `Keycloak 발급자 정보를 읽지 못해 …` / `서명 키를 읽지 못해 …` | Relio → Keycloak 연결 실패 | 사내 SSO 연결 → 연결 테스트. 사내 CA 인증서, DNS, 방화벽 |

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/hkjang/relio/internal/auth"
 	"github.com/hkjang/relio/internal/oidc"
@@ -21,7 +23,10 @@ import (
 const ProtectedResourceMetadataPath = "/.well-known/oauth-protected-resource"
 
 func (s *Server) protectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
-	settings := s.OIDC.MCPOAuthSettings(r.Context())
+	s.serveProtectedResourceMetadata(w, r, s.OIDC.MCPOAuthSettings(r.Context()))
+}
+
+func (s *Server) serveProtectedResourceMetadata(w http.ResponseWriter, r *http.Request, settings oidc.MCPOAuth) {
 	active, reason := settings.Active()
 	if !active {
 		if settings.Enabled {
@@ -34,7 +39,33 @@ func (s *Server) protectedResourceMetadata(w http.ResponseWriter, r *http.Reques
 		httpx.ErrorJSON(w, r, http.StatusNotFound, "mcp_oauth_disabled", "이 서버의 MCP 는 SSO 토큰을 받지 않습니다. 개인 연동 키(relio_…)를 사용하세요.", nil)
 		return
 	}
+	if !metadataPathServes(r.URL.Path, settings.Resource) {
+		// RFC 9728 §3: the per-path document describes *that* resource. The
+		// only resource here is /mcp; a document for any other path would
+		// tell a client that some other URL is protected the same way.
+		httpx.ErrorJSON(w, r, http.StatusNotFound, "not_found", "이 경로에는 보호 리소스 메타데이터가 없습니다. /.well-known/oauth-protected-resource"+resourcePath(settings.Resource)+" 를 읽으세요.", nil)
+		return
+	}
 	writeProtectedResourceMetadata(w, settings)
+}
+
+// metadataPathServes says whether a request path is one of the two RFC 9728
+// locations for the resource: the root document, or the well-known segment
+// followed by the resource's own path. A trailing slash on either is
+// tolerated; anything else is not this resource's metadata.
+func metadataPathServes(requestPath, resource string) bool {
+	requestPath = strings.TrimRight(requestPath, "/")
+	return requestPath == ProtectedResourceMetadataPath || requestPath == ProtectedResourceMetadataPath+resourcePath(resource)
+}
+
+// resourcePath is the path component of the resource identifier, without a
+// trailing slash (/mcp for https://crm.example.test/mcp).
+func resourcePath(resource string) string {
+	u, err := url.Parse(resource)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(u.Path, "/")
 }
 
 // writeProtectedResourceMetadata answers with the bare document. Anyone may

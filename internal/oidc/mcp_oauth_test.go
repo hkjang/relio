@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -12,15 +13,21 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/hkjang/relio/internal/auth"
+	"github.com/hkjang/relio/internal/platform/httpx"
+	"github.com/jackc/pgx/v5"
 )
 
 // MCP 를 개인 키 없이 Keycloak 토큰으로.
@@ -34,14 +41,19 @@ import (
 // so what is verified is the verification and not a stub of it.
 
 type fakeIDP struct {
-	server   *httptest.Server
-	rsaKey   *rsa.PrivateKey
-	ecKey    *ecdsa.PrivateKey
-	rogueKey *rsa.PrivateKey // never published
-	jwksHits atomic.Int32
-	jwksURI  string // overrides the default when set
+	server        *httptest.Server
+	rsaKey        *rsa.PrivateKey
+	ecKey         *ecdsa.PrivateKey
+	rogueKey      *rsa.PrivateKey // never published
+	discoveryHits atomic.Int32
+	jwksHits      atomic.Int32
+	jwksURI       string // overrides the default when set
 	// rotated, when set, is the only RSA key the JWKS publishes.
 	rotated *rsa.PrivateKey
+	// delay is how long every answer takes — a slow Keycloak; discoveryDown
+	// makes discovery answer 503 after that delay — an unreachable one.
+	delay         atomic.Int64
+	discoveryDown atomic.Bool
 }
 
 func newIDP(t *testing.T) *fakeIDP {
@@ -59,6 +71,12 @@ func newIDP(t *testing.T) *fakeIDP {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		idp.discoveryHits.Add(1)
+		time.Sleep(time.Duration(idp.delay.Load()))
+		if idp.discoveryDown.Load() {
+			http.Error(w, "keycloak is down", http.StatusServiceUnavailable)
+			return
+		}
 		jwks := idp.server.URL + "/keys"
 		if idp.jwksURI != "" {
 			jwks = idp.jwksURI
@@ -70,6 +88,7 @@ func newIDP(t *testing.T) *fakeIDP {
 	})
 	mux.HandleFunc("/keys", func(w http.ResponseWriter, r *http.Request) {
 		idp.jwksHits.Add(1)
+		time.Sleep(time.Duration(idp.delay.Load()))
 		rsaKey, rsaKid := idp.rsaKey, "rsa-1"
 		if idp.rotated != nil {
 			rsaKey, rsaKid = idp.rotated, "rsa-2"
@@ -449,6 +468,188 @@ func TestKeyRotationIsFollowedWithoutHammeringTheProvider(t *testing.T) {
 	}
 	if hits := idp.jwksHits.Load(); hits != 2 {
 		t.Fatal("the foreign key set must not even be fetched")
+	}
+}
+
+// guards: AuthenticateMCPToken — the log line behind "look at the server
+// log" in the administrator guide. This runs the real entry point with a
+// real logger: the line carries the request id the client saw on its 401,
+// the message the client was told, and the verifier's own cause (which
+// signature, issuer, exp or nbf check failed) — and never the token.
+func TestARefusedTokenIsLoggedWithItsCauseAndTheRequestID(t *testing.T) {
+	idp := newIDP(t)
+	var buf bytes.Buffer
+	svc := &Service{Log: slog.New(slog.NewTextHandler(&buf, nil))}
+	settings := settingsFor(idp)
+	svc.mcpSettings = func(context.Context) MCPOAuth { return settings }
+	svc.mcpAccountLookup = func(_ context.Context, subject string) (string, error) {
+		if subject == "subject-mcp" {
+			return "user-1", nil
+		}
+		return "", pgx.ErrNoRows
+	}
+	now := time.Now()
+	tampered := func() string {
+		token := idp.accessToken(t, resource, nil)
+		parts := strings.Split(token, ".")
+		parts[1] = segment(map[string]any{"iss": idp.server.URL, "sub": "someone-else", "aud": resource, "exp": now.Add(time.Hour).Unix(), "typ": "Bearer"})
+		return strings.Join(parts, ".")
+	}()
+	cases := []struct {
+		name, token, wantMessage, wantDetail string
+	}{
+		{"expired", idp.accessToken(t, resource, map[string]any{"exp": now.Add(-2 * time.Minute).Unix()}), "만료", "token exp is missing or in the past"},
+		{"not yet valid", idp.accessToken(t, resource, map[string]any{"nbf": now.Add(5 * time.Minute).Unix()}), "유효하지", "token nbf is in the future"},
+		{"other issuer", idp.accessToken(t, resource, map[string]any{"iss": "https://other.example.test/realms/x"}), "발급자", "is not the configured issuer"},
+		{"forged signature", tampered, "서명", "token signature verification failed"},
+		{"unknown key", idp.accessToken(t, resource, map[string]any{"kid": "rogue"}), "서명", "is not in the issuer's key set"},
+		{"unknown account", idp.accessToken(t, resource, map[string]any{"sub": "stranger"}), "등록되지", `no active relio account for sso subject`},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf.Reset()
+			svc.mcp.nextKeyFetch = time.Time{} // each unknown kid may refetch once
+			requestID := fmt.Sprintf("req-%d", i)
+			if _, err := svc.AuthenticateMCPToken(httpx.WithRequestID(context.Background(), requestID), tc.token); err == nil {
+				t.Fatal("the token must be refused")
+			}
+			line := buf.String()
+			if !strings.Contains(line, "msg=\"mcp oauth token refused\"") {
+				t.Fatalf("the refusal must be logged: %q", line)
+			}
+			if !strings.Contains(line, "request_id="+requestID) {
+				t.Fatalf("the line must carry the request id %q: %q", requestID, line)
+			}
+			if !strings.Contains(line, tc.wantMessage) {
+				t.Fatalf("the line must carry what the client was told (%q): %q", tc.wantMessage, line)
+			}
+			if !strings.Contains(line, tc.wantDetail) {
+				t.Fatalf("the line must carry the verifier's own cause (%q): %q", tc.wantDetail, line)
+			}
+			if strings.Contains(line, tc.token) || strings.Contains(line, "request_id=missing") {
+				t.Fatalf("the line may not carry the token, and had a request id: %q", line)
+			}
+		})
+	}
+	// An accepted token is not a refusal: nothing is logged.
+	buf.Reset()
+	grant, err := svc.AuthenticateMCPToken(httpx.WithRequestID(context.Background(), "req-ok"), idp.accessToken(t, resource, nil))
+	if err != nil || grant.UserID != "user-1" || !slices.Contains(grant.Scopes, "mcp:use") {
+		t.Fatalf("accepted: %#v %v", grant, err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("an accepted token logs nothing: %q", buf.String())
+	}
+	// A context without a request id says so rather than logging a blank.
+	buf.Reset()
+	_, _ = svc.AuthenticateMCPToken(context.Background(), tampered)
+	if line := buf.String(); !strings.Contains(line, "request_id=missing") || !strings.Contains(line, "token signature verification failed") {
+		t.Fatalf("no request id in ctx must be visible: %q", line)
+	}
+	// Switched off: the plain (non-refusal) error is logged with the id too.
+	buf.Reset()
+	svc.mcpSettings = func(context.Context) MCPOAuth { off := settings; off.Enabled = false; return off }
+	_, _ = svc.AuthenticateMCPToken(httpx.WithRequestID(context.Background(), "req-off"), tampered)
+	if line := buf.String(); !strings.Contains(line, "request_id=req-off") || !strings.Contains(line, "mcp.oauth.enabled is off") {
+		t.Fatalf("a switched-off refusal is logged with the request id: %q", line)
+	}
+}
+
+// guards: mcpDiscovery, mcpKey — no round trip to Keycloak runs under the
+// cache lock. Concurrent callers share one; an unreachable issuer costs one
+// timeout for all of them and is then remembered for a while rather than
+// retried on every request; a caller whose context ends is not held behind
+// the round trip, which still completes for everyone else.
+func TestConcurrentCallersShareOneRoundTripToTheProvider(t *testing.T) {
+	idp := newIDP(t)
+	const delay = 300 * time.Millisecond
+	idp.delay.Store(int64(delay))
+	settings := settingsFor(idp)
+	ctx := context.Background()
+	const n = 8
+	tokens := make([]string, n)
+	for i := range tokens {
+		tokens[i] = idp.accessToken(t, resource, nil)
+	}
+	verifyAll := func(svc *Service) (time.Duration, []error) {
+		errs := make([]error, n)
+		var wg sync.WaitGroup
+		start := time.Now()
+		for i := range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, errs[i] = svc.verifyMCPToken(ctx, settings, tokens[i], time.Now())
+			}()
+		}
+		wg.Wait()
+		return time.Since(start), errs
+	}
+
+	// Keycloak unreachable: discovery fails after the delay. Before, every
+	// caller queued behind the lock for its own attempt (n × delay); now
+	// they share one.
+	idp.discoveryDown.Store(true)
+	svc := &Service{}
+	elapsed, errs := verifyAll(svc)
+	for i, err := range errs {
+		refusal := refusalOf(t, err)
+		if !strings.Contains(refusal.Message, "발급자 정보") || !strings.Contains(refusal.Cause.Error(), "discovery") {
+			t.Fatalf("caller %d: %v", i, err)
+		}
+	}
+	if hits := idp.discoveryHits.Load(); hits != 1 {
+		t.Fatalf("%d concurrent callers must share one discovery attempt, made %d", n, hits)
+	}
+	if elapsed > 3*delay {
+		t.Fatalf("callers were serialized: %d of them took %s for one %s round trip", n, elapsed, delay)
+	}
+	// Within the retry pause the failure is answered from memory: no round
+	// trip, no wait.
+	start := time.Now()
+	_, err := svc.verifyMCPToken(ctx, settings, tokens[0], time.Now())
+	if refusal := refusalOf(t, err); !strings.Contains(refusal.Cause.Error(), "discovery") {
+		t.Fatalf("negative cache must answer the same refusal: %v", err)
+	}
+	if since := time.Since(start); since > delay/2 || idp.discoveryHits.Load() != 1 {
+		t.Fatalf("a failed discovery must not be retried on the next request: took %s, %d attempts", since, idp.discoveryHits.Load())
+	}
+	// The pause over and Keycloak back: one retry, and it succeeds.
+	idp.discoveryDown.Store(false)
+	svc.mcp.mu.Lock()
+	svc.mcp.discoveryRetryAt = time.Time{}
+	svc.mcp.mu.Unlock()
+	elapsed, errs = verifyAll(svc)
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("caller %d after recovery: %v", i, err)
+		}
+	}
+	if d, k := idp.discoveryHits.Load(), idp.jwksHits.Load(); d != 2 || k != 1 {
+		t.Fatalf("recovery is one discovery and one JWKS read shared by all: %d discovery, %d jwks", d, k)
+	}
+	if elapsed > 4*delay {
+		t.Fatalf("callers were serialized on the key set: %d of them took %s", n, elapsed)
+	}
+
+	// A caller that gives up returns with its own context's error while the
+	// round trip goes on; the next caller joins that same round trip.
+	fresh := &Service{}
+	short, cancel := context.WithTimeout(ctx, delay/4)
+	defer cancel()
+	start = time.Now()
+	_, err = fresh.verifyMCPToken(short, settings, tokens[0], time.Now())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a cancelled caller gets its context's error, not the provider's answer: %v", err)
+	}
+	if since := time.Since(start); since >= delay {
+		t.Fatalf("a cancelled caller was held for the whole round trip: %s", since)
+	}
+	if _, err := fresh.verifyMCPToken(ctx, settings, tokens[1], time.Now()); err != nil {
+		t.Fatalf("the round trip the first caller started must serve the next: %v", err)
+	}
+	if d := idp.discoveryHits.Load(); d != 3 {
+		t.Fatalf("the abandoned round trip must be finished and reused, not restarted: %d discovery reads in total", d)
 	}
 }
 

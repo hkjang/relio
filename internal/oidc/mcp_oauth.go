@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/hkjang/relio/internal/auth"
+	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -219,21 +220,68 @@ func (o MCPOAuth) Challenge(refused bool) string {
 // an unknown key id — that is how rotation is picked up — but at most once a
 // second, so a stream of forged tokens cannot turn this server into a JWKS
 // client that hammers the identity provider.
+//
+// The mutex guards the fields only; no network call runs under it. A round
+// trip in progress is a *fetch* that every caller needing the same thing
+// waits on, so a Keycloak that is slow or down costs one timeout shared by
+// all concurrent requests, never one timeout per request in a queue behind
+// the lock. A failed discovery is remembered for a short while (the negative
+// cache) so that a stream of requests during an outage does not retry it
+// each time.
 type mcpKeyCache struct {
-	mu            sync.Mutex
-	issuer        string
-	discovery     Discovery
-	discoveredAt  time.Time
-	keys          map[string]signingKey
-	nextKeyFetch  time.Time
-	discoveryTTL  time.Duration
-	keyFetchPause time.Duration
+	mu           sync.Mutex
+	issuer       string
+	discovery    Discovery
+	discoveredAt time.Time
+	// discoveryRetryAt and discoveryErr are the negative cache: until the
+	// time passes, a stale or missing discovery is not re-read and, when
+	// nothing older is cached, the error is answered as it was.
+	discoveryRetryAt time.Time
+	discoveryErr     error
+	discoveryFetch   *fetch
+	keys             map[string]signingKey
+	nextKeyFetch     time.Time
+	keyFetch         *fetch
+	discoveryTTL     time.Duration
+	discoveryRetry   time.Duration
+	keyFetchPause    time.Duration
+}
+
+// fetch is one round trip to Keycloak in progress. It is started under the
+// lock (so a second caller finds it rather than starting its own), runs in a
+// goroutine detached from the starting request's cancellation (so a client
+// that gives up does not fail everyone waiting behind it), and publishes its
+// result by closing done. Waiters select on done and their own ctx.
+type fetch struct {
+	done      chan struct{}
+	discovery Discovery
+	keys      map[string]signingKey
+	err       error
 }
 
 const (
-	mcpDiscoveryTTL  = 10 * time.Minute
-	mcpKeyFetchPause = time.Second
+	mcpDiscoveryTTL   = 10 * time.Minute
+	mcpDiscoveryRetry = 30 * time.Second
+	mcpKeyFetchPause  = time.Second
 )
+
+// init applies the defaults; called with the lock held.
+func (c *mcpKeyCache) init() {
+	if c.discoveryTTL == 0 {
+		c.discoveryTTL, c.discoveryRetry, c.keyFetchPause = mcpDiscoveryTTL, mcpDiscoveryRetry, mcpKeyFetchPause
+	}
+}
+
+// await returns when the fetch is done or the caller's context is over,
+// whichever comes first.
+func (f *fetch) await(ctx context.Context) error {
+	select {
+	case <-f.done:
+		return f.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // signingKey is one JWKS entry this server can verify with.
 type signingKey struct {
@@ -254,17 +302,58 @@ func (s *Service) logger() *slog.Logger {
 // JWT-shaped bearer on /mcp. Every refusal is logged here with its cause —
 // the message a client sees names the check, the log names the failure — so
 // "look at the server log" in the administrator guide is a promise the code
-// keeps. The token itself is never logged.
+// keeps. The token itself is never logged. The request id is what ties the
+// line to the 401 the client saw (the response carries the same id).
 func (s *Service) AuthenticateMCPToken(ctx context.Context, raw string) (auth.OAuthGrant, error) {
 	grant, err := s.authenticateMCPToken(ctx, raw)
 	if err != nil {
-		s.logger().Warn("mcp oauth token refused", "error", err)
+		attrs := []any{"request_id", requestIDForLog(ctx)}
+		var refusal *auth.Refusal
+		if errors.As(err, &refusal) && refusal.Cause != nil {
+			// message is what the client was told; detail is the verifier's
+			// own words (which signature, issuer, exp or nbf check failed).
+			attrs = append(attrs, "message", refusal.Message, "detail", refusal.Cause)
+		} else {
+			attrs = append(attrs, "error", err)
+		}
+		s.logger().Warn("mcp oauth token refused", attrs...)
 	}
 	return grant, err
 }
 
+// requestIDForLog is the request id the HTTP middleware put in ctx. A caller
+// without one (a test, a future non-HTTP path) is not hidden behind an empty
+// value: the line says the id is missing.
+func requestIDForLog(ctx context.Context) string {
+	if id := httpx.RequestID(ctx); id != "" {
+		return id
+	}
+	return "missing"
+}
+
+// mcpOAuthSettings and mcpAccount are the two database reads on the token
+// path, so a test can run AuthenticateMCPToken end to end — the refusal log
+// included — without a database.
+func (s *Service) mcpOAuthSettings(ctx context.Context) MCPOAuth {
+	if s.mcpSettings != nil {
+		return s.mcpSettings(ctx)
+	}
+	return s.MCPOAuthSettings(ctx)
+}
+
+func (s *Service) mcpAccount(ctx context.Context, subject string) (string, error) {
+	if s.mcpAccountLookup != nil {
+		return s.mcpAccountLookup(ctx, subject)
+	}
+	// The account the web sign-in registered, and nothing else: no
+	// provisioning, no reactivation, no role from the token.
+	var userID string
+	err := s.DB.QueryRow(ctx, `SELECT id FROM users WHERE oidc_subject=$1 AND active=true`, subject).Scan(&userID)
+	return userID, err
+}
+
 func (s *Service) authenticateMCPToken(ctx context.Context, raw string) (auth.OAuthGrant, error) {
-	settings := s.MCPOAuthSettings(ctx)
+	settings := s.mcpOAuthSettings(ctx)
 	// A switched-off deployment refuses exactly as it did before this feature
 	// existed: a plain error, the generic 401, no new words about SSO.
 	if !settings.Enabled {
@@ -277,10 +366,7 @@ func (s *Service) authenticateMCPToken(ctx context.Context, raw string) (auth.OA
 	if err != nil {
 		return auth.OAuthGrant{}, err
 	}
-	// The account the web sign-in registered, and nothing else: no
-	// provisioning, no reactivation, no role from the token.
-	var userID string
-	err = s.DB.QueryRow(ctx, `SELECT id FROM users WHERE oidc_subject=$1 AND active=true`, claims.Subject).Scan(&userID)
+	userID, err := s.mcpAccount(ctx, claims.Subject)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return auth.OAuthGrant{}, &auth.Refusal{
 			Message: "이 SSO 계정은 Relio 에 등록되지 않았거나 비활성입니다. 먼저 웹으로 한 번 로그인하세요.",
@@ -467,53 +553,145 @@ func audienceAccepted(settings MCPOAuth, audience []string, azp string) bool {
 }
 
 // mcpSigningKey finds the key a token names, reading discovery and the JWKS
-// through the cache.
+// through the cache. The lock is taken only to read and write the cache;
+// the round trips happen in a fetch that concurrent callers share.
 func (s *Service) mcpSigningKey(ctx context.Context, settings MCPOAuth, kid, alg string) (signingKey, error) {
-	c := &s.mcp
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.discoveryTTL == 0 {
-		c.discoveryTTL, c.keyFetchPause = mcpDiscoveryTTL, mcpKeyFetchPause
-	}
-	if c.issuer != settings.Issuer {
-		// A changed issuer invalidates everything cached for the old one.
-		c.issuer, c.discovery, c.discoveredAt, c.keys, c.nextKeyFetch = settings.Issuer, Discovery{}, time.Time{}, nil, time.Time{}
-	}
 	client, err := newHTTPClient(settings.RootCAPEM)
 	if err != nil {
 		return signingKey{}, err
 	}
-	now := time.Now()
-	if c.discoveredAt.IsZero() || now.Sub(c.discoveredAt) > c.discoveryTTL {
-		discovery, err := fetchDiscovery(ctx, Config{IssuerURL: settings.Issuer, RootCAPEM: settings.RootCAPEM})
-		if err != nil {
-			if c.discoveredAt.IsZero() {
-				return signingKey{}, &auth.Refusal{Message: "Keycloak 발급자 정보를 읽지 못해 SSO 토큰을 확인할 수 없습니다. 잠시 후 다시 시도하거나 관리자에게 알리세요.", Cause: fmt.Errorf("discovery %s: %w", settings.Issuer, err)}
-			}
-			// Keep verifying with what is cached; a transient discovery outage
-			// must not sign every MCP client out.
-		} else {
-			if err := sameOrigin(settings.Issuer, discovery.JWKSURI); err != nil {
-				return signingKey{}, &auth.Refusal{Message: "Keycloak 의 jwks_uri 가 발급자와 다른 서버를 가리켜 SSO 토큰을 확인할 수 없습니다. 관리자에게 알리세요.", Cause: err}
-			}
-			c.discovery, c.discoveredAt = discovery, now
-		}
+	discovery, err := s.mcpDiscovery(ctx, settings)
+	if err != nil {
+		return signingKey{}, err
 	}
+	return s.mcpKey(ctx, client, discovery.JWKSURI, kid, alg)
+}
+
+// mcpDiscovery answers the issuer's discovery document from the cache, or
+// reads it — once, however many callers arrive at the same moment. A failed
+// read is remembered for discoveryRetry: with an older document in the cache
+// that document keeps serving (a transient outage must not sign every MCP
+// client out); without one the refusal is answered from memory until the
+// retry time, so an unreachable Keycloak costs one timeout per retry window
+// rather than one per request.
+func (s *Service) mcpDiscovery(ctx context.Context, settings MCPOAuth) (Discovery, error) {
+	c := &s.mcp
+	c.mu.Lock()
+	c.init()
+	if c.issuer != settings.Issuer {
+		// A changed issuer invalidates everything cached for the old one. A
+		// fetch in flight for the old issuer finishes into the void: it
+		// checks the issuer before writing.
+		c.issuer, c.discovery, c.discoveredAt, c.discoveryRetryAt, c.discoveryErr, c.keys, c.nextKeyFetch = settings.Issuer, Discovery{}, time.Time{}, time.Time{}, nil, nil, time.Time{}
+		c.discoveryFetch, c.keyFetch = nil, nil
+	}
+	now := time.Now()
+	fresh := !c.discoveredAt.IsZero() && now.Sub(c.discoveredAt) <= c.discoveryTTL
+	if fresh || now.Before(c.discoveryRetryAt) {
+		// Served from the cache: a fresh document, a stale one during the
+		// retry pause, or the failure that left nothing to serve.
+		discovery, err := c.discovery, c.discoveryErr
+		if !c.discoveredAt.IsZero() {
+			err = nil
+		}
+		c.mu.Unlock()
+		return discovery, err
+	}
+	f := c.discoveryFetch
+	if f == nil {
+		f = &fetch{done: make(chan struct{})}
+		c.discoveryFetch = f
+		issuer := settings.Issuer
+		go func() {
+			// Detached from the caller's cancellation (the document is for
+			// everyone waiting); the HTTP client's own timeout still bounds it.
+			discovery, err := fetchDiscovery(context.WithoutCancel(ctx), Config{IssuerURL: issuer, RootCAPEM: settings.RootCAPEM})
+			foreign := false
+			if err != nil {
+				err = &auth.Refusal{Message: "Keycloak 발급자 정보를 읽지 못해 SSO 토큰을 확인할 수 없습니다. 잠시 후 다시 시도하거나 관리자에게 알리세요.", Cause: fmt.Errorf("discovery %s: %w", issuer, err)}
+			} else if originErr := sameOrigin(issuer, discovery.JWKSURI); originErr != nil {
+				foreign = true
+				err = &auth.Refusal{Message: "Keycloak 의 jwks_uri 가 발급자와 다른 서버를 가리켜 SSO 토큰을 확인할 수 없습니다. 관리자에게 알리세요.", Cause: originErr}
+			}
+			c.mu.Lock()
+			if c.issuer == issuer {
+				c.discoveryFetch = nil
+				switch {
+				case err == nil:
+					c.discovery, c.discoveredAt, c.discoveryErr = discovery, time.Now(), nil
+				case foreign:
+					// The issuer now points at a key set this server will not
+					// trust: nothing cached from before is trusted either.
+					c.discovery, c.discoveredAt, c.keys = Discovery{}, time.Time{}, nil
+					fallthrough
+				default:
+					c.discoveryRetryAt, c.discoveryErr = time.Now().Add(c.discoveryRetry), err
+				}
+			}
+			c.mu.Unlock()
+			f.discovery, f.err = discovery, err
+			close(f.done)
+		}()
+	}
+	c.mu.Unlock()
+	err := f.await(ctx)
+	if err == nil {
+		return f.discovery, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ctx.Err() == nil && !c.discoveredAt.IsZero() {
+		// A refresh failed but an older document is still on hand.
+		return c.discovery, nil
+	}
+	return Discovery{}, err
+}
+
+// mcpKey looks the key id up in the cached set and, when it is unknown,
+// re-reads the set — the realm may have rotated — but not more than once a
+// second however many unknown ids arrive, and only once for however many
+// callers are waiting on the same read.
+func (s *Service) mcpKey(ctx context.Context, client *http.Client, jwksURI, kid, alg string) (signingKey, error) {
+	c := &s.mcp
+	c.mu.Lock()
 	if key, ok := c.keys[kid]; ok {
+		c.mu.Unlock()
 		return keyForAlg(key, alg)
 	}
-	// Unknown key id: the realm may have rotated. Re-read the set, but not
-	// more than once a second however many unknown ids arrive.
-	if now.Before(c.nextKeyFetch) {
-		return signingKey{}, fmt.Errorf("token kid %q is not in the cached key set and the set was refreshed less than %s ago", kid, c.keyFetchPause)
+	f := c.keyFetch
+	if f == nil {
+		now := time.Now()
+		if now.Before(c.nextKeyFetch) {
+			pause := c.keyFetchPause
+			c.mu.Unlock()
+			return signingKey{}, fmt.Errorf("token kid %q is not in the cached key set and the set was refreshed less than %s ago", kid, pause)
+		}
+		c.nextKeyFetch = now.Add(c.keyFetchPause)
+		f = &fetch{done: make(chan struct{})}
+		c.keyFetch = f
+		issuer := c.issuer
+		go func() {
+			keys, err := fetchSigningKeys(context.WithoutCancel(ctx), client, jwksURI)
+			if err != nil {
+				err = &auth.Refusal{Message: "Keycloak 서명 키를 읽지 못해 SSO 토큰을 확인할 수 없습니다. 잠시 후 다시 시도하거나 관리자에게 알리세요.", Cause: fmt.Errorf("jwks %s: %w", jwksURI, err)}
+			}
+			c.mu.Lock()
+			if c.issuer == issuer {
+				if err == nil {
+					c.keys = keys
+				}
+				c.keyFetch = nil
+			}
+			c.mu.Unlock()
+			f.keys, f.err = keys, err
+			close(f.done)
+		}()
 	}
-	c.nextKeyFetch = now.Add(c.keyFetchPause)
-	keys, err := fetchSigningKeys(ctx, client, c.discovery.JWKSURI)
-	if err != nil {
-		return signingKey{}, &auth.Refusal{Message: "Keycloak 서명 키를 읽지 못해 SSO 토큰을 확인할 수 없습니다. 잠시 후 다시 시도하거나 관리자에게 알리세요.", Cause: fmt.Errorf("jwks %s: %w", c.discovery.JWKSURI, err)}
+	c.mu.Unlock()
+	if err := f.await(ctx); err != nil {
+		return signingKey{}, err
 	}
-	c.keys = keys
-	if key, ok := c.keys[kid]; ok {
+	if key, ok := f.keys[kid]; ok {
 		return keyForAlg(key, alg)
 	}
 	return signingKey{}, fmt.Errorf("token kid %q is not in the issuer's key set", kid)

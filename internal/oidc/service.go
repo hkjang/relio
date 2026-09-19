@@ -79,6 +79,11 @@ type Service struct {
 	// mcp caches Keycloak discovery and signing keys for the MCP resource
 	// server (mcp_oauth.go). Zero value is ready to use.
 	mcp mcpKeyCache
+	// mcpSettings and mcpAccountLookup replace the two database reads on the
+	// MCP token path (mcp_oauth.go) when set; tests use them to run
+	// AuthenticateMCPToken without a database. Nil means the real queries.
+	mcpSettings      func(context.Context) MCPOAuth
+	mcpAccountLookup func(ctx context.Context, subject string) (userID string, err error)
 }
 
 func defaults(c *Config) {
