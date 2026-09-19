@@ -87,7 +87,7 @@ func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
 	resource := strings.TrimSpace(r.URL.Query().Get("resource"))
 	action := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("action")))
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	rows, err := s.DB.Query(r.Context(), `SELECT id,COALESCE(actor_id::text,''),COALESCE(actor_name,''),channel,action,resource,COALESCE(resource_id,''),before_data,after_data,COALESCE(ip::text,''),COALESCE(request_id,''),COALESCE(user_agent,''),occurred_at
+	rows, err := s.DB.Query(r.Context(), `SELECT id,COALESCE(actor_id::text,''),COALESCE(actor_name,''),channel,action,resource,COALESCE(resource_id,''),before_data,after_data,metadata,COALESCE(ip::text,''),COALESCE(request_id,''),COALESCE(user_agent,''),occurred_at
 		FROM audit_logs
 		WHERE ($1='' OR channel=$1)
 		  AND ($2='' OR resource=$2)
@@ -101,19 +101,33 @@ func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, actorID, actor, channel, action, resource, resourceID, ip, requestID, ua string
-		var before, after []byte
-		var occurred time.Time
-		if err = rows.Scan(&id, &actorID, &actor, &channel, &action, &resource, &resourceID, &before, &after, &ip, &requestID, &ua, &occurred); err != nil {
+		var row auditRow
+		if err = rows.Scan(&row.id, &row.actorID, &row.actor, &row.channel, &row.action, &row.resource, &row.resourceID, &row.before, &row.after, &row.metadata, &row.ip, &row.requestID, &row.userAgent, &row.occurredAt); err != nil {
 			s.serviceError(w, r, err)
 			return
 		}
-		var b, a any
-		_ = json.Unmarshal(before, &b)
-		_ = json.Unmarshal(after, &a)
-		items = append(items, map[string]any{"id": id, "actorId": actorID, "actor": actor, "channel": channel, "action": action, "resource": resource, "resourceId": resourceID, "before": b, "after": a, "ip": ip, "requestId": requestID, "userAgent": ua, "occurredAt": occurred})
+		items = append(items, auditItem(row))
 	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
+}
+
+// auditRow is one audit_logs row as adminAudit scans it; the jsonb columns
+// stay raw bytes until auditItem decodes them.
+type auditRow struct {
+	id, actorID, actor, channel, action, resource, resourceID, ip, requestID, userAgent string
+	before, after, metadata                                                             []byte
+	occurredAt                                                                          time.Time
+}
+
+// auditItem turns a scanned row into the API item. The three jsonb columns
+// are decoded independently: a NULL column or bytes that fail to decode are
+// exported as null rather than failing the whole listing.
+func auditItem(row auditRow) map[string]any {
+	var before, after, metadata any
+	_ = json.Unmarshal(row.before, &before)
+	_ = json.Unmarshal(row.after, &after)
+	_ = json.Unmarshal(row.metadata, &metadata)
+	return map[string]any{"id": row.id, "actorId": row.actorID, "actor": row.actor, "channel": row.channel, "action": row.action, "resource": row.resource, "resourceId": row.resourceID, "before": before, "after": after, "metadata": metadata, "ip": row.ip, "requestId": row.requestID, "userAgent": row.userAgent, "occurredAt": row.occurredAt}
 }
 
 type adminDiagnosticCheck struct {
