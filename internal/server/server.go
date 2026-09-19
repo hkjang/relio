@@ -148,6 +148,11 @@ func (s *Server) Handler() http.Handler {
 	// trailing slash used to fall through to the SPA and receive HTML.
 	mux.Handle("/mcp", s.mcpEntry())
 	mux.Handle("/mcp/", s.mcpEntry())
+	// RFC 9728: where an MCP client refused with 401 learns which
+	// authorization server to sign in with. Unauthenticated, bare JSON, 404
+	// until an administrator turns MCP over SSO on.
+	mux.HandleFunc("GET "+ProtectedResourceMetadataPath, s.protectedResourceMetadata)
+	mux.HandleFunc("GET "+ProtectedResourceMetadataPath+"/{resource...}", s.protectedResourceMetadata)
 	mux.HandleFunc("GET /analytics.js", s.analyticsLoader)
 	// Same-origin proxy to the Momento collector; 404 until an administrator
 	// enables a Momento provider with the proxy on. Unauthenticated like the
@@ -421,13 +426,19 @@ func (s *Server) mcpEntry() http.Handler {
 func (s *Server) requireAuth(next http.Handler, mcpChannel bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		p, err := s.Auth.Authenticate(r)
+		var p *auth.Principal
+		var err error
+		if mcpChannel {
+			// The MCP door also takes an SSO access token; every other door
+			// takes sessions and Personal Keys only.
+			p, err = s.Auth.AuthenticateMCP(r)
+		} else {
+			p, err = s.Auth.Authenticate(r)
+		}
 		if err != nil {
 			if mcpChannel {
-				// A 401 with no WWW-Authenticate sends MCP clients hunting for
-				// OAuth metadata this server does not publish. Naming the scheme
-				// keeps them on the Personal Key they already hold.
-				w.Header().Set("WWW-Authenticate", `Bearer realm="Relio MCP"`)
+				s.mcpUnauthorized(w, r, err)
+				return
 			}
 			httpx.ErrorJSON(w, r, http.StatusUnauthorized, "authentication_required", "로그인이 필요합니다.", nil)
 			return

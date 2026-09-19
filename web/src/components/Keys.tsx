@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { Modal } from './Layout'
 import { errorMessage } from '../App'
@@ -220,6 +220,18 @@ export function KeyModal({ scopes, tools, onClose, onCreated, onUpdated, notify,
 export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; keyPreview?: string }) {
   const [tab, setTab] = useState<'connect' | 'config' | 'tools' | 'trouble'>('connect')
   const origin = location.origin
+  // The server publishes RFC 9728 metadata only while an administrator has
+  // turned MCP over SSO on; a 404 is the ordinary key-only deployment. Read
+  // once, straight from the document the MCP client itself would read.
+  const [sso, setSso] = useState<{ resource: string; authorization_servers: string[] } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch('/.well-known/oauth-protected-resource/mcp', { headers: { Accept: 'application/json' } })
+      .then(r => (r.ok ? r.json() : null))
+      .then(doc => { if (!cancelled && doc && doc.resource) setSso(doc) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
   const sample = keyPreview || 'relio_{keyId}_{secret}'
   const qwenCommand = `qwen mcp add --scope user --transport http relio ${origin}/mcp \\
   --header "Authorization: Bearer ${sample}"`
@@ -283,6 +295,13 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
         <h3>직접 확인</h3>
         <CopyBlock text={curl} />
 
+        {sso && <>
+          <h3>키 없이 SSO로 연결</h3>
+          <p className="muted-copy">이 서버는 사내 SSO 액세스 토큰도 받습니다. OAuth를 지원하는 MCP 클라이언트(Claude, Cursor 등)에는 아래 주소 하나만 주면 클라이언트가 스스로 로그인 화면을 띄우고 토큰을 받아 옵니다. 사내 SSO에 이미 로그인한 상태면 화면이 거의 보이지 않습니다.</p>
+          <CopyBlock text={sso.resource} />
+          <p className="muted-copy">먼저 이 웹에 SSO로 한 번 로그인되어 있어야 합니다(그때 계정이 등록됩니다). SSO로 들어온 연결의 도구 범위는 관리자가 정한 상한과 사용자 권한의 교집합이며, 개인 키보다 넓어지지 않습니다. 인증 서버: <code>{sso.authorization_servers?.[0]}</code></p>
+        </>}
+
         <h3>지원 프로토콜 버전</h3>
         <p className="muted-copy"><code>2025-11-25</code>, <code>2025-06-18</code>, <code>2025-03-26</code>, <code>2024-11-05</code> — 클라이언트가 요청한 버전을 그대로 사용합니다.</p>
       </>}
@@ -322,7 +341,9 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
           <div><span>403 invalid_origin</span><b>관리자 화면에서 클라이언트 Origin을 허용하세요.</b></div>
           <div><span>405 sse_not_supported</span><b>정상입니다. 이 서버는 POST만 사용합니다.</b></div>
           <div><span>failed to parse json · Failed to get tools</span><b>v1.11.7 이상에서는 <code>/mcp</code>와 <code>/mcp/</code> 모두 동작합니다. 그 이전 버전은 끝에 <code>/</code>가 붙으면 화면 HTML을 반환했으므로 서버를 올리거나 슬래시를 빼세요. Qwen은 <code>httpUrl</code>, OpenCode는 <code>type: remote</code> 설정을 사용하세요.</b></div>
-          <div><span>OAuth 로그인 창을 요구함</span><b>Relio는 개인 키 Bearer 인증만 사용합니다. OpenCode는 <code>oauth: false</code>로 두세요. OAuth 탐색(.well-known) 경로는 404를 반환하는 것이 정상입니다.</b></div>
+          {sso
+            ? <div><span>SSO 토큰이 거부됨 (401 invalid_token)</span><b>응답 본문의 메시지가 원인을 말합니다. "이 서버를 위해 발급된 것이 아닙니다"면 관리자가 허용 대상에 클라이언트 ID를 적어야 하고, "등록되지 않았거나 비활성"이면 먼저 이 웹에 SSO로 로그인하세요. 개인 키는 그대로 동작합니다.</b></div>
+            : <div><span>OAuth 로그인 창을 요구함</span><b>이 서버는 개인 키 Bearer 인증만 사용합니다. OpenCode는 <code>oauth: false</code>로 두세요. OAuth 탐색(.well-known) 경로가 404를 반환하는 것이 정상입니다. 관리자가 사내 SSO 연결에서 <b>SSO 토큰 허용</b>을 켜면 키 없이도 연결됩니다.</b></div>}
           <div><span>Qwen Pending approval</span><b>Project Scope 서버는 작업공간 승인 후 연결됩니다. 바로 확인하려면 위 명령처럼 User Scope로 추가하세요.</b></div>
           <div><span>도구 호출이 isError로 반환됨</span><b>전송 오류가 아니라 도구가 실행되어 실패한 것입니다. 메시지에 사유가 들어 있습니다.</b></div>
         </div>

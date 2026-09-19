@@ -46,6 +46,28 @@ Relio MCP Server는 AI Agent가 CRM 데이터 및 영업 인텔리전스 분석�
   - `Accept: application/json, text/event-stream`
   - `MCP-Protocol-Version: 2025-11-25`
 
+### 2.1.1 키 없이 SSO 로 연결 (OAuth 2.1)
+
+관리자가 **사내 SSO 연결 → MCP를 SSO 토큰으로** 를 켜면 `/mcp` 는 개인 키에 더해 사내 SSO(Keycloak) 액세스 토큰도 받습니다. 이때 OAuth 를 지원하는 MCP 클라이언트(Claude, Cursor 등)에는 **MCP 주소 하나만** 주면 됩니다.
+
+1. 클라이언트가 토큰 없이 `/mcp` 를 부르면 `401` 과 함께 `WWW-Authenticate: Bearer realm="Relio MCP", resource_metadata="https://<주소>/.well-known/oauth-protected-resource/mcp"` 를 받습니다.
+2. 그 메타데이터(RFC 9728, 인증 없이 읽힘)에서 `authorization_servers` 를 읽고 사내 SSO 로 로그인 창을 띄웁니다(PKCE). 이미 SSO 에 로그인한 상태면 거의 보이지 않습니다.
+3. 받아 온 액세스 토큰을 같은 `Authorization: Bearer` 헤더로 보냅니다. 서버는 `relio_` 접두사면 키, JWT 모양이면 토큰으로 검사합니다.
+
+조건과 한계:
+
+- **먼저 이 웹에 SSO 로 한 번 로그인**되어 있어야 합니다. 그때 계정이 등록되며, 토큰으로 계정이 만들어지지는 않습니다. 없으면 `401 invalid_token` 과 "먼저 웹으로 한 번 로그인하세요".
+- SSO 로 들어온 연결의 도구 범위는 관리자가 정한 상한(`mcp.oauth.scopes`, 기본은 조회 전체) ∩ 사용자 권한 ∩ 도구 허용 목록입니다. 개인 키보다 넓어지지 않습니다.
+- SSO 토큰은 **`/mcp` 에서만** 받습니다. REST API 는 여전히 개인 키와 세션만 받습니다.
+- 다른 앱용으로 발급된 토큰은 거부되며 메시지에 본 `aud`/`azp` 와 고칠 값이 들어 있습니다 — 관리자에게 전달하면 됩니다.
+- 이 기능이 꺼진 서버에서는 메타데이터가 404 이고 토큰은 예전처럼 거절됩니다. 키 방식은 어느 경우에나 그대로 동작합니다.
+
+```bash
+curl -sS https://crm.example.com/.well-known/oauth-protected-resource/mcp
+# {"resource":"https://crm.example.com/mcp","authorization_servers":["https://sso.example.com/realms/company"],
+#  "bearer_methods_supported":["header"],"scopes_supported":["mcp:use","customer:read", …],"resource_name":"Relio CRM MCP"}
+```
+
 ### 2.2 MCP 통제 및 Risk Level Annotations
 AI Agent의 오작동 및 부적절한 변경을 방지하기 위해 모든 Tool에는 **Risk Level Annotation**이 포함되어 반환됩니다:
 

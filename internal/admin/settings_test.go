@@ -14,3 +14,19 @@ func TestEmptySecretValue(t *testing.T) {
 		}
 	}
 }
+
+func TestSettingKeyMayCarryAnInnerDotButANamespaceMayNot(t *testing.T) {
+	for _, key := range []string{"enabled", "oauth.enabled", "oauth.resource", "rate_limit_per_minute"} {
+		if !validSettingKey(key) {
+			t.Fatalf("key %q must be accepted", key)
+		}
+	}
+	for _, key := range []string{"", ".enabled", "oauth.", "oauth..enabled", "Oauth.enabled", "oauth enabled", "oauth/enabled"} {
+		if validSettingKey(key) {
+			t.Fatalf("key %q must be refused", key)
+		}
+	}
+	if validSettingName("mcp.oauth") {
+		t.Fatal("a namespace must stay dot-free so namespace.key reads back unambiguously")
+	}
+}

@@ -96,6 +96,18 @@ func validSettingName(v string) bool {
 	return true
 }
 
+// validSettingKey is validSettingName plus an inner dot, so a key can carry a
+// sub-namespace: the MCP OAuth settings are spelled mcp.oauth.enabled in every
+// product that has them, which here is namespace "mcp", key "oauth.enabled".
+// The namespace itself stays dot-free so "namespace.key" still reads back
+// unambiguously in audit entries and configuration bundles.
+func validSettingKey(v string) bool {
+	if strings.HasPrefix(v, ".") || strings.HasSuffix(v, ".") || strings.Contains(v, "..") {
+		return false
+	}
+	return validSettingName(strings.ReplaceAll(v, ".", "_"))
+}
+
 func emptySecretValue(value any) bool {
 	if value == nil {
 		return true
@@ -110,7 +122,7 @@ func (s *SettingsService) Put(ctx context.Context, p *auth.Principal, item Setti
 	}
 	item.Namespace = strings.ToLower(strings.TrimSpace(item.Namespace))
 	item.Key = strings.ToLower(strings.TrimSpace(item.Key))
-	if !validSettingName(item.Namespace) || !validSettingName(item.Key) {
+	if !validSettingName(item.Namespace) || !validSettingKey(item.Key) {
 		return errors.New("invalid setting namespace or key")
 	}
 	var before []byte
@@ -176,7 +188,7 @@ func (s *SettingsService) Delete(ctx context.Context, p *auth.Principal, namespa
 	if !p.Has("admin:write") && !p.IsBootstrap {
 		return errors.New("admin:write permission is required")
 	}
-	if !validSettingName(namespace) || !validSettingName(key) {
+	if !validSettingName(namespace) || !validSettingKey(key) {
 		return errors.New("invalid setting namespace or key")
 	}
 	var before []byte
