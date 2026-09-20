@@ -25,6 +25,7 @@ export const money = (value?: number) => new Intl.NumberFormat('ko-KR', { style:
 export const currencyMoney = (value?: number, currency = 'KRW') => new Intl.NumberFormat('ko-KR', { style: 'currency', currency, maximumFractionDigits: currency === 'KRW' ? 0 : 2 }).format(value || 0)
 export const number = (value?: number) => new Intl.NumberFormat('ko-KR').format(value || 0)
 export const date = (value?: string) => value ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(value)) : '—'
+export const dateTime = (value?: string) => value ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(value)) : '—'
 export const relative = (value?: string) => {
   if (!value) return '기록 없음'
   const days = Math.floor((Date.now() - new Date(value).getTime()) / 86400000)
