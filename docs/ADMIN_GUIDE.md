@@ -316,7 +316,7 @@ docker logs --since 1h relio | jq -r 'select(.level=="ERROR") | "\(.time) \(.msg
 
 ### 5.3 감사 로그
 
-**감사 로그** 화면은 Web·REST·MCP·Admin·Login·Key 채널의 작업을 검색하고 변경 전후를 비교합니다(`GET /api/v1/admin/audit?channel=&q=&limit=`). 감사 행은 PostgreSQL 에 남으므로 보관 기간은 DB 백업 정책을 따릅니다. 행을 열면 변경 전후 외에 **부가 정보**(로컬 로그인의 Bootstrap 계정 여부, SSO 로그인의 자동 로그인 여부 등 동작에 딸린 값)가 있을 때만 그 아래에 함께 보입니다.
+**감사 로그** 화면은 WEB·API·MCP·ADMIN·LOGIN·SSO 채널(개인 키 작업은 WEB 채널의 `KEY_*` 동작)의 작업을 검색하고 변경 전후를 비교합니다(`GET /api/v1/admin/audit?channel=&q=&limit=`). 목록의 시각은 초 단위까지 보여 같은 날의 로그인 여러 건도 순서를 가릴 수 있습니다. 감사 행은 PostgreSQL 에 남으므로 보관 기간은 DB 백업 정책을 따릅니다. 행을 열면 시각·User-Agent 와 변경 전후 외에 **부가 정보**(로컬 로그인의 Bootstrap 계정 여부, SSO 로그인의 자동 로그인 여부 등 동작에 딸린 값)가 있을 때만 그 아래에 함께 보입니다.
 
 ![감사 로그 — 채널·자원·행위자로 검색하고 변경 전후를 비교한다](assets/guide/admin-audit.png)
 
