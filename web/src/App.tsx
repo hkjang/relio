@@ -30,8 +30,13 @@ function takeReturn(): string {
 // The SSO button hands the remembered target to the server, which brings the
 // browser back there after the callback instead of the dashboard.
 export function pendingReturn(): string {
-  const target = sessionStorage.getItem(RETURN_KEY)
-  return target && isReturnable(new URL(target, location.origin).pathname) ? target : '/app/dashboard'
+  try {
+    const target = sessionStorage.getItem(RETURN_KEY)
+    return target && isReturnable(new URL(target, location.origin).pathname) ? target : '/app/dashboard'
+  } catch {
+    // Storage may be blocked, or the remembered URL may be malformed.
+    return '/app/dashboard'
+  }
 }
 
 export default function App() {
