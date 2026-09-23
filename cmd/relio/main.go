@@ -21,6 +21,7 @@ import (
 	"github.com/hkjang/relio/internal/crm"
 	"github.com/hkjang/relio/internal/intelligence"
 	"github.com/hkjang/relio/internal/job"
+	"github.com/hkjang/relio/internal/mail"
 	"github.com/hkjang/relio/internal/mcp"
 	"github.com/hkjang/relio/internal/oidc"
 	"github.com/hkjang/relio/internal/personal"
@@ -83,19 +84,24 @@ func main() {
 	crmService.StageGuard = intelligenceService
 	settingsService := &admin.SettingsService{DB: db, Secrets: secretManager, Audit: auditService}
 	keyService := &apikey.Service{DB: db, Secrets: secretManager, Audit: auditService}
-	approvalService := &approval.Service{DB: db, Audit: auditService}
+	// Mail borrows the user directory for addresses and the settings service for
+	// its configuration; it keeps no roster and answers no request synchronously.
+	mailService := mail.NewService(db, settingsService, authService, logger)
+	approvalService := &approval.Service{DB: db, Audit: auditService, Mail: mailService}
 	oidcService := &oidc.Service{DB: db, Secrets: secretManager, Auth: authService, Audit: auditService}
 	authService.OIDCValidator = oidcService.ValidateAccessToken
 	personalService := &personal.Service{DB: db}
 	analyticsService := &analytics.Service{DB: db, Audit: auditService}
-	voiceService := &voice.Service{DB: db, CRM: crmService, Audit: auditService}
+	voiceService := &voice.Service{DB: db, CRM: crmService, Audit: auditService, Mail: mailService, Clock: clock}
 	mcpServer := &mcp.Server{DB: db, CRM: crmService, Approvals: approvalService, Intelligence: intelligenceService, Relationships: relationshipService, Voices: voiceService}
 	app := server.New(db, logger, authService, auditService, crmService, settingsService, keyService, approvalService, oidcService, mcpServer, intelligenceService, relationshipService, voiceService, personalService, analyticsService)
 	app.Clock = clock
+	app.Mail = mailService
 	app.EncryptionKeyConfigured = cfg.EncryptionKey != ""
 	runner := job.New(db, logger)
 	runner.Snapshot = intelligenceService.CaptureForecastSnapshots
 	runner.Analyze = intelligenceService.RunIfDue
+	runner.Mail = mailService.NotifyRenewals
 	go runner.Run(ctx)
 	httpServer := &http.Server{Addr: config.ListenAddress, Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
 	go func() {

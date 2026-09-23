@@ -158,6 +158,16 @@ Bootstrap 관리자는 **삭제되지 않는 비상 계정(Break Glass)** 입니
 | | `sales_intelligence.snapshot_enabled` | `true` | 일별 Forecast Snapshot |
 | | `sales_finance.base_currency` | `KRW` | 기준 통화 |
 | | `sales_finance.renewal_radar_days` | `90` | 갱신 레이더가 보는 기간 |
+| 메일 알림 | `mail.enabled` | `false` | 꺼짐이 기본. 켜기 전까지 아무것도 보내지 않음 (3.6 절) |
+| | `mail.smtp_host` | (없음) | 사내 릴레이 주소. 비어 있으면 켜도 보내지 않고 발송 기록에 이유를 남김 |
+| | `mail.smtp_port` | `25` | 사내 릴레이는 대개 25 |
+| | `mail.security` | `auto` | `auto` · `none` · `starttls` · `tls`. `auto` 는 서버가 STARTTLS 를 알리면 쓰고 아니면 평문. 465 포트는 `tls` 로 간주 |
+| | `mail.skip_tls_verify` | `false` | 사내 인증서가 사설일 때만 |
+| | `mail.username` · `mail.password` | 빈 값 | 인증 없는 릴레이가 흔하므로 **선택**. 비밀번호는 암호화 저장되며 API 는 `configured` 만 답함. 자격증명은 TLS/STARTTLS 위에서만 보내고, 평문은 `mail.security=none` 을 명시했을 때만 (3.6 절) |
+| | `mail.from_address` · `mail.from_name` | (없음) · `Relio` | 보내는 사람. 주소가 비면 `relio@<릴레이 주소>` |
+| | `mail.base_url` | (없음) | 메일 속 링크의 기준 주소. 비어 있으면 `system.service_url` |
+| | `mail.timeout_seconds` | `10` | 연결·세션 시간 제한 |
+| | `mail.notify_approval_requested` / `notify_approval_decided` / `notify_voice_assigned` / `notify_contract_renewal` | `true` | 이벤트별 스위치 |
 | 관계 분석 | `relationship_intelligence.graph_max_nodes` | `100` | 관계도 최대 노드 |
 | | `relationship_intelligence.default_plan_year` | `0` (=올해) | 전략 고객 계획 기본 연도 |
 | | `relationship_intelligence.allowed_opportunity_roles` | `PRESALES, CONSULTANT, MANAGER, EXECUTIVE_SPONSOR, LEGAL, DELIVERY, OTHER` | 영업기회 협업팀 역할 |
@@ -271,6 +281,43 @@ Momento 를 추가할 때 **같은 오리진 프록시 사용** 이 기본으로
 - `/api/*`·`/mcp`·`/health/*` 같은 비화면 응답에는 스크립트가 들어갈 자리가 없습니다.
 - **로그인 후 화면만 추적** 을 켜면 세션 쿠키가 없는 로그인 화면에서는 추적기를 로드하지 않습니다. 기본은 꺼짐입니다. 추적기는 페이지 안에서 실행되는 스크립트이므로, 자격 증명을 다루는 화면까지 추적할지는 수집기를 신뢰하는 정도에 따라 정합니다 — 확신이 없으면 켭니다.
 - **Do Not Track 요청 존중** 이 기본으로 켜져 있어 브라우저가 DNT 를 보내면 로드하지 않습니다.
+
+### 3.6 메일 알림 (사내 SMTP 릴레이)
+
+**기본 설정 → 메일 알림** 에서 사내 SMTP 릴레이를 연결합니다. **기본값은 꺼짐**입니다 — 새로 설치한 곳은 아무것도 달라지지 않고, `mail.enabled` 를 켜기 전까지 어떤 연결도 시도하지 않습니다. 설정 키는 사내 공통 메일 표준(kanpic 과 같은 이름)을 따르므로 다른 앱에서 배운 이름을 그대로 씁니다. REST 로는 `GET/PUT /api/v1/admin/settings/mail/{key}`, 발송 기록 `GET /api/v1/admin/mail/deliveries`, 시험 발송 `POST /api/v1/admin/mail/test` 입니다.
+
+사내 릴레이는 **포트 25 · 인증 없음 · TLS 없음**이 흔합니다. 그것이 기본값이고, 사용자 이름을 비우면 인증하지 않으며 `security=auto` 는 서버가 STARTTLS 를 알릴 때만 씁니다. 폐쇄망에서는 릴레이 주소로 사내 메일 서비스 **postra** 를 가리키면 알림이 밖으로 나가지 않습니다.
+
+#### 자격증명은 암호화된 연결에서만
+
+`mail.username` 을 채우면 **비밀번호는 TLS(`tls`) 또는 STARTTLS 로 올라간 연결에서만** 보냅니다. `auto` 인데 릴레이가 STARTTLS 를 알리지 않으면 인증하지 않고 `암호화되지 않은 연결에서는 자격증명을 보내지 않습니다` 오류로 그 통을 `failed` 처리합니다 — 메일 한 통보다 릴레이 비밀번호가 사내망에 평문으로 흐르는 쪽이 더 비싸기 때문입니다. 이 규칙은 릴레이가 `PLAIN` 을 내밀든 `LOGIN` 을 내밀든 같습니다(`CRAM-MD5` 는 비밀번호를 그대로 보내지 않으므로 평문 연결에서도 허용). 평문으로 인증해도 되는 릴레이라면(예: 같은 호스트의 사이드카, 격리된 세그먼트) 관리자가 **`mail.security=none` 을 명시**해야 하며, 그때만 평문 인증을 합니다. 릴레이 주소가 loopback 이라고 예외를 두지 않습니다.
+
+#### 보내는 이벤트
+
+kanpic 의 목록을 옮기지 않고, Relio 에서 **이 메일이 오지 않으면 누군가 손해를 보거나 화면을 계속 새로고침하는 일** 네 가지만 고릅니다. "무언가 바뀜" 은 메일감이 아니므로 고객·영업기회 수정, 단계 이동, 활동 기록은 보내지 않습니다.
+
+| 이벤트 | 받는 사람 | 언제 | 스위치 |
+|---|---|---|---|
+| 승인 요청 도착 | 승인자 | 승인 요청이 제출된 순간. 요청자는 결정을 기다리고 있고 승인자는 알기 전까지 움직일 수 없음 | `mail.notify_approval_requested` |
+| 승인 결과 | 요청자 | 승인·반려가 결정된 순간. 요청자가 승인 화면을 새로고침하며 기다리던 답 | `mail.notify_approval_decided` |
+| 고객 요청 배정 | 새 담당자 | 다른 사람이 고객의 목소리(VOC) 담당자로 지정한 순간. SLA 시계가 접수 시점부터 돌고 있어 목록을 열어 보기 전에 알아야 함 | `mail.notify_voice_assigned` |
+| 계약 갱신 준비 기간 진입 | 계약 담당자 | 활성 계약이 `renewal_notice_days` 안으로 들어왔는데 갱신 상태가 미착수일 때. 오늘 큐의 "갱신 미착수" 와 같은 조건이며, 놓치면 계약이 만료됨 | `mail.notify_contract_renewal` |
+
+시끄러우면 사람들은 규칙을 만들어 통째로 버리므로 세 가지를 지킵니다. **자기가 한 일은 자기에게 보내지 않습니다**(승인자가 자기 요청을 승인하면 메일이 없습니다). **한 작업이 여러 알림을 만들면 묶습니다** — 같은 담당자의 계약 여러 건이 같은 날 갱신 기간에 들어오면 한 통입니다. 갱신 알림은 **계약당 한 번**만 보내며(`mail_notices` 원장), 갱신 상태를 미착수에서 바꾸면 더 오지 않습니다. 원장에는 릴레이가 실제로 받아 준 뒤에만 적으므로, 릴레이가 죽어 있는 동안 실패한 갱신 알림은 다음 주기에 다시 시도합니다. 메일 주소가 없는 사용자는 조용히 건너뛰고, 주소가 나중에 등록되면 그때 받습니다.
+
+#### 요청을 막지 않는다
+
+메일은 **배경에서** 보냅니다. 승인 제출·결정, VOC 접수는 릴레이 상태와 무관하게 즉시 끝나고, 릴레이가 죽어 있으면 발송 기록에 `failed` 로 남을 뿐 그 요청은 정상입니다. 한 통마다 2초 간격으로 두 번 시도하고 `timeout_seconds` 뒤 포기합니다. 갱신 알림은 백그라운드 작업(1분 주기, 다중 인스턴스에서 하나만 실행)이 보냅니다.
+
+#### 발송 기록과 시험 발송
+
+같은 화면 아래 **발송 기록** 에 시도마다 남습니다 — 언제, 어떤 이벤트로, 누구에게, 제목이 무엇이었고, `sent`/`failed` 와 오류 문구. **본문은 저장하지 않습니다.** 제목과 수신자면 "안 왔다" 는 문의에 답하기에 충분하고, 본문까지 담으면 기록 자체가 유출 경로가 되기 때문입니다. `status`·`event` 로 좁힐 수 있습니다.
+
+**시험 발송** 은 저장한 설정으로 실제 한 통을 보내고 결과를 그 자리에서 보여 줍니다(`MAIL_TEST_SEND` 감사 기록). 릴레이 설정은 한 번에 맞는 일이 드무니 켜자마자 한 번 보내 보세요. 메일 알림이 꺼져 있으면 `409 mail_disabled`, 릴레이가 거부하면 `502 mail_send_failed` 와 SMTP 단계(EHLO·MAIL FROM·RCPT TO·DATA) 가 적힌 오류가 돌아옵니다. `설정이 모자라면(호스트 없음)` 켜도 보내지 않고 발송 기록에 `mail.smtp_host is required` 로 남습니다.
+
+#### 비밀번호
+
+`mail.password` 는 Instance Data Key 로 암호화되어 저장됩니다. 설정 API 는 값을 **돌려주지 않고** `configured: true` 만 답하며, 화면에는 "설정됨 — 변경할 때만 입력" 으로 보입니다. 감사 로그와 서버 로그에도 `***` 로만 남습니다. 바꾸려면 새 값을 입력하고, 비워 두면 기존 값이 유지됩니다.
 
 ---
 
@@ -445,6 +492,7 @@ docker rm relio-old             # 확인 뒤
 | 로그 `capture forecast snapshot` / `run intelligence analysis` / `expire rotated keys` 오류 | 시스템 진단 → Background Job 카드 | 다음 주기에 재시도됩니다. `snapshot ran without the lock`·`take maintenance lock` 은 DB 잠금 문제이므로 PostgreSQL 상태를 봅니다 |
 | 사용자가 `서버 오류가 발생했습니다.` 와 요청 ID 를 전달 | `docker logs relio \| grep <requestId>` | `service error` 줄의 `error` 필드가 원인입니다 |
 | 방문자 분석을 켰는데 수집기에 아무것도 안 들어옴 | 방문자 분석 · CSP → 차단된 요청, 브라우저 개발자 콘솔의 `Content Security Policy` 오류 | 차단된 출처가 보이면 **이 출처 허용**. Momento 는 **같은 오리진 프록시** 를 켜면 정책과 무관해집니다. 프록시를 켰는데 `/momento/tracker.js` 가 `502` 면 Relio 서버에서 수집기 주소로 닿지 않는 것이고(로그 `momento proxy upstream failed`), `404` 면 켜진 Momento 공급자가 없는 것입니다. DNT 를 켠 브라우저는 의도적으로 로드하지 않습니다 |
+| 메일이 안 옴 | 메일 알림 → 발송 기록, 서버 로그 `notification mail failed` | 기록이 없으면 `mail.enabled` 가 꺼져 있거나, 그 이벤트 스위치가 꺼져 있거나, 받는 사용자에게 메일 주소가 없거나, 자기가 한 일(자기에게는 보내지 않음)입니다. `failed` 면 오류 문구의 SMTP 단계를 봅니다 — `SMTP 연결 실패` 는 릴레이 주소·포트·방화벽, `MAIL FROM 실패` 는 릴레이가 보내는 주소를 거부, `서버가 인증을 지원하지 않습니다` 는 사용자 이름을 비우라는 뜻, `암호화되지 않은 연결에서는 자격증명을 보내지 않습니다` 는 릴레이가 STARTTLS 를 알리지 않는데 사용자 이름이 채워져 있다는 뜻입니다(릴레이에 STARTTLS 를 켜거나, 평문이 허용되는 릴레이면 `mail.security=none` 을 명시). **시험 발송** 으로 같은 설정을 즉시 확인합니다. 릴레이가 죽어 있어도 승인·VOC 요청 자체는 정상으로 끝납니다 |
 
 ---
 

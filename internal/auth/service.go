@@ -347,6 +347,29 @@ func newPrincipal(userID string) *Principal {
 	return &Principal{UserID: userID, perm: map[string]bool{}, Permissions: []string{}, DataScope: "USER"}
 }
 
+// LookupEmails turns account ids into addresses, keyed by lower-case id. It is
+// the one directory query the mail notifications borrow, so mail never keeps a
+// roster of its own. Inactive users and users without an address are absent.
+func (s *Service) LookupEmails(ctx context.Context, userIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.DB.Query(ctx, `SELECT id::text,email FROM users WHERE active=true AND email IS NOT NULL AND btrim(email)<>'' AND id=ANY($1::text[]::uuid[])`, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, email string
+		if err := rows.Scan(&id, &email); err != nil {
+			return nil, err
+		}
+		out[strings.ToLower(id)] = strings.TrimSpace(email)
+	}
+	return out, rows.Err()
+}
+
 func (s *Service) loadPrincipal(ctx context.Context, userID string) (*Principal, error) {
 	// Keep collection fields non-nil. OIDC users can legitimately be provisioned
 	// before a default/mapped role is assigned; JSON null would make clients that
