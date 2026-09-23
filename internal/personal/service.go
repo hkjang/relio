@@ -15,6 +15,7 @@ import (
 	"github.com/hkjang/relio/internal/auth"
 	"github.com/hkjang/relio/internal/crm"
 	"github.com/hkjang/relio/internal/platform/ids"
+	"github.com/hkjang/relio/internal/voice"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -178,9 +179,22 @@ var favoriteSources = map[string]struct {
 func (s *Service) visible(ctx context.Context, p *auth.Principal, resource, id string) (bool, error) {
 	source := favoriteSources[resource]
 	var exists bool
-	err := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+source.table+` x WHERE x.id=$4 AND `+crm.ScopeSQL("x")+`)`,
+	err := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+source.table+` x WHERE x.id=$4 AND `+scopeFor(p, resource)+`)`,
 		p.DataScope, p.UserID, orgArg(p), id).Scan(&exists)
 	return exists, err
+}
+
+// scopeFor is the Data Scope predicate for a favourite's source table. A
+// request and a department's member also honour workspace isolation, so a
+// favourite cannot outlive the right to see what it points at.
+func scopeFor(p *auth.Principal, resource string) string {
+	switch resource {
+	case "VOICE":
+		return voice.VisibleSQL(p, "x")
+	case "CUSTOMER":
+		return crm.CustomerScopeSQL(p, "x")
+	}
+	return crm.ScopeSQL("x")
 }
 
 func orgArg(p *auth.Principal) any {
@@ -198,7 +212,7 @@ func (s *Service) Favorites(ctx context.Context, p *auth.Principal) ([]Favorite,
 		source := favoriteSources[resource]
 		rows, err := s.DB.Query(ctx, `SELECT x.id::text,`+source.title+`,`+source.subtitle+`,f.created_at
 			FROM user_favorites f JOIN `+source.table+` x ON x.id=f.resource_id
-			WHERE f.user_id=$4 AND f.resource=$5 AND `+crm.ScopeSQL("x")+`
+			WHERE f.user_id=$4 AND f.resource=$5 AND `+scopeFor(p, resource)+`
 			ORDER BY f.created_at DESC`,
 			p.DataScope, p.UserID, orgArg(p), p.UserID, resource)
 		if err != nil {

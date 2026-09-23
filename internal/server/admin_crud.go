@@ -538,6 +538,8 @@ func (s *Server) updateCustomField(w http.ResponseWriter, r *http.Request) {
 		Options      any    `json:"options"`
 		Active       *bool  `json:"active"`
 		DisplayOrder int    `json:"displayOrder"`
+		Phase        string `json:"phase"`
+		HelpText     string `json:"helpText"`
 	}
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
@@ -558,8 +560,13 @@ func (s *Server) updateCustomField(w http.ResponseWriter, r *http.Request) {
 		active = *in.Active
 	}
 	raw, _ := json.Marshal(in.Options)
-	_, err := s.DB.Exec(r.Context(), `UPDATE custom_field_definitions SET label=$2,field_type=$3,required=$4,options=$5,active=$6,display_order=$7,updated_at=now() WHERE id=$1`,
-		id, strings.TrimSpace(in.Label), in.Type, in.Required, raw, active, in.DisplayOrder)
+	phase, err := customFieldPhase(entity, in.Phase)
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	_, err = s.DB.Exec(r.Context(), `UPDATE custom_field_definitions SET label=$2,field_type=$3,required=$4,options=$5,active=$6,display_order=$7,phase=$8,help_text=$9,updated_at=now() WHERE id=$1`,
+		id, strings.TrimSpace(in.Label), in.Type, in.Required, raw, active, in.DisplayOrder, phase, nullableID(in.HelpText))
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
@@ -599,7 +606,7 @@ func (s *Server) deleteCustomField(w http.ResponseWriter, r *http.Request) {
 // customFieldUsage counts records that already carry a value for the field so
 // the administrator can see the impact of removing the definition.
 func (s *Server) customFieldUsage(ctx context.Context, entity, key string) (int, error) {
-	table := map[string]string{"CUSTOMER": "customers", "CONTACT": "contacts", "LEAD": "leads", "OPPORTUNITY": "opportunities"}[strings.ToUpper(entity)]
+	table := map[string]string{"CUSTOMER": "customers", "CONTACT": "contacts", "LEAD": "leads", "OPPORTUNITY": "opportunities", "VOICE": "customer_voices"}[strings.ToUpper(entity)]
 	if table == "" {
 		return 0, nil
 	}

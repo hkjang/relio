@@ -130,7 +130,7 @@ function Customers(props:Props){
         setQuery(nq);setCustomerType(nt);setGrade(ng);void load({customerType:nt,grade:ng,query:nq})}}/>
     <section className="panel table-panel">{loading?<Spinner/>:items.length?<table><thead><tr><th aria-label="즐겨찾기"/><th>고객</th><th>구분 · 등급</th><th>산업</th><th>담당 영업</th><th>건강도</th><th>최근 수정</th><th>관리</th></tr></thead><tbody>{items.map(c=><tr key={c.id} {...rowProps(()=>navigate('/app/customers/'+c.id))} aria-label={`${c.name} 고객 360 열기`}>
       <td><FavoriteStar resource="CUSTOMER" resourceId={c.id} favorited={favorites.ids.has(c.id)} onChange={on=>favorites.set(c.id,on)} notify={props.notify}/></td>
-      <td><div className="entity-cell"><span className="customer-logo">{initials(c.name, 2)}</span><span><b>{c.name}</b><small>{c.registrationNo||c.email||'식별 정보 없음'}</small></span></div></td>
+      <td><div className="entity-cell"><span className="customer-logo">{initials(c.name, 2)}</span><span><b>{c.name}</b><small>{c.customerCode?`코드 ${c.customerCode}`:c.registrationNo||c.email||'식별 정보 없음'}</small></span></div></td>
       <td><Status value={c.customerType}/>{c.grade&&<span className="grade">{c.grade}</span>}</td>
       <td>{c.industry||'—'}</td>
       <td>{c.ownerName}</td>
@@ -144,11 +144,11 @@ function Customers(props:Props){
 function CustomerModal({customer,onClose,onSaved,notify}:{customer?:Customer;onClose:()=>void;onSaved:()=>void;notify:Props['notify']}){
   const editing=Boolean(customer?.id);const [busy,setBusy]=useState(false)
   async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);setBusy(true)
-    const body={name:f.get('name'),registrationNo:f.get('registrationNo'),customerType:f.get('customerType'),grade:f.get('grade'),industry:f.get('industry'),website:f.get('website'),phone:f.get('phone'),email:f.get('email'),address:f.get('address'),health:f.get('health')||'NORMAL',annualRevenue:Number(f.get('annualRevenue')||0),employeeCount:Number(f.get('employeeCount')||0),customFields:customer?.customFields||{},version:customer?.version||0}
+    const body={name:f.get('name'),registrationNo:f.get('registrationNo'),customerCode:f.get('customerCode'),customerType:f.get('customerType'),grade:f.get('grade'),industry:f.get('industry'),website:f.get('website'),phone:f.get('phone'),email:f.get('email'),address:f.get('address'),health:f.get('health')||'NORMAL',annualRevenue:Number(f.get('annualRevenue')||0),employeeCount:Number(f.get('employeeCount')||0),customFields:customer?.customFields||{},version:customer?.version||0}
     try{await api(editing?`/api/v1/customers/${customer!.id}`:'/api/v1/customers',{method:editing?'PUT':'POST',body:JSON.stringify(body)});notify(editing?'고객 정보를 저장했습니다.':'고객이 등록되었습니다.');onSaved()}catch(e){notify(errorMessage(e),true)}finally{setBusy(false)}}
   return <Modal title={editing?`${customer!.name} 편집`:'새 고객 등록'} onClose={onClose} wide><form onSubmit={submit} className="form"><div className="form-grid">
     <label className="span-2">고객사명 *<input name="name" required autoFocus defaultValue={customer?.name||''} placeholder="예: (주)릴리오테크"/></label>
-    <label>사업자번호<input name="registrationNo" defaultValue={customer?.registrationNo||''} placeholder="000-00-00000"/></label>
+    <label>사업자번호<input name="registrationNo" defaultValue={customer?.registrationNo||''} placeholder="000-00-00000"/></label><label>고객 코드<input name="customerCode" defaultValue={customer?.customerCode||''} placeholder="회원사코드 등 부서에서 쓰는 코드"/><small>회사 전체에서 한 고객에만 쓸 수 있습니다.</small></label>
     <label>고객 구분<select name="customerType" defaultValue={customer?.customerType||'PROSPECT'}><option value="PROSPECT">잠재 고객</option><option value="CUSTOMER">거래 고객</option><option value="PARTNER">파트너</option></select></label>
     <label>고객 등급<select name="grade" defaultValue={customer?.grade||''}><option value="">미지정</option><option>A</option><option>B</option><option>C</option></select></label>
     <label>산업<input name="industry" defaultValue={customer?.industry||''} placeholder="제조, IT, 금융…"/></label>

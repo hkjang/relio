@@ -53,7 +53,7 @@ export const adminNav: NavItem[] = [
   { to: '/admin/approval', key: 'approvals', label: '승인 절차', group: '영업 정책', keywords: 'review approve reject' },
   { to: '/admin/custom-fields', key: 'opportunities', label: '사용자 정의 항목', group: '영업 정책', keywords: 'metadata jsonb field' },
   { to: '/admin/products', key: 'contracts', label: '상품 카탈로그', group: '영업 정책', keywords: 'product price catalog 단가 상품' },
-  { to: '/admin/voice-categories', key: 'approvals', label: '고객 요청 유형 · SLA', group: '영업 정책', keywords: 'voc 불만 요청 문의 sla 응답 해결' },
+  { to: '/admin/voice-categories', key: 'approvals', label: '고객 요청 유형 · 업무 영역', group: '영업 정책', keywords: 'voc 불만 요청 문의 sla 응답 해결 업무 영역 부서 회원사 템플릿 지식' },
   { to: '/admin/keys', key: 'api', label: '연동 키 · API · MCP', group: '개발자', keywords: 'rotation scope origin tool' },
   { to: '/admin/data', key: 'data', label: '데이터 품질 · 설정', group: '데이터', keywords: 'quality data configuration bundle export import diff' },
 ]

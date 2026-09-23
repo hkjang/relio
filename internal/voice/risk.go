@@ -62,19 +62,19 @@ func riskLevel(score int) string {
 func (s *Service) gatherRisk(ctx context.Context, p *auth.Principal, customerID string) (riskInputs, error) {
 	var in riskInputs
 	err := s.DB.QueryRow(ctx, `SELECT c.name,
-		(SELECT count(*) FROM customer_voices v WHERE v.customer_id=c.id AND v.voice_type='CHURN_RISK' AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED')),
-		(SELECT count(*) FROM customer_voices v WHERE v.customer_id=c.id AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED') AND (
+		(SELECT count(*) FROM customer_voices v WHERE v.customer_id=c.id AND `+SalesSignalSQL("v")+` AND v.voice_type='CHURN_RISK' AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED')),
+		(SELECT count(*) FROM customer_voices v WHERE v.customer_id=c.id AND `+SalesSignalSQL("v")+` AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED') AND (
 			(v.response_due_at IS NOT NULL AND v.first_responded_at IS NULL AND v.response_due_at < now())
 			OR (v.resolution_due_at IS NOT NULL AND v.resolved_at IS NULL AND v.resolution_due_at < now()))),
-		(SELECT count(*) FROM customer_voices v WHERE v.customer_id=c.id AND v.voice_type IN ('COMPLAINT','DEFECT') AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED')),
-		(SELECT avg(v.satisfaction_score) FROM customer_voices v WHERE v.customer_id=c.id AND v.satisfaction_score IS NOT NULL),
+		(SELECT count(*) FROM customer_voices v WHERE v.customer_id=c.id AND `+SalesSignalSQL("v")+` AND v.voice_type IN ('COMPLAINT','DEFECT') AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED')),
+		(SELECT avg(v.satisfaction_score) FROM customer_voices v WHERE v.customer_id=c.id AND `+SalesSignalSQL("v")+` AND v.satisfaction_score IS NOT NULL),
 		(SELECT EXTRACT(DAY FROM now()-max(a.occurred_at))::int FROM activities a WHERE a.customer_id=c.id),
 		(SELECT count(*) FROM contracts ct WHERE ct.customer_id=c.id AND ct.status='ACTIVE' AND ct.end_date IS NOT NULL
 			AND ct.end_date <= (now()+make_interval(days => ct.renewal_notice_days))::date),
 		(SELECT count(*) FROM contracts ct WHERE ct.customer_id=c.id AND ct.status='ACTIVE' AND ct.end_date IS NOT NULL
 			AND ct.end_date <= (now()+make_interval(days => ct.renewal_notice_days))::date AND ct.renewal_status='NOT_STARTED'),
 		(SELECT COALESCE(sum(o.base_expected_amount),0) FROM opportunities o WHERE o.customer_id=c.id AND o.status='OPEN')
-		FROM customers c WHERE c.id=$4 AND `+crm.ScopeSQL("c"),
+		FROM customers c WHERE c.id=$4 AND `+crm.CustomerScopeSQL(p, "c"),
 		p.DataScope, p.UserID, orgArg(p), customerID).
 		Scan(&in.customerName, &in.churnSignals, &in.overdueVoices, &in.openComplaints,
 			&in.lowSatisfaction, &in.daysSinceActivity, &in.expiringContracts, &in.renewalNotStarted, &in.openPipeline)
@@ -162,8 +162,8 @@ func (s *Service) TopRisks(ctx context.Context, p *auth.Principal, limit int) ([
 	// Only score customers that already show at least one signal, so a large
 	// book of business does not turn into a full table scan of risk maths.
 	rows, err := s.DB.Query(ctx, `SELECT DISTINCT c.id FROM customers c
-		WHERE c.active=true AND c.merged_into_id IS NULL AND `+crm.ScopeSQL("c")+` AND (
-			EXISTS(SELECT 1 FROM customer_voices v WHERE v.customer_id=c.id AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED'))
+		WHERE c.active=true AND c.merged_into_id IS NULL AND `+crm.CustomerScopeSQL(p, "c")+` AND `+crm.SalesAccountSQL("c")+` AND (
+			EXISTS(SELECT 1 FROM customer_voices v WHERE v.customer_id=c.id AND `+SalesSignalSQL("v")+` AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED'))
 			OR EXISTS(SELECT 1 FROM contracts ct WHERE ct.customer_id=c.id AND ct.status='ACTIVE' AND ct.end_date IS NOT NULL
 				AND ct.end_date <= (now()+make_interval(days => ct.renewal_notice_days))::date)
 			OR NOT EXISTS(SELECT 1 FROM activities a WHERE a.customer_id=c.id AND a.occurred_at > now()-interval '30 days')

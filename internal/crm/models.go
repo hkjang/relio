@@ -6,6 +6,7 @@ type Customer struct {
 	ID             string         `json:"id"`
 	Name           string         `json:"name"`
 	RegistrationNo string         `json:"registrationNo,omitempty"`
+	CustomerCode   string         `json:"customerCode,omitempty"`
 	CustomerType   string         `json:"customerType"`
 	Grade          string         `json:"grade,omitempty"`
 	Industry       string         `json:"industry,omitempty"`
@@ -25,21 +26,24 @@ type Customer struct {
 	UpdatedAt      time.Time      `json:"updatedAt"`
 }
 type CustomerInput struct {
-	Name           string         `json:"name"`
-	RegistrationNo string         `json:"registrationNo"`
-	CustomerType   string         `json:"customerType"`
-	Grade          string         `json:"grade"`
-	Industry       string         `json:"industry"`
-	Website        string         `json:"website"`
-	Phone          string         `json:"phone"`
-	Email          string         `json:"email"`
-	Address        string         `json:"address"`
-	OwnerID        string         `json:"ownerId"`
-	Health         string         `json:"health"`
-	AnnualRevenue  float64        `json:"annualRevenue"`
-	EmployeeCount  int            `json:"employeeCount"`
-	CustomFields   map[string]any `json:"customFields"`
-	Version        int            `json:"version"`
+	Name           string `json:"name"`
+	RegistrationNo string `json:"registrationNo"`
+	// CustomerCode is the identifier a department already uses for this
+	// customer (a 회원사코드, for instance). Unique across the company.
+	CustomerCode  string         `json:"customerCode"`
+	CustomerType  string         `json:"customerType"`
+	Grade         string         `json:"grade"`
+	Industry      string         `json:"industry"`
+	Website       string         `json:"website"`
+	Phone         string         `json:"phone"`
+	Email         string         `json:"email"`
+	Address       string         `json:"address"`
+	OwnerID       string         `json:"ownerId"`
+	Health        string         `json:"health"`
+	AnnualRevenue float64        `json:"annualRevenue"`
+	EmployeeCount int            `json:"employeeCount"`
+	CustomFields  map[string]any `json:"customFields"`
+	Version       int            `json:"version"`
 }
 
 type Contact struct {

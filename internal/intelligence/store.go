@@ -4,7 +4,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/hkjang/relio/internal/crm"
 	"github.com/hkjang/relio/internal/platform/ids"
+	"github.com/hkjang/relio/internal/voice"
 )
 
 // Reading the CRM for the engine, and writing back what it concluded.
@@ -22,16 +24,16 @@ func (s *Service) accountFacts(ctx context.Context) (map[string]*accountFacts, e
 		          AND a.occurred_at <  now() - make_interval(days => $1)),
 		       (SELECT count(*) FROM contacts ct WHERE ct.customer_id=c.id),
 		       (SELECT count(*) FROM contacts ct WHERE ct.customer_id=c.id AND ct.decision_maker),
-		       (SELECT count(*) FROM customer_voices v WHERE v.customer_id=c.id AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED')),
-		       (SELECT count(*) FROM customer_voices v WHERE v.customer_id=c.id AND v.severity='CRITICAL' AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED')),
-		       COALESCE((SELECT v.id::text FROM customer_voices v WHERE v.customer_id=c.id AND v.severity='CRITICAL'
+		       (SELECT count(*) FROM customer_voices v WHERE v.customer_id=c.id AND `+voice.SalesSignalSQL("v")+` AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED')),
+		       (SELECT count(*) FROM customer_voices v WHERE v.customer_id=c.id AND `+voice.SalesSignalSQL("v")+` AND v.severity='CRITICAL' AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED')),
+		       COALESCE((SELECT v.id::text FROM customer_voices v WHERE v.customer_id=c.id AND `+voice.SalesSignalSQL("v")+` AND v.severity='CRITICAL'
 		                  AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED') ORDER BY v.occurred_at LIMIT 1),''),
 		       COALESCE((SELECT q.id::text FROM quotations q WHERE q.customer_id=c.id
 		                  AND q.created_at >= now() - make_interval(days => $2) ORDER BY q.created_at DESC LIMIT 1),''),
 		       COALESCE((SELECT q.title FROM quotations q WHERE q.customer_id=c.id
 		                  AND q.created_at >= now() - make_interval(days => $2) ORDER BY q.created_at DESC LIMIT 1),'')
 		FROM customers c
-		WHERE c.active AND c.merged_into_id IS NULL`, engagementDays, quoteDays)
+		WHERE c.active AND c.merged_into_id IS NULL AND `+crm.SalesAccountSQL("c"), engagementDays, quoteDays)
 	if err != nil {
 		return nil, err
 	}
