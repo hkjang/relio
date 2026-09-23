@@ -37,8 +37,11 @@ for (const autoLogin of [false, true]) {
       }))
       const expected = scenario === 'remembered path' ? target! : '/app/dashboard'
       assert.ok(html.includes(`href="/api/v1/auth/oidc/start?return_to=${encodeURIComponent(expected)}"`))
-      assert.ok(html.includes('class="login-form"'))
-      assert.ok(html.includes('autoComplete="username"'))
+      // With SSO on, the organisation account is the way in and the local
+      // administrator waits behind a collapsed disclosure (v1.12.0).
+      assert.ok(html.includes('조직 계정으로 SSO 로그인'))
+      assert.ok(html.includes('aria-controls="local-login-form"') && html.includes('aria-expanded="false"'))
+      assert.ok(!html.includes('id="local-login-form"'))
     })
   }
 }

@@ -18,14 +18,23 @@ const normalizeUser = (user: User): User => ({ ...user, permissions: Array.isArr
 // dashboard, which is what made a refresh feel like it "jumped to the main page".
 const RETURN_KEY = 'relio.returnTo'
 const isReturnable = (path: string) => /^\/(app|admin|me)\//.test(path) && path !== '/me/password'
+// Blocked storage (private modes, site data off) throws on access. Losing the
+// remembered deep link is acceptable there; losing the login flow is not, so
+// every read and write of it degrades to "no remembered target".
 function rememberReturn() {
   const target = location.pathname + location.search
-  if (isReturnable(location.pathname)) sessionStorage.setItem(RETURN_KEY, target)
+  try {
+    if (isReturnable(location.pathname)) sessionStorage.setItem(RETURN_KEY, target)
+  } catch { /* the login still works; it just returns to the dashboard */ }
 }
 function takeReturn(): string {
-  const target = sessionStorage.getItem(RETURN_KEY)
-  sessionStorage.removeItem(RETURN_KEY)
-  return target && isReturnable(new URL(target, location.origin).pathname) ? target : '/app/dashboard'
+  try {
+    const target = sessionStorage.getItem(RETURN_KEY)
+    sessionStorage.removeItem(RETURN_KEY)
+    return target && isReturnable(new URL(target, location.origin).pathname) ? target : '/app/dashboard'
+  } catch {
+    return '/app/dashboard'
+  }
 }
 // The SSO button hands the remembered target to the server, which brings the
 // browser back there after the callback instead of the dashboard.
@@ -80,7 +89,7 @@ export default function App() {
   function loggedIn(next: User) { const currentUser=normalizeUser(next); clearSilentSsoState(); setUser(currentUser); setCSRF(currentUser.csrfToken); if (currentUser.mustChangePassword) navigate('/me/password'); else navigate(takeReturn()) }
   // A deliberate sign-out must not be undone by a silent sign-in on the next
   // load, so it suppresses auto login until a session exists again.
-  async function logout() { try { await api('/api/v1/auth/logout', { method:'POST' }) } finally { markSignedOut(); sessionStorage.removeItem(RETURN_KEY); setUser(null); setCSRF(); navigate('/login') } }
+  async function logout() { try { await api('/api/v1/auth/logout', { method:'POST' }) } finally { markSignedOut(); try { sessionStorage.removeItem(RETURN_KEY) } catch { /* nothing remembered */ } setUser(null); setCSRF(); navigate('/login') } }
   const notify = (message:string,error=false) => setToast({message,error})
   if (loading) return <div className="boot"><div className="brand-mark big">R</div><Spinner /></div>
   if (!user) return <Login status={status} version={version} onLogin={loggedIn} notify={notify} />
