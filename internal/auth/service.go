@@ -170,13 +170,54 @@ func (s *Service) Bootstrap(ctx context.Context, cfg config.Config) error {
 	return tx.Commit(ctx)
 }
 
-func (s *Service) Login(ctx context.Context, username, password, ip, ua string) (string, *Principal, error) {
-	var id, hash string
-	var active bool
-	err := s.DB.QueryRow(ctx, `SELECT id,password_hash,active FROM users WHERE lower(username)=lower($1) AND auth_source='LOCAL'`, username).Scan(&id, &hash, &active)
-	if err != nil || !active || !VerifyPassword(hash, password) {
-		return "", nil, errors.New("invalid credentials")
+// ErrInvalidCredentials is the one answer for every local login that does not
+// prove its password: an unknown username, an inactive user, an SSO user and a
+// wrong password are indistinguishable to the caller.
+var ErrInvalidCredentials = errors.New("invalid credentials")
+
+// ErrLocalLoginDisabled is returned only after the password has been verified,
+// so a caller who does not hold the credentials never learns which account the
+// policy exempts.
+var ErrLocalLoginDisabled = errors.New("local login disabled")
+
+// localAccount is what Login reads about a username before deciding anything.
+// Found is false when no active-or-inactive LOCAL user has that name.
+type localAccount struct {
+	ID        string
+	Hash      string
+	Active    bool
+	Bootstrap bool
+	Found     bool
+}
+
+// admitLocal is the whole admission decision of a local login, kept free of the
+// database so the order of its checks can be tested: the password is verified
+// first and the local-login policy only afterwards, so every refusal that does
+// not follow a proven password is the same ErrInvalidCredentials — an unknown
+// username, an inactive user and a wrong password on the bootstrap account are
+// indistinguishable whether or not local login is switched off.
+func admitLocal(acct localAccount, password string, bootstrapOnly bool) error {
+	if !acct.Found || !acct.Active || !VerifyPassword(acct.Hash, password) {
+		return ErrInvalidCredentials
 	}
+	if bootstrapOnly && !acct.Bootstrap {
+		return ErrLocalLoginDisabled
+	}
+	return nil
+}
+
+// Login verifies a local password and opens a session. With bootstrapOnly set
+// (auth.local_login_enabled is off) every account except the bootstrap
+// administrator is refused with ErrLocalLoginDisabled — see admitLocal for why
+// that answer is only reachable with the right password.
+func (s *Service) Login(ctx context.Context, username, password, ip, ua string, bootstrapOnly bool) (string, *Principal, error) {
+	var acct localAccount
+	err := s.DB.QueryRow(ctx, `SELECT id,password_hash,active,is_bootstrap FROM users WHERE lower(username)=lower($1) AND auth_source='LOCAL'`, username).Scan(&acct.ID, &acct.Hash, &acct.Active, &acct.Bootstrap)
+	acct.Found = err == nil
+	if err := admitLocal(acct, password, bootstrapOnly); err != nil {
+		return "", nil, err
+	}
+	id := acct.ID
 	token := ids.Token(32)
 	digest := sha256.Sum256([]byte(token))
 	csrf := ids.Token(24)
