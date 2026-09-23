@@ -30,7 +30,12 @@ Relio 는 인터넷이 끊긴 사내망에서 돌아가는 B2B 영업관리(CRM)
 
 ### 2.1 로그인
 
-브라우저에서 관리자가 알려준 주소(예: `https://relio.company.internal`)를 엽니다. 사내 SSO 가 연결되어 있으면 SSO 버튼이, 아니면 아이디·비밀번호 입력란이 보입니다.
+브라우저에서 관리자가 알려준 주소(예: `https://relio.company.internal`)를 엽니다.
+
+- **조직 계정(SSO)이 연결되어 있으면** 가장 위의 **조직 계정으로 SSO 로그인** 버튼으로 로그인합니다. 관리자 계정 입력란은 장애 시 복구용이라 **관리자 계정으로 로그인** 을 펼쳐야 보입니다.
+- **SSO 가 없으면** 아이디·비밀번호 입력란이 바로 보입니다.
+- 관리자가 **자동 로그인** 을 켰고 이미 사내 Keycloak 에 로그인되어 있으면, 로그인 화면 없이 원래 열려던 화면으로 바로 들어갑니다.
+- Keycloak 세션이 없어 자동 로그인을 하지 않았다면 "조직 계정 세션이 없어 자동으로 로그인하지 않았습니다" 안내가 보입니다. 오류가 아니므로 SSO 버튼으로 로그인하면 됩니다. 로그아웃한 뒤에는 같은 탭에서 자동 로그인을 다시 시도하지 않습니다.
 
 ![로그인 — 관리자 계정 입력란과 하단의 실행 버전 표시](assets/guide/login.png)
 
@@ -246,7 +251,31 @@ opencode mcp add relio --url https://relio.company.internal/mcp \
   --header "Authorization=Bearer <발급받은 Secret>"
 ```
 
-Qwen 설정 파일에서는 `url` 이 아니라 `httpUrl` 을 써야 하고, OpenCode CLI 의 헤더는 `KEY=VALUE` 형식입니다. 사용할 수 있는 도구 목록(`search_customers`, `find_deals_at_risk`, `get_account_brief` 등)은 [REST API and MCP](api-mcp.md) 에 있습니다. 관리자가 도구 허용 목록을 좁혀 두면 그 도구만 보입니다.
+Qwen 설정 파일에서는 `url` 이 아니라 `httpUrl` 을 써야 하고, OpenCode CLI 의 헤더는 `KEY=VALUE` 형식입니다.
+
+#### 키 없이 조직 계정으로 연결하기 (OAuth)
+
+관리자가 **조직 계정(OAuth)으로 MCP 연결** 을 켜 두었다면 키를 발급하지 않고 사내 Keycloak 계정으로 로그인할 수 있습니다. **개인 연동 키 → MCP 사용 안내 → 클라이언트 설정 → 조직 계정(OAuth)** 에 내 환경에 맞는 설정이 채워져 있습니다.
+
+Qwen Code — 추가한 뒤 Qwen 을 실행해 `/mcp` → **relio** → **Authenticate** 를 고르고 브라우저에서 로그인합니다.
+
+```bash
+qwen mcp add --scope user --transport http \
+  --oauth-client-id <관리자가 알려준 Client ID> \
+  relio https://relio.company.internal/mcp
+```
+
+OpenCode — 설정 파일에 넣은 뒤 `opencode mcp auth relio` 로 로그인하면 `connected (OAuth)` 로 표시됩니다.
+
+```json
+{ "mcp": { "relio": { "type": "remote", "url": "https://relio.company.internal/mcp", "enabled": true,
+                      "oauth": { "clientId": "<관리자가 알려준 Client ID>" } } } }
+```
+
+- 주소는 **안내 화면에 표시된 서비스 주소 그대로** 써야 합니다. 다른 주소(예: IP)로 연결하면 클라이언트가 리소스 불일치로 거부합니다.
+- 키와 달리 권한을 Scope 로 좁힐 수 없습니다. 로그인한 계정의 Role 과 데이터 범위가 그대로 적용됩니다. 에이전트에 일부 권한만 주려면 개인 연동 키를 쓰세요.
+
+사용할 수 있는 도구 목록(`search_customers`, `find_deals_at_risk`, `get_account_brief` 등)은 [REST API and MCP](api-mcp.md) 에 있습니다. 관리자가 도구 허용 목록을 좁혀 두면 그 도구만 보입니다.
 
 ---
 
@@ -267,6 +296,9 @@ Qwen 설정 파일에서는 `url` 이 아니라 `httpUrl` 을 써야 하고, Ope
 | 세션이 끊겨 로그인 화면으로 돌아감 | 접속 유지 시간(기본 8시간) 초과 또는 다른 곳에서 세션 종료 | 다시 로그인합니다. 작성 중이던 내용은 저장되지 않았습니다. |
 | **CSV 내보내기** 버튼이 없음 | 관리자가 내보내기를 꺼 둠 | 관리자에게 문의합니다. |
 | **검토 · 승인** 메뉴가 없음 | 활성 승인 정책이 없음 — 정상 | 승인이 필요하면 관리자가 **승인 절차** 에서 정책을 만들어야 합니다. |
+| 로그인 화면에 "조직 계정 세션이 없어 자동으로 로그인하지 않았습니다" | 자동 로그인을 시도했지만 Keycloak 에 로그인되어 있지 않음 — 정상 | **조직 계정으로 SSO 로그인** 버튼을 누릅니다. |
+| MCP 클라이언트에 `needs authentication` | 조직 계정(OAuth) 연결에서 아직 로그인하지 않음 | OpenCode 는 `opencode mcp auth relio`, Qwen 은 `/mcp` → relio → Authenticate 를 실행합니다. |
+| MCP 도구 결과에 `…은(는) UUID 형식의 ID여야 합니다` | 에이전트가 이름을 ID 자리에 넣음 | 메시지에 적힌 검색 도구로 ID 를 먼저 찾도록 에이전트에 요청합니다. |
 
 ---
 

@@ -212,3 +212,34 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 }
 /* Two Korean syllables wrap inside a 24px avatar; the palette keeps them on one line. */
 .palette-row .avatar.tiny { font-size: 12px; white-space: nowrap; line-height: 1; }
+
+/* Login: the organisation account is the way in. The SSO button carries the
+   primary weight; the local administrator is a break-glass path that waits
+   behind a disclosure row, the way the AppStore login presents it. */
+.login-card .btn-sso{width:100%;height:48px;margin-top:0;justify-content:center;gap:9px;border:0;background:linear-gradient(135deg,#146ba3,#148b9d);color:#fff;font-size:15px;box-shadow:0 6px 16px #176e9633;text-decoration:none}
+.login-card .btn-sso:hover{background:linear-gradient(135deg,#146ba3,#148b9d);filter:brightness(1.07);transform:translateY(-1px)}
+.login-card .btn-sso:focus-visible,.local-login-toggle:focus-visible{outline:3px solid #2b96a855;outline-offset:2px}
+.local-login-toggle{width:100%;display:flex;align-items:center;gap:9px;margin-top:20px;padding:15px 2px 3px;border:0;border-top:1px solid #e3e9ee;background:transparent;color:#5b7085;font-size:14px;font-weight:600;cursor:pointer;text-align:left}
+.local-login-toggle span{flex:1}
+.local-login-toggle:hover{color:#1f4e6d}
+.local-login-toggle .chevron{transition:transform .18s ease}
+.local-login-toggle .chevron.open{transform:rotate(180deg)}
+.login-notice{display:flex;align-items:flex-start;gap:9px;margin-bottom:14px;padding:11px 12px;border:1px solid #cfe3ea;border-radius:9px;background:#eef7fa;color:#2f6076;font-size:13px;line-height:1.55}
+.login-notice svg{flex:none;margin-top:1px;color:#1f8494}
+.login-notice.subtle{margin:0 0 2px;background:#f5f8fa;border-color:#e2e9ee;color:#62768a}
+.login-notice.subtle svg{color:#7d93a6}
+.local-login-toggle+.login-form{margin-top:14px}
+
+/* Admin: MCP OAuth readiness. The endpoint readout comes first because those
+   exact URLs are what an administrator pastes into Keycloak and the agents. */
+.oauth-readiness{display:flex;flex-direction:column;gap:14px;margin-top:18px;border-top:1px solid var(--line);padding-top:18px}
+.oauth-endpoints{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.oauth-endpoints>div{min-width:0;background:#f8fafb;border:1px solid #e6edf2;border-radius:9px;padding:10px 12px}
+.oauth-endpoints small{display:block;font-size:12px;color:#8292a1;margin-bottom:4px}
+.oauth-endpoints code{display:block;font-size:12px;color:#244d66;overflow-wrap:anywhere}
+.oauth-endpoints b{font-size:14px;color:#8392a1}
+.oauth-endpoints b.on{color:#1f8a5b}
+.oauth-steps summary{cursor:pointer;font-size:14px;font-weight:650;color:#2b5d7d}
+.oauth-steps ol{margin:10px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:7px;font-size:13px;color:#5d7285;line-height:1.6}
+.oauth-steps code{background:#eef3f7;border-radius:4px;padding:1px 5px;font-size:12px}
+@media (max-width:760px){.oauth-endpoints{grid-template-columns:minmax(0,1fr)}}

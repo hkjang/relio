@@ -306,6 +306,7 @@ function PolicyModal({policy,onClose,onSaved,notify}:{policy?:any;onClose:()=>vo
 
 function KeyPolicies(props:Props){
   const {items,load}=useSettings()
+  const [oauthRevision,setOauthRevision]=useState(0)
   const g=(ns:string,k:string,f:any)=>items?.find(x=>x.namespace===ns&&x.key===k)?.value??f
   const list=(value:FormDataEntryValue|null)=>String(value||'').split(/[\n,]+/).map(x=>x.trim()).filter(Boolean)
   async function submit(e:FormEvent<HTMLFormElement>){
@@ -324,8 +325,11 @@ function KeyPolicies(props:Props){
         saveSetting({namespace:'mcp',key:'rate_limit_per_minute',value:Number(f.get('mcpRate'))}),
         saveSetting({namespace:'mcp',key:'allowed_origins',value:list(f.get('origins')),valueType:'json'}),
         saveSetting({namespace:'mcp',key:'tool_allowlist',value:list(f.get('tools')),valueType:'json'}),
+        saveSetting({namespace:'mcp',key:'oauth_enabled',value:f.get('mcpOAuth')==='on',valueType:'boolean'}),
+        saveSetting({namespace:'mcp',key:'oauth_required_scope',value:String(f.get('mcpOAuthScope')||'').trim(),valueType:'string'}),
+        saveSetting({namespace:'mcp',key:'oauth_client_id',value:String(f.get('mcpOAuthClient')||'').trim(),valueType:'string'}),
       ])
-      props.notify('개인키와 API/MCP 정책을 저장했습니다.');load()
+      props.notify('개인키와 API/MCP 정책을 저장했습니다.');load();setOauthRevision(v=>v+1)
     }catch(e){props.notify(errorMessage(e),true)}
   }
   return <Frame {...props} title="연동 키 · API · MCP" subtitle="키 수명과 교체, 채널, 요청량, 허용 출처와 MCP 도구를 중앙 통제합니다.">{!items?<Spinner/>:<form className="settings-stack" onSubmit={submit}>
@@ -335,9 +339,36 @@ function KeyPolicies(props:Props){
     <section className="panel settings-section"><div className="settings-title"><span>AI</span><div><h2>REST API · MCP 정책</h2><p>정책 변경은 즉시 인증 계층과 MCP 도구 목록에 반영됩니다.</p></div></div><div className="form-grid">
       <label className="check-label"><input name="apiEnabled" type="checkbox" defaultChecked={g('api','enabled',true)}/> REST API 사용 허용</label><label>API 요청 한도 / 분<input name="apiRate" type="number" min="0" defaultValue={g('api','rate_limit_per_minute',120)}/></label><label className="check-label"><input name="mcpEnabled" type="checkbox" defaultChecked={g('mcp','enabled',true)}/> MCP 연결 활성화</label><label>MCP 요청 한도 / 분<input name="mcpRate" type="number" min="0" defaultValue={g('mcp','rate_limit_per_minute',60)}/></label><label className="span-2">허용 출처<textarea name="origins" rows={3} defaultValue={(g('mcp','allowed_origins',[]) as string[]).join('\n')} placeholder="https://agent.internal.example"/><small>비어 있으면 동일 출처만 허용합니다. 줄바꿈 또는 쉼표로 구분합니다.</small></label><label className="span-2">MCP 도구 허용 목록<textarea name="tools" rows={4} defaultValue={(g('mcp','tool_allowlist',[]) as string[]).join('\n')} placeholder="search_customers&#10;get_customer_360"/><small>비어 있으면 권한이 있는 모든 도구를 허용합니다.</small></label>
     </div><div className="mcp-flow"><span>AI 에이전트</span><b>→</b><span>출처 · 요청량</span><b>→</b><span>키 범위</span><b>→</b><span>권한</span><b>→</b><span>데이터 범위</span><b>→</b><span>영역</span></div><p className="endpoint"><code>POST /mcp</code><a href="/api/docs" target="_blank">API 문서 열기 ↗</a></p></section>
+    <section className="panel settings-section"><div className="settings-title"><span>ID</span><div><h2>조직 계정(OAuth)으로 MCP 연결</h2><p>개인 키 없이 Keycloak 조직 계정으로 로그인해 MCP를 사용합니다. 에이전트는 로그인한 사용자의 Role 권한 전체로 동작합니다.</p></div></div><div className="form-grid">
+      <label className="check-label span-2"><input name="mcpOAuth" type="checkbox" defaultChecked={g('mcp','oauth_enabled',false)}/> 조직 계정(OAuth) 토큰으로 MCP 연결 허용</label>
+      <label>필수 Scope<input name="mcpOAuthScope" defaultValue={g('mcp','oauth_required_scope','')} placeholder="relio-mcp"/><small>이 Scope가 있는 토큰만 허용합니다. 비우면 Audience만 확인합니다.</small></label>
+      <label>에이전트용 Public Client ID<input name="mcpOAuthClient" defaultValue={g('mcp','oauth_client_id','')} placeholder="relio-mcp-cli"/><small>사용자 안내에 표시됩니다. 비우면 동적 클라이언트 등록을 안내합니다.</small></label>
+    </div><McpOAuthReadiness revision={oauthRevision}/></section>
     <AdminKeyInventory notify={props.notify}/>
     <div className="sticky-save"><span>모든 정책 변경은 감사 로그에 기록됩니다.</span><button className="btn btn-primary">정책 저장</button></div>
   </form>}</Frame>
+}
+
+type McpOAuthDiagnostics={config:{available:boolean;enabled:boolean;issuer?:string;resource:string;metadataUrl:string;scopes:string[];clientId?:string};checks:{key:string;status:'ok'|'warn'|'fail';detail:string}[];registrationSupported:boolean}
+
+// The checks are the separate places an MCP sign-in can fail; each used to
+// surface only as an opaque error inside the agent.
+function McpOAuthReadiness({revision}:{revision:number}){
+  const [d,setD]=useState<McpOAuthDiagnostics|null>(null)
+  useEffect(()=>{api<McpOAuthDiagnostics>('/api/v1/admin/mcp/oauth').then(setD).catch(()=>setD(null))},[revision])
+  if(!d)return null
+  const label:Record<string,string>={sso:'조직 계정 SSO',serviceUrl:'서비스 URL',discovery:'Keycloak 메타데이터',registration:'동적 클라이언트 등록',audience:'토큰 Audience',scope:'필수 Scope'}
+  return <div className="oauth-readiness">
+    <div className="oauth-endpoints"><div><small>상태</small><b className={d.config.available?'on':''}>{d.config.available?'사용 중':d.config.enabled?'SSO 설정 필요':'꺼짐'}</b></div><div><small>리소스</small><code>{d.config.resource}</code></div><div><small>Protected Resource Metadata</small><code>{d.config.metadataUrl}</code></div>{d.config.issuer&&<div><small>Authorization Server</small><code>{d.config.issuer}</code></div>}</div>
+    <div className="check-list">{d.checks.map(c=><div key={c.key}><span className={c.status}>{c.status==='fail'?'×':c.status==='warn'?'!':'✓'}</span><b>{label[c.key]||c.key}</b><small>{c.detail}</small></div>)}</div>
+    <details className="oauth-steps"><summary>Keycloak 설정 순서</summary><ol>
+      <li><b>Client Scope</b> <code>relio-mcp</code>를 만들고 <b>Audience</b> Mapper를 추가합니다. Included Client Audience는 <code>{d.config.clientId||'relio'}</code>, Add to access token을 켭니다.</li>
+      <li><b>Public Client</b> <code>relio-mcp-cli</code>를 만듭니다. Client authentication 끔, Standard flow 켬, PKCE Method <code>S256</code>, Valid redirect URIs <code>http://127.0.0.1/*</code>와 <code>http://localhost/*</code>.</li>
+      <li>이 Client의 Client scopes에 <code>relio-mcp</code>를 <b>Optional</b>로 추가합니다.</li>
+      <li>위 입력란에 필수 Scope <code>relio-mcp</code>와 Public Client ID를 넣고 저장합니다.</li>
+      <li>동적 클라이언트 등록을 쓰려면 Realm의 Client registration → Anonymous 정책에서 <b>Allowed Client Scopes</b>에 <code>relio-mcp</code>를 추가하고, <b>Trusted Hosts</b>에 <code>127.0.0.1</code>, <code>localhost</code>를 넣은 뒤 요청 Host 일치 조건을 끕니다.</li>
+    </ol></details>
+  </div>
 }
 
 function AdminKeyInventory({notify}:{notify:Props['notify']}){

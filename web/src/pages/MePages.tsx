@@ -3,7 +3,7 @@ import { api, date, money, number, relative } from '../api'
 import { initials, label } from '../labels'
 import { Activity, PersonalKey, User, Version } from '../types'
 import Layout, { Empty, Modal, Spinner, Status, navigate } from '../components/Layout'
-import { KeyModal, McpGuideModal, McpToolCatalog } from '../components/Keys'
+import { KeyModal, McpGuideModal, McpOAuthInfo, McpToolCatalog } from '../components/Keys'
 import { errorMessage } from '../App'
 import { SavedView } from '../components/SavedViews'
 import { activityIcon } from '../labels'
@@ -24,8 +24,9 @@ function Keys(props: Props) {
   const [editing, setEditing] = useState<PersonalKey | null>(null)
   const [guide, setGuide] = useState(false)
   const [secret, setSecret] = useState('')
-  const load = () => api<{items: PersonalKey[]; allowedScopes: string[]; mcpTools: McpToolCatalog[]}>('/api/v1/me/keys')
-    .then(v => { setItems(v.items); setScopes(v.allowedScopes); setMcpTools(v.mcpTools || []) })
+  const [mcpOAuth, setMcpOAuth] = useState<McpOAuthInfo>({ available: false })
+  const load = () => api<{items: PersonalKey[]; allowedScopes: string[]; mcpTools: McpToolCatalog[]; mcpOAuth?: McpOAuthInfo}>('/api/v1/me/keys')
+    .then(v => { setItems(v.items); setScopes(v.allowedScopes); setMcpTools(v.mcpTools || []); setMcpOAuth(v.mcpOAuth || { available: false }) })
     .catch(e => props.notify(errorMessage(e), true))
   useEffect(() => { void load() }, [])
 
@@ -56,7 +57,7 @@ function Keys(props: Props) {
     {modal && <KeyModal scopes={scopes} tools={mcpTools} onClose={() => setModal(false)} onCreated={v => { setModal(false); setSecret(v); load() }} notify={props.notify}/>}
     {editing && <KeyModal scopes={scopes} tools={mcpTools} editing={editing} onClose={() => setEditing(null)} onUpdated={() => { setEditing(null); load() }} notify={props.notify}/>}
     {secret && <SecretModal secret={secret} onClose={() => setSecret('')} notify={props.notify}/>}
-    {guide && <McpGuideModal onClose={() => setGuide(false)}/>}
+    {guide && <McpGuideModal oauth={mcpOAuth} onClose={() => setGuide(false)}/>}
   </Frame>
 }
 function SecretModal({secret,onClose,notify}:{secret:string;onClose:()=>void;notify:Props['notify']}){const [copied,setCopied]=useState(false);async function copy(){await navigator.clipboard.writeText(secret);setCopied(true);notify('Secret을 클립보드에 복사했습니다.')}return <Modal title="키가 발급되었습니다" onClose={onClose}><div className="one-time-warning"><b>지금 한 번만 확인할 수 있습니다</b><p>창을 닫으면 다시 볼 수 없습니다. 안전한 비밀값 저장소에 보관하세요.</p></div><div className="secret-box"><code>{secret}</code><button onClick={copy}>{copied?'복사됨 ✓':'복사'}</button></div><div className="modal-actions"><button className="btn btn-primary" onClick={onClose}>안전하게 보관했습니다</button></div></Modal>}

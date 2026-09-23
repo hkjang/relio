@@ -128,6 +128,7 @@ func apiPaths() map[string]any {
 		"/admin/oidc":                                    readUpdate("Keycloak OIDC 설정", "admin:read", "admin:write"),
 		"/admin/oidc/test":                               map[string]any{"post": operation("OIDC 연결 테스트", "admin:write")},
 		"/admin/oidc/mappings":                           readUpdate("OIDC Role·Group Claim 매핑", "admin:read", "admin:write"),
+		"/admin/mcp/oauth":                               map[string]any{"get": operation("MCP OAuth(조직 계정) 구성과 준비 상태 점검", "admin:read")},
 		"/admin/approval-policies":                       methods("승인 정책 조회 및 생성", "admin:read", "admin:write"),
 		"/admin/approval-policies/{id}":                  map[string]any{"put": operation("승인 정책 변경", "admin:write"), "delete": operation("승인 정책 삭제 또는 비활성화", "admin:write")},
 		"/admin/users":                                   methods("사용자 조회 및 생성", "admin:read", "admin:write"),

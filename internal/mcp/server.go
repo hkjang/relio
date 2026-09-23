@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -88,6 +90,35 @@ type response struct {
 	Result  any             `json:"result,omitempty"`
 	Error   *rpcError       `json:"error,omitempty"`
 }
+
+// MarshalJSON enforces the two shapes JSON-RPC 2.0 allows. An error whose
+// request id could not be read must carry "id": null — omitting the member, as
+// the struct tags alone did, is a malformed response strict clients reject.
+// And a success must carry a result, so a handler that returned nothing still
+// answers {} instead of a message with neither result nor error.
+func (r response) MarshalJSON() ([]byte, error) {
+	id := r.ID
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
+	if r.Error != nil {
+		return json.Marshal(struct {
+			JSONRPC string          `json:"jsonrpc"`
+			ID      json.RawMessage `json:"id"`
+			Error   *rpcError       `json:"error"`
+		}{"2.0", id, r.Error})
+	}
+	result := r.Result
+	if result == nil {
+		result = map[string]any{}
+	}
+	return json.Marshal(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Result  any             `json:"result"`
+	}{"2.0", id, result})
+}
+
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -235,10 +266,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if p != nil {
 			actor = p.UserID
 		}
-		_, _ = s.DB.Exec(context.Background(), `INSERT INTO mcp_request_logs(id,actor_id,key_id,method,tool_name,success,duration_ms,request_id,ip) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::inet)`, ids.New(), actor, key, method, nullValue(toolName), success, int(time.Since(start).Milliseconds()), httpx.RequestID(r.Context()), httpx.ClientIP(r))
+		// The response is already written; a slow database must not hold this
+		// goroutine open indefinitely for a log line.
+		logCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		var authMethod, oauthClient any
+		if p != nil {
+			authMethod, oauthClient = nullValue(p.AuthMethod), nullValue(p.OAuthClient)
+		}
+		_, _ = s.DB.Exec(logCtx, `INSERT INTO mcp_request_logs(id,actor_id,key_id,method,tool_name,success,duration_ms,request_id,ip,auth_method,oauth_client) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::inet,$10,$11)`, ids.New(), actor, key, method, nullValue(toolName), success, int(time.Since(start).Milliseconds()), httpx.RequestID(r.Context()), httpx.ClientIP(r), authMethod, oauthClient)
 	}()
 	if p == nil || !p.ChannelAllowed("MCP") || !p.Has("mcp:use") {
-		httpx.ErrorJSON(w, r, http.StatusForbidden, "mcp_access_denied", "MCP 채널 및 mcp:use 권한이 필요합니다.", nil)
+		message := "MCP 채널 및 mcp:use 권한이 필요합니다."
+		if p != nil && p.AuthMethod == "OIDC_ACCESS_TOKEN" {
+			// Signing in again will not help here: the Role is missing the
+			// permission, not the token a scope.
+			message = "로그인은 되었지만 이 계정의 Role에 mcp:use 권한이 없습니다. 관리자에게 권한 부여를 요청하세요."
+		}
+		httpx.ErrorJSON(w, r, http.StatusForbidden, "mcp_access_denied", message, nil)
 		return
 	}
 	if !s.allowedOrigin(r.Context(), r) {
@@ -247,6 +292,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet {
 		// A server that does not offer a server-initiated stream answers 405.
+		// Every SDK client probes this once per session, so it is the expected
+		// answer and is logged as such rather than as a failed request.
+		method, success = "GET", true
 		w.Header().Set("Allow", "POST")
 		httpx.ErrorJSON(w, r, http.StatusMethodNotAllowed, "sse_not_supported", "이 서버는 서버 주도 SSE 스트림을 제공하지 않습니다.", nil)
 		return
@@ -256,7 +304,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// that without a body: a 200 with an empty body made clients that parse
 		// every 2xx report "failed to parse json" on shutdown.
 		w.WriteHeader(http.StatusNoContent)
-		success = true
+		method, success = "DELETE", true
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -311,7 +359,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if !onlyInitialize {
-				s.writeError(w, firstID(requests), -32600,
+				// The Streamable HTTP transport specifies 400 for this, so a
+				// client can tell a version mismatch from a failed call.
+				s.writeErrorStatus(w, http.StatusBadRequest, firstID(requests), -32600,
 					"지원하지 않는 MCP 프로토콜 버전입니다: "+header,
 					map[string]any{"supported": supportedVersionOrder})
 				return
@@ -331,7 +381,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// Notifications are acknowledged, never answered.
 			continue
 		}
-		result, callErr, tool := s.dispatch(r, p, req, negotiated)
+		result, callErr, tool := s.safeDispatch(r, p, req, negotiated)
 		if tool != "" {
 			toolName = tool
 		}
@@ -400,6 +450,25 @@ func firstID(requests []request) json.RawMessage {
 	return nil
 }
 
+// safeDispatch contains a panic to the one request that caused it. Recovering
+// only at the HTTP layer answered a REST 500 the client could not correlate to
+// its request, and discarded every other response in a batch with it.
+func (s *Server) safeDispatch(r *http.Request, p *auth.Principal, req request, negotiated string) (result any, callErr *rpcError, toolName string) {
+	defer func() {
+		if v := recover(); v != nil {
+			requestID := httpx.RequestID(r.Context())
+			slog.Error("mcp request panic", "method", req.Method, "panic", v, "stack", string(debug.Stack()), "requestId", requestID)
+			if req.Method == "tools/call" {
+				// Still a tool result, so the model learns the tool failed.
+				result, callErr = toolFailureFor(errors.New("도구 실행 중 서버 내부 오류가 발생했습니다. 요청 ID: "+requestID), requestID), nil
+				return
+			}
+			result, callErr = nil, &rpcError{Code: -32603, Message: "Internal error", Data: map[string]any{"requestId": requestID}}
+		}
+	}()
+	return s.dispatch(r, p, req, negotiated)
+}
+
 // dispatch runs one JSON-RPC method and returns its result, a JSON-RPC error, or
 // the tool name it invoked for the request log.
 func (s *Server) dispatch(r *http.Request, p *auth.Principal, req request, negotiated string) (any, *rpcError, string) {
@@ -436,7 +505,7 @@ func (s *Server) dispatch(r *http.Request, p *auth.Principal, req request, negot
 			return nil, &rpcError{Code: -32602, Message: err.Error()}, call.Name
 		}
 		if err != nil {
-			return toolFailure(err), nil, call.Name
+			return toolFailureFor(err, httpx.RequestID(r.Context())), nil, call.Name
 		}
 		return result, nil, call.Name
 	case "prompts/list":
@@ -456,7 +525,12 @@ func (s *Server) dispatch(r *http.Request, p *auth.Principal, req request, negot
 		}
 		result, err := s.readResource(r.Context(), p, params.URI)
 		if err != nil {
-			return nil, &rpcError{Code: -32000, Message: err.Error()}, ""
+			message := sanitizeToolError(err, httpx.RequestID(r.Context()))
+			if strings.HasSuffix(err.Error(), "not found") || errors.Is(err, pgx.ErrNoRows) {
+				// -32002 is the code the specification reserves for this case.
+				return nil, &rpcError{Code: -32002, Message: "Resource not found", Data: map[string]any{"uri": params.URI, "detail": message}}, ""
+			}
+			return nil, &rpcError{Code: -32603, Message: message, Data: map[string]any{"uri": params.URI}}, ""
 		}
 		return result, nil, ""
 	// Clients send these after initialize and on shutdown; acknowledging them
@@ -676,8 +750,13 @@ func boolArg(args map[string]any, key string, fallback bool) bool {
 	return v
 }
 func toolResult(v any) map[string]any {
-	b, _ := json.Marshal(v)
-	return map[string]any{"content": []map[string]any{{"type": "text", "text": string(b)}}, "structuredContent": v, "isError": false}
+	structured, raw, err := structuredObject(v)
+	if err != nil {
+		return toolFailure(err)
+	}
+	// The text block keeps the value exactly as it was serialised before, so
+	// clients that read text rather than structuredContent see no change.
+	return map[string]any{"content": []map[string]any{{"type": "text", "text": string(raw)}}, "structuredContent": structured, "isError": false}
 }
 
 // errUnknownTool separates "there is no such tool" — a protocol fault the client
@@ -689,32 +768,34 @@ var errUnknownTool = errors.New("unknown or disallowed tool")
 // error: a permission denial or a validation message is information the model
 // can act on, while a transport error usually just ends the conversation.
 func toolFailure(err error) map[string]any {
-	message := err.Error()
-	// An agent reading "no rows in result set" cannot tell a missing record from
-	// a broken server. Say which it is.
-	if errors.Is(err, pgx.ErrNoRows) || message == "no rows in result set" {
-		message = "요청한 데이터를 찾을 수 없거나 접근 권한이 없습니다."
-	}
+	return toolFailureFor(err, "")
+}
+
+func toolFailureFor(err error, requestID string) map[string]any {
 	return map[string]any{
-		"content": []map[string]any{{"type": "text", "text": message}},
+		"content": []map[string]any{{"type": "text", "text": sanitizeToolError(err, requestID)}},
 		"isError": true,
 	}
 }
 func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall, r *http.Request) (any, error) {
-	permitted := false
+	var definition *tool
 	for _, available := range s.tools(ctx, p) {
 		if available.Name == call.Name {
-			permitted = true
+			definition = &available
 			break
 		}
 	}
-	if !permitted {
+	if definition == nil {
 		return nil, fmt.Errorf("%w: %s", errUnknownTool, call.Name)
 	}
-	a := call.Arguments
+	// Checked against the same schema tools/list advertised, before any handler
+	// or query runs, so a malformed call cannot reach the database.
+	a, err := validateArguments(definition.InputSchema, call.Arguments)
+	if err != nil {
+		return nil, err
+	}
 	meta := crm.RequestMeta{Channel: "MCP", IP: httpx.ClientIP(r), RequestID: httpx.RequestID(ctx), UserAgent: r.UserAgent()}
 	var v any
-	var err error
 	switch call.Name {
 	case "search_customers":
 		v, err = s.CRM.SearchCustomers(ctx, p, customerSearchArgs(a))
@@ -1048,6 +1129,9 @@ func (s *Server) templates(p *auth.Principal) []map[string]any {
 }
 func resourceResult(uri string, v any) map[string]any {
 	b, _ := json.Marshal(v)
+	if string(b) == "null" {
+		b = []byte("[]")
+	}
 	return map[string]any{"contents": []map[string]any{{"uri": uri, "mimeType": "application/json", "text": string(b)}}}
 }
 func (s *Server) readResource(ctx context.Context, p *auth.Principal, uri string) (any, error) {

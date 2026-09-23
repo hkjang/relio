@@ -16,12 +16,28 @@ const ssoErrors: Record<string,{title:string;detail:string}> = {
   callback_failed: { title: 'SSO 로그인에 실패했습니다', detail: '관리자에게 연결 설정을 확인해 달라고 요청하세요.' },
 }
 
+// Inline so the login screen needs no icon package; each is decorative, the
+// button text carries the meaning.
+const ShieldIcon = () => <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+const LockIcon = () => <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+const ChevronIcon = ({ open }: { open: boolean }) => <svg aria-hidden="true" className={`chevron${open ? ' open' : ''}`} width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+
 export default function Login({ status, version, onLogin, notify }: { status: AuthStatus|null; version: Version; onLogin: (u:User)=>void; notify:(m:string,e?:boolean)=>void }) {
   const [username,setUsername]=useState('')
   const [password,setPassword]=useState('')
   const [busy,setBusy]=useState(false)
+  const params=new URLSearchParams(location.search)
+  const ssoOn=!!status?.sso.enabled
+  // With SSO on, the organisation account is the way in and the local admin is
+  // a break-glass path, so it waits behind a disclosure instead of competing
+  // with the SSO button. Without SSO it is the only way in and stays open.
+  const [localOpen,setLocalOpen]=useState(!ssoOn)
   async function submit(e:FormEvent){e.preventDefault();setBusy(true);try{const result=await api<{user:User}>('/api/v1/auth/login',{method:'POST',body:JSON.stringify({username,password})});onLogin(result.user)}catch(err){notify(errorMessage(err),true)}finally{setBusy(false)}}
-  const ssoError=new URLSearchParams(location.search).get('sso_error')
+  const ssoError=params.get('sso_error')
+  // The callback lands on /login?sso=none when a silent attempt found no
+  // Keycloak session. That is not a failure, but without a word the user sees
+  // a login screen appear for no apparent reason.
+  const ssoRefused=params.get('sso')==='none'&&!ssoError
   return <div className="login-page">
     <section className="login-story">
       <div className="story-grid"/><div className="story-glow"/>
@@ -30,11 +46,17 @@ export default function Login({ status, version, onLogin, notify }: { status: Au
       <p className="offline-note"><span>●</span> 완전한 오프라인 환경에서 안전하게 운영됩니다</p>
     </section>
     <main className="login-main"><div className="login-card">
-      <div className="login-heading"><div className="mobile-logo"><span className="brand-mark">R</span><b>Relio</b></div><p className="eyebrow">다시 만나 반갑습니다</p><h2>Relio에 로그인</h2><p>계속하려면 인증 방식을 선택하세요.</p></div>
+      <div className="login-heading"><div className="mobile-logo"><span className="brand-mark">R</span><b>Relio</b></div><p className="eyebrow">다시 만나 반갑습니다</p><h2>Relio에 로그인</h2><p>인증 후 원래 화면으로 안전하게 돌아갑니다.</p></div>
       {ssoError && <div className="alert alert-error"><b>{(ssoErrors[ssoError] || ssoErrors.callback_failed).title}</b><span>{(ssoErrors[ssoError] || ssoErrors.callback_failed).detail}</span><small className="sso-error-code">오류 코드: {ssoError}</small></div>}
-      {status?.sso.enabled && <><a className="btn btn-sso" href={`/api/v1/auth/oidc/start?return_to=${encodeURIComponent(pendingReturn())}`}><span className="keycloak-symbol">K</span>사내 SSO로 로그인<span>→</span></a><div className="divider"><span>또는 관리자 계정</span></div></>}
-      <form onSubmit={submit} className="login-form"><label>{status?.localLoginEnabled === false?'Bootstrap 관리자':'관리자 계정'}<input autoFocus value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" placeholder="아이디를 입력하세요" required/></label><label>비밀번호<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" placeholder="비밀번호를 입력하세요" required/></label><button className="btn btn-primary btn-block" disabled={busy}>{busy?<><span className="spinner small"/>로그인 중…</>:'관리자 계정으로 로그인'}</button></form>
-      <p className="breakglass">비상 관리자는 SSO 장애 시에도 사용할 수 있는 최후 접근 계정입니다.</p>
+      {ssoOn && ssoRefused && <div className="login-notice" role="status"><ShieldIcon/><span>조직 계정 세션이 없어 자동으로 로그인하지 않았습니다. 아래 버튼으로 로그인하세요.</span></div>}
+      {ssoOn && <a className="btn btn-sso" href={`/api/v1/auth/oidc/start?return_to=${encodeURIComponent(pendingReturn())}`}><ShieldIcon/>조직 계정으로 SSO 로그인</a>}
+      {ssoOn && <button type="button" className="local-login-toggle" aria-expanded={localOpen} aria-controls="local-login-form" onClick={()=>setLocalOpen(open=>!open)}><LockIcon/><span>관리자 계정으로 로그인</span><ChevronIcon open={localOpen}/></button>}
+      {localOpen && <form id="local-login-form" onSubmit={submit} className="login-form">
+        <div className="login-notice subtle"><LockIcon/><span>{ssoOn?'SSO를 사용할 수 없을 때를 위한 복구용 관리자 계정입니다. 평소에는 조직 계정으로 로그인하세요.':'설치 관리자 계정입니다. SSO를 설정한 뒤에도 장애 시 복구용으로 계속 사용할 수 있습니다.'}</span></div>
+        <label>{status?.localLoginEnabled === false?'Bootstrap 관리자':'관리자 계정'}<input autoFocus value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" placeholder="아이디를 입력하세요" required/></label>
+        <label>비밀번호<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" placeholder="비밀번호를 입력하세요" required/></label>
+        <button className={`btn btn-block ${ssoOn?'btn-secondary':'btn-primary'}`} disabled={busy}>{busy?<><span className="spinner small"/>로그인 중…</>:'관리자 계정으로 로그인'}</button>
+      </form>}
     </div><footer className="login-version"><b>Relio v{version.version}</b><span>빌드 {version.gitCommit.slice(0,8)}</span><span>·</span><span>{version.edition}</span></footer></main>
   </div>
 }

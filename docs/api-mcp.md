@@ -40,11 +40,18 @@ Relio MCP Server는 AI Agent가 CRM 데이터 및 영업 인텔리전스 분석�
 ### 2.1 MCP 연결 및 프로토콜 규격
 - **Endpoint**: `POST /mcp`
 - **JSON-RPC 버전**: `2.0`
-- **MCP Protocol Version**: `2025-11-25` (호환 버전: `2025-06-18`, `2025-03-26`)
+- **MCP Protocol Version**: `2025-11-25` (호환 버전: `2025-06-18`, `2025-03-26`, `2024-11-05`) — 클라이언트가 요청한 버전으로 응답합니다.
 - **필수 HTTP Headers**:
-  - `Authorization: Bearer relio_<keyId>_<secret>`
+  - `Authorization: Bearer relio_<keyId>_<secret>` 또는 Keycloak Access Token(2.4 참고)
   - `Accept: application/json, text/event-stream`
-  - `MCP-Protocol-Version: 2025-11-25`
+  - `MCP-Protocol-Version: 2025-11-25` — 지원하지 않는 버전이면 HTTP `400`
+- `/mcp` 와 `/mcp/` 는 같은 엔드포인트입니다. `GET /mcp` 는 서버 주도 SSE 를 제공하지 않으므로 `405`, `DELETE /mcp` 는 `204` 입니다.
+
+#### 응답 계약
+- `tools/call` 결과의 `structuredContent` 는 **항상 JSON 객체**입니다. 목록을 돌려주는 도구는 `{ "items": [...], "count": n }` 으로 감싸며, `content[0].text` 에는 원래 JSON(배열 포함)이 그대로 들어 있습니다. 공식 MCP SDK 기반 클라이언트는 객체가 아닌 `structuredContent` 를 스키마 오류로 거부합니다.
+- 도구 인자는 실행 전에 해당 도구의 `inputSchema` 로 검사합니다. 필수 인자 누락, UUID 가 아닌 ID, 알 수 없는 인자, 잘못된 형식은 `isError: true` 결과와 고칠 방법을 담은 메시지로 돌아옵니다(2025-11-25 명세 권고 — 모델이 스스로 고칠 수 있게). `customer_id`, `CustomerID` 처럼 표기만 다른 인자는 `customerId` 로 맞춰 적용하고, `"5"` 같은 숫자 문자열과 `"true"`/`"false"` 는 해당 형식으로 변환합니다.
+- 데이터베이스 오류 원문(SQLSTATE 등)은 응답에 포함하지 않습니다. 원인은 요청 ID 와 함께 서버 로그에 남습니다.
+- 파싱할 수 없는 본문은 HTTP `400` 과 `"id": null` 인 JSON-RPC 오류로 응답합니다. 배치 요청의 한 항목에서 내부 오류가 나도 나머지 항목은 정상 응답합니다.
 
 ### 2.2 MCP 통제 및 Risk Level Annotations
 AI Agent의 오작동 및 부적절한 변경을 방지하기 위해 모든 Tool에는 **Risk Level Annotation**이 포함되어 반환됩니다:
@@ -61,6 +68,21 @@ AI Agent의 오작동 및 부적절한 변경을 방지하기 위해 모든 Tool
 - Qwen Code는 `mcpServers.relio.httpUrl`과 `headers.Authorization`을 사용합니다. `url`은 구형 SSE 설정입니다.
 - OpenCode는 `mcp.relio.type`을 `remote`로, `url`, `headers`, `oauth: false`를 설정합니다.
 - 제품의 **개인 연동 키 → MCP 사용 안내 → 클라이언트 설정**에서 현재 Host와 키 형식이 반영된 예시를 복사할 수 있습니다.
+
+### 2.4 조직 계정 OAuth (Keycloak)
+
+관리자가 켜면(`mcp.oauth_enabled`) Relio 는 MCP Authorization 명세의 OAuth Resource Server 로 동작합니다.
+
+| 단계 | 내용 |
+|---|---|
+| 1. 401 | 토큰 없이 `POST /mcp` → `401` + `WWW-Authenticate: Bearer realm="Relio MCP", resource_metadata="<service_url>/.well-known/oauth-protected-resource/mcp", scope="profile email relio-mcp"` |
+| 2. Protected Resource Metadata (RFC 9728) | `GET /.well-known/oauth-protected-resource/mcp` (루트 `/.well-known/oauth-protected-resource` 도 동일) → `resource`, `authorization_servers: [Keycloak Issuer]`, `scopes_supported` |
+| 3. 로그인 | 클라이언트가 Keycloak 메타데이터를 읽고 PKCE(S256)와 `resource`(RFC 8707)로 인가 요청 → 사용자가 조직 계정으로 로그인 |
+| 4. 호출 | `Authorization: Bearer <Keycloak Access Token>` 으로 MCP 호출 |
+
+Relio 가 받는 토큰의 조건 — 서명(RS256, Keycloak JWKS), Issuer 일치, 유효기간(`exp`/`nbf`), **ID·Refresh 토큰이 아닐 것**(`typ`), `aud` 에 `<service_url>/mcp`·`<service_url>`·SSO Client ID 중 하나, 필수 Scope(설정 시). 거부 사유는 `WWW-Authenticate` 의 `error="invalid_token"`(다시 로그인) 또는 `403` + `error="insufficient_scope"`(필요 Scope 를 포함해 다시 로그인)로 알려 줍니다. Keycloak 서명 키와 메타데이터는 캐시하며(15분, 모르는 `kid` 는 30초에 한 번까지 갱신, Keycloak 장애 시 6시간 동안 기존 키로 검증) 요청마다 Keycloak 을 호출하지 않습니다.
+
+OAuth 로 연결한 에이전트의 도구 범위는 **사용자 Role 권한 ∩ 관리자 Tool 허용목록** 입니다(개인 키 Scope 없음). Keycloak 설정 순서는 [관리자 가이드 4.4](ADMIN_GUIDE.md#44-조직-계정oauth으로-mcp-연결) 를 보세요.
 
 ---
 

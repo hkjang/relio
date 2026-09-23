@@ -2,18 +2,14 @@ package oidc
 
 import (
 	"context"
-	"crypto"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,6 +30,9 @@ type Discovery struct {
 	TokenEndpoint         string `json:"token_endpoint"`
 	JWKSURI               string `json:"jwks_uri"`
 	EndSessionEndpoint    string `json:"end_session_endpoint,omitempty"`
+	// Present when the provider accepts Dynamic Client Registration, which is
+	// how an MCP client without a pre-registered client id signs up.
+	RegistrationEndpoint string `json:"registration_endpoint,omitempty"`
 }
 
 // Config is the stored provider. AutoLogin lets the browser try prompt=none
@@ -217,6 +216,9 @@ func (s *Service) Save(ctx context.Context, p *auth.Principal, c Config, ip, req
 			return Config{}, errors.New("OIDC configuration was changed by another user")
 		}
 	}
+	// A changed issuer or root CA must not keep verifying against the old
+	// provider's cached keys.
+	providerKeys.reset()
 	s.Audit.Record(ctx, audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "ADMIN", Action: "OIDC_CONFIG_UPDATE", Resource: "oidc_provider", ResourceID: id, Before: map[string]any{"enabled": existing.Enabled, "issuerUrl": existing.IssuerURL, "clientId": existing.ClientID, "autoLogin": existing.AutoLogin}, After: map[string]any{"enabled": c.Enabled, "issuerUrl": c.IssuerURL, "clientId": c.ClientID, "clientSecret": "***", "autoLogin": c.AutoLogin}, IP: ip, RequestID: requestID, UserAgent: ua})
 	return s.Get(ctx)
 }
@@ -576,73 +578,13 @@ func (s *Service) Callback(ctx context.Context, state, code, ip, ua string) (Ses
 	return Session{Token: token, Principal: p, Silent: silent, ReturnTo: returnToOrDefault(returnTo)}, nil
 }
 
+// verifyToken checks an ID token from the login callback: the signature and
+// validity window through verifySigned, then the nonce this login sent and the
+// audience, which for an ID token is always Relio's own client.
 func verifyToken(ctx context.Context, client *http.Client, d Discovery, raw, clientID, nonce string) (map[string]any, error) {
-	parts := strings.Split(raw, ".")
-	if len(parts) != 3 {
-		return nil, errors.New("invalid ID token")
-	}
-	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	claims, err := verifySigned(ctx, client, d, raw)
 	if err != nil {
 		return nil, err
-	}
-	var header struct {
-		Alg string `json:"alg"`
-		Kid string `json:"kid"`
-	}
-	if json.Unmarshal(headerBytes, &header) != nil || header.Alg != "RS256" || header.Kid == "" {
-		return nil, errors.New("unsupported ID token signature")
-	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, d.JWKSURI, nil)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var set struct {
-		Keys []struct{ Kid, Kty, Alg, N, E string } `json:"keys"`
-	}
-	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&set); err != nil {
-		return nil, err
-	}
-	var pub *rsa.PublicKey
-	for _, k := range set.Keys {
-		if k.Kid == header.Kid && k.Kty == "RSA" {
-			nBytes, e1 := base64.RawURLEncoding.DecodeString(k.N)
-			eBytes, e2 := base64.RawURLEncoding.DecodeString(k.E)
-			if e1 != nil || e2 != nil || len(eBytes) > 4 {
-				continue
-			}
-			padded := make([]byte, 4)
-			copy(padded[4-len(eBytes):], eBytes)
-			pub = &rsa.PublicKey{N: new(big.Int).SetBytes(nBytes), E: int(binary.BigEndian.Uint32(padded))}
-			break
-		}
-	}
-	if pub == nil {
-		return nil, errors.New("ID token signing key not found")
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return nil, err
-	}
-	sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if err = rsa.VerifyPKCS1v15(pub, crypto.SHA256, sum[:], sig); err != nil {
-		return nil, errors.New("ID token signature verification failed")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, err
-	}
-	claims := map[string]any{}
-	if err = json.Unmarshal(payload, &claims); err != nil {
-		return nil, err
-	}
-	if strings.TrimRight(fmt.Sprint(claims["iss"]), "/") != strings.TrimRight(d.Issuer, "/") {
-		return nil, errors.New("ID token issuer mismatch")
-	}
-	exp, ok := claims["exp"].(float64)
-	if !ok || time.Unix(int64(exp), 0).Before(time.Now().Add(-time.Minute)) {
-		return nil, errors.New("ID token expired")
 	}
 	if nonce != "" && fmt.Sprint(claims["nonce"]) != nonce {
 		return nil, errors.New("ID token nonce mismatch")
@@ -877,31 +819,4 @@ func (s *Service) PublicStatus(ctx context.Context) map[string]any {
 	return map[string]any{"enabled": c.Enabled, "issuer": c.IssuerURL, "autoLogin": c.Enabled && c.AutoLogin}
 }
 
-func (s *Service) ValidateAccessToken(ctx context.Context, raw string) (string, error) {
-	c, err := s.privateConfig(ctx)
-	if err != nil || !c.Enabled {
-		return "", errors.New("OIDC access tokens are disabled")
-	}
-	d, err := fetchDiscovery(ctx, c)
-	if err != nil {
-		return "", err
-	}
-	client, err := newHTTPClient(c.RootCAPEM)
-	if err != nil {
-		return "", err
-	}
-	claims, err := verifyToken(ctx, client, d, raw, c.ClientID, "")
-	if err != nil {
-		return "", err
-	}
-	subject := strings.TrimSpace(fmt.Sprint(claims["sub"]))
-	if subject == "" || subject == "<nil>" {
-		return "", errors.New("access token has no subject")
-	}
-	var userID string
-	if err = s.DB.QueryRow(ctx, `SELECT id FROM users WHERE oidc_subject=$1 AND active=true`, subject).Scan(&userID); err != nil {
-		return "", errors.New("OIDC access token user is not provisioned")
-	}
-	return userID, nil
-}
 func ClientIP(r *http.Request) string { return httpx.ClientIP(r) }
