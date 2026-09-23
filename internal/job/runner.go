@@ -29,6 +29,9 @@ type Runner struct {
 	// Analyze rebuilds signals, risks and recommendations. It throttles itself
 	// on the last completed run, so calling it every tick is safe.
 	Analyze func(context.Context) error
+	// Mail sends the scheduled notices (contracts entering their renewal
+	// window). It is idempotent per contract, so calling it every tick is safe.
+	Mail func(context.Context) error
 }
 
 func New(db *pgxpool.Pool, log *slog.Logger) *Runner {
@@ -90,6 +93,11 @@ func (r *Runner) maintain(ctx context.Context, db session) {
 	if r.Analyze != nil {
 		if err := r.Analyze(ctx); err != nil {
 			r.Log.Error("run intelligence analysis", "error", err)
+		}
+	}
+	if r.Mail != nil {
+		if err := r.Mail(ctx); err != nil {
+			r.Log.Error("send scheduled mail notices", "error", err)
 		}
 	}
 }

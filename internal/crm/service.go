@@ -479,6 +479,10 @@ func (s *Service) Customer360(ctx context.Context, p *auth.Principal, id string)
 		}
 		out.Contacts = append(out.Contacts, x)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return out, err
+	}
 	rows.Close()
 	opps, err := s.ListOpportunities(ctx, p, OpportunityFilter{CustomerID: id, Limit: 100})
 	if err != nil {
@@ -506,6 +510,10 @@ func (s *Service) Customer360(ctx context.Context, p *auth.Principal, id string)
 			return out, err
 		}
 		out.Contracts = append(out.Contracts, map[string]any{"id": cid, "contractNo": no, "title": title, "amount": amount, "status": status, "startDate": start, "endDate": end, "autoRenew": renew})
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return out, err
 	}
 	rows.Close()
 	openAmount := 0.0
@@ -1039,6 +1047,11 @@ func (s *Service) Forecast(ctx context.Context, p *auth.Principal) (map[string]a
 		cats = append(cats, map[string]any{"category": cat, "count": count, "amount": amount, "weightedAmount": w})
 		total += amount
 		weighted += w
+	}
+	// currencyRows takes over below and the Err() at the end of the function
+	// only reports on that second stream, so this one is judged here.
+	if err = rows.Err(); err != nil {
+		return nil, err
 	}
 	var currencies []map[string]any
 	currencyRows, currencyErr := s.DB.Query(ctx, `SELECT currency_code,count(*),COALESCE(sum(expected_amount),0),COALESCE(sum(base_expected_amount),0) FROM opportunities o WHERE status='OPEN' AND `+scopeSQL("o")+` GROUP BY currency_code ORDER BY currency_code`, p.DataScope, p.UserID, nullable(p.OrganizationID))

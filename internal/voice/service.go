@@ -16,7 +16,9 @@ import (
 	"github.com/hkjang/relio/internal/audit"
 	"github.com/hkjang/relio/internal/auth"
 	"github.com/hkjang/relio/internal/crm"
+	"github.com/hkjang/relio/internal/mail"
 	"github.com/hkjang/relio/internal/platform/ids"
+	"github.com/hkjang/relio/internal/platform/timezone"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -25,6 +27,20 @@ type Service struct {
 	DB    *pgxpool.Pool
 	CRM   *crm.Service
 	Audit *audit.Service
+	// Mail tells a newly assigned owner in the background; nil means mail is
+	// not wired. Clock renders the SLA deadline in the configured zone.
+	Mail  mail.Notifier
+	Clock *timezone.Loader
+}
+
+// notifyAssigned mails the owner of a record that somebody else just put on
+// their desk. The SLA clock is running from the moment of receipt, so this is
+// the one moment they must not learn about by refreshing the list.
+func (s *Service) notifyAssigned(ctx context.Context, p *auth.Principal, voice Voice) {
+	if s.Mail == nil || voice.OwnerID == "" || voice.OwnerID == p.UserID {
+		return
+	}
+	s.Mail.Notify(ctx, mail.VoiceAssigned(p.DisplayName, voice.VoiceNo, voice.Title, voice.CustomerName, voice.Severity, voice.ID, voice.ResponseDueAt, s.Clock.Location(ctx)), p.UserID, []string{voice.OwnerID})
 }
 
 type Category struct {
@@ -558,6 +574,9 @@ func (s *Service) Create(ctx context.Context, p *auth.Principal, in Input, m crm
 		After: map[string]any{"voiceNo": voiceNo, "customerId": in.CustomerID, "voiceType": in.VoiceType, "severity": severity, "title": in.Title},
 		IP:    m.IP, RequestID: m.RequestID, UserAgent: m.UserAgent})
 	out, _, err := s.Get(ctx, p, id)
+	if err == nil {
+		s.notifyAssigned(ctx, p, out)
+	}
 	return out, err
 }
 
@@ -753,6 +772,9 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id string, in U
 		After:  map[string]any{"status": status, "severity": severity, "ownerId": owner},
 		IP:     m.IP, RequestID: m.RequestID, UserAgent: m.UserAgent})
 	out, _, err := s.Get(ctx, p, id)
+	if err == nil && owner != before.OwnerID {
+		s.notifyAssigned(ctx, p, out)
+	}
 	return out, err
 }
 

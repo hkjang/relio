@@ -38,6 +38,12 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./...
       - name: Backend static analysis
         run: go vet ./...
+      - name: Backend formatting
+        run: |
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would change these files:"; echo "$unformatted"; exit 1
+          fi
       - name: Enforce three application environment variables
         run: ./scripts/check-env-contract.sh
       - name: Verify no external runtime asset

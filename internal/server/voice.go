@@ -137,6 +137,10 @@ func (s *Server) adminVoiceCategories(w http.ResponseWriter, r *http.Request) {
 			"responseHours": response, "resolutionHours": resolution, "active": active, "displayOrder": order, "usedCount": used,
 			"slaEnabled": sla, "workspaceId": workspaceID, "workspaceName": workspaceName})
 	}
+	if err = rows.Err(); err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
 }
 

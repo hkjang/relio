@@ -11,6 +11,7 @@ import (
 
 	"github.com/hkjang/relio/internal/audit"
 	"github.com/hkjang/relio/internal/auth"
+	"github.com/hkjang/relio/internal/mail"
 	"github.com/hkjang/relio/internal/platform/ids"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,6 +56,27 @@ type Request struct {
 type Service struct {
 	DB    *pgxpool.Pool
 	Audit *audit.Service
+	// Mail sends event notifications in the background; nil means mail is not
+	// wired and the approval flow behaves exactly as before.
+	Mail mail.Notifier
+}
+
+func (s *Service) notify(ctx context.Context, notification mail.Notification, actorID string, recipients ...string) {
+	if s.Mail == nil {
+		return
+	}
+	s.Mail.Notify(ctx, notification, actorID, recipients)
+}
+
+// entityTitle is what the screens call the thing under approval: a name for
+// an opportunity or customer, a title for a quotation or contract.
+func entityTitle(snapshot map[string]any) string {
+	for _, key := range []string{"name", "title"} {
+		if value, ok := snapshot[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return "(제목 없음)"
 }
 
 func (s *Service) Policies(ctx context.Context, p *auth.Principal, entity string) ([]Policy, error) {
@@ -340,6 +362,9 @@ func (s *Service) Submit(ctx context.Context, p *auth.Principal, entity, id, rea
 		return Request{}, err
 	}
 	s.Audit.Record(ctx, audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "WEB", Action: "APPROVAL_SUBMIT", Resource: strings.ToLower(entity), ResourceID: id, After: map[string]any{"requestId": reqID, "policyId": policy.ID}, IP: ip, RequestID: requestID, UserAgent: ua})
+	// The approver is the one person who cannot act until they know; the
+	// requester is waiting on them.
+	s.notify(ctx, mail.ApprovalRequested(p.DisplayName, entity, entityTitle(snapshot), id, policy.Name, reason), p.UserID, approver)
 	return s.Get(ctx, p, reqID)
 }
 func (s *Service) resolveApprover(ctx context.Context, p *auth.Principal, policy *Policy) (string, error) {
@@ -439,6 +464,8 @@ func (s *Service) Decide(ctx context.Context, p *auth.Principal, id, decision, c
 	}
 	after, err := s.Get(ctx, p, id)
 	s.Audit.Record(ctx, audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "WEB", Action: "APPROVAL_" + decision, Resource: strings.ToLower(before.EntityType), ResourceID: before.EntityID, Before: before, After: after, IP: ip, RequestID: requestID, UserAgent: ua})
+	// The requester has been refreshing the approvals screen for this answer.
+	s.notify(ctx, mail.ApprovalDecided(p.DisplayName, before.EntityType, entityTitle(before.Snapshot), before.EntityID, status, comment), p.UserID, before.RequesterID)
 	return after, err
 }
 
