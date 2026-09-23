@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -18,7 +19,31 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 		"items":         v,
 		"allowedScopes": apikey.AllowedScopesFor(principal(r)),
 		"mcpTools":      s.MCP.ToolCatalog(r.Context(), principal(r)),
+		// The MCP guide shows organisation-account sign-in only when the
+		// server will actually accept it.
+		"mcpOAuth": s.publicMCPOAuth(r.Context()),
 	})
+}
+
+// publicMCPOAuth is the part of the MCP OAuth configuration a user needs to set
+// up a client. It omits the policy detail the administrator screen shows.
+func (s *Server) publicMCPOAuth(ctx context.Context) map[string]any {
+	policy := s.OIDC.MCPOAuth(ctx)
+	if !policy.Available {
+		return map[string]any{"available": false}
+	}
+	return map[string]any{"available": true, "resource": policy.Resource, "metadataUrl": policy.MetadataURL,
+		"issuer": policy.Issuer, "scopes": policy.Scopes, "clientId": policy.PublicClientID}
+}
+
+// mcpOAuthStatus gives the administrator the configuration and the checks that
+// decide whether an MCP client can actually complete a sign-in.
+func (s *Server) mcpOAuthStatus(w http.ResponseWriter, r *http.Request) {
+	if err := requireAdmin(principal(r), false); err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	httpx.JSON(w, 200, s.OIDC.MCPOAuthDiagnostics(r.Context()))
 }
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	var in apikey.CreateInput

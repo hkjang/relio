@@ -184,7 +184,9 @@ Keycloak 에 이미 로그인한 사람이 Relio 를 열면 로그인 화면 없
 3. 같은 시도를 반복하면 브라우저가 Keycloak 과 Relio 사이를 끝없이 오가므로 세 겹으로 막습니다. (1) 탭 세션마다 한 번만 시도하고 그 표시를 `sessionStorage` 에 남깁니다 — 새 탭은 다시 시도하고, 거절 뒤 새로고침은 시도하지 않습니다. (2) 사용자가 스스로 로그아웃하면 다음 로그인까지 시도하지 않습니다. (3) 콜백이 거절을 받으면 주소에 `?sso=none` 을 남겨 저장소가 지워졌더라도 다시 시도하지 않습니다. 브라우저 저장소를 읽을 수 없는 사생활 보호 모드에서는 "이미 시도했다" 로 간주해 시도하지 않습니다.
 4. 서버는 이 설정이 꺼져 있으면 `?prompt=none` 이 붙어 와도 조용히 평범한 로그인으로 바꿉니다. 주소를 손봐서 흐름을 바꿀 수는 없습니다. `return_to` 는 `/` 로 시작하고 `//` 로 시작하지 않는 같은 출처의 앱 경로만 받으며, API·MCP·로그인 경로나 그 밖의 값은 `/app` 으로 대체됩니다.
 
-로그인·콜백 경로와 API·MCP·헬스 경로에서는 시도하지 않습니다. 켜기 전에 **연결 테스트** 가 통과하고 수동 **사내 SSO로 로그인** 이 되는지 먼저 확인하세요 — 조용한 시도는 화면을 보여 주지 않으므로 설정 오류가 사용자에게는 "그냥 로그인 화면이 떴다" 로만 보이고, 원인은 서버 로그 `silent SSO attempt failed` 에 남습니다.
+자동 로그인이 거절되어 `/login?sso=none` 에 도착한 사용자에게는 로그인 화면이 "조직 계정 세션이 없어 자동으로 로그인하지 않았습니다" 라고 알려 줍니다. SSO 가 켜져 있으면 로그인 화면의 주 동작은 **조직 계정으로 SSO 로그인** 이고, Bootstrap·로컬 관리자 입력란은 **관리자 계정으로 로그인** 을 펼쳐야 나타나는 복구용 경로입니다.
+
+로그인·콜백 경로와 API·MCP·헬스 경로에서는 시도하지 않습니다. 켜기 전에 **연결 테스트** 가 통과하고 수동 **조직 계정으로 SSO 로그인** 이 되는지 먼저 확인하세요 — 조용한 시도는 화면을 보여 주지 않으므로 설정 오류가 사용자에게는 "그냥 로그인 화면이 떴다" 로만 보이고, 원인은 서버 로그 `silent SSO attempt failed` 에 남습니다.
 
 ### 3.4 영업 정책
 
@@ -284,6 +286,35 @@ Momento 를 추가할 때 **같은 오리진 프록시 사용** 이 기본으로
 ### 4.3 개인 연동 키 관리
 
 사용자는 자기 키를 발급·회전·폐기하고, 관리자는 **연동 키 · API · MCP** 에서 전체 키를 보고 `POST /api/v1/admin/users/{id}/keys/revoke-all` 로 한 사용자의 키를 모두 회수할 수 있습니다. 서버는 Secret 의 HMAC Digest 만 저장하므로 DB 가 유출되어도 키가 복원되지 않습니다.
+
+### 4.4 조직 계정(OAuth)으로 MCP 연결
+
+개인 키 대신 Keycloak 조직 계정으로 MCP 에 로그인하게 하는 설정입니다. MCP Authorization 명세에 따라 Relio 는 **OAuth Resource Server** 로 동작합니다. 로그인·동의·토큰 발급은 Keycloak 이 하고, Relio 는 Keycloak 이 Relio 를 대상으로 발급한 Access Token 만 받습니다. **기본값은 꺼짐**입니다 — 에이전트가 로그인한 사용자의 Role 권한 전체로 동작하기 때문입니다(개인 키처럼 Scope 로 좁힐 수 없습니다).
+
+**연동 키 · API · MCP → 조직 계정(OAuth)으로 MCP 연결** 에서 켜고, 같은 곳의 준비 상태 목록(`GET /api/v1/admin/mcp/oauth`)으로 점검합니다.
+
+| 설정 | 키 | 뜻 |
+|---|---|---|
+| OAuth 허용 | `mcp.oauth_enabled` | 켜면 `/.well-known/oauth-protected-resource/mcp` 를 공개하고 MCP 의 401 응답에 `resource_metadata` 를 넣습니다. 끄면 두 가지 모두 사라지고 MCP 는 Keycloak 토큰을 거부합니다(REST 의 기존 Bearer 동작은 영향 없음). |
+| 필수 Scope | `mcp.oauth_required_scope` | 이 Scope 가 없는 토큰은 `403 insufficient_scope` 로 거부합니다. 비우면 Audience 만 확인합니다. |
+| 에이전트용 Public Client ID | `mcp.oauth_client_id` | 사용자 **MCP 사용 안내** 에 표시됩니다. 비우면 동적 클라이언트 등록을 안내합니다. |
+
+**Keycloak 설정 (권장 — 사전 등록 Public Client)**
+
+1. Client Scope `relio-mcp` 를 만들고 **Audience** Mapper 를 추가합니다. Included Client Audience 는 Relio 의 SSO Client ID(예: `relio`), **Add to access token** 을 켭니다. 이 Mapper 가 없으면 토큰의 `aud` 에 Relio 가 없어 모든 요청이 `invalid_token` 으로 거부됩니다.
+2. Public Client `relio-mcp-cli` 를 만듭니다. Client authentication 끔, Standard flow 켬, PKCE Method `S256`, Valid redirect URIs `http://127.0.0.1/*`, `http://localhost/*`. Keycloak 은 Loopback 주소의 임의 포트를 허용하므로 CLI 가 고르는 포트(OpenCode 19876, Qwen 7777 등)가 모두 맞습니다.
+3. 이 Client 의 Client scopes 에 `relio-mcp` 를 **Optional** 로 붙입니다.
+4. Relio 화면에 필수 Scope `relio-mcp`, Public Client ID `relio-mcp-cli` 를 저장합니다.
+
+**동적 클라이언트 등록(DCR)을 쓰려면** Realm 의 Client registration → Anonymous access policies 에서 다음을 바꿉니다. 등록된 클라이언트에는 Keycloak 이 동의 화면을 요구합니다.
+
+- **Allowed Client Scopes**: `relio-mcp` 추가. (Relio 는 `openid` 를 광고하지 않습니다 — 클라이언트가 등록 요청에 그대로 옮겨 적고, Keycloak 이 이 정책으로 거부하기 때문입니다.)
+- **Trusted Hosts**: `127.0.0.1`, `localhost` 를 넣고 *Host sending registration request must match* 를 끕니다. OpenCode 는 등록 요청에 `client_uri: https://opencode.ai` 를 보내므로 `opencode.ai` 도 넣어야 합니다(문자열 비교이며 외부 통신은 없습니다).
+- Qwen Code 는 Keycloak 처럼 Issuer 에 경로(`/realms/…`)가 있는 서버와 DCR 을 하지 못합니다(0.20.1 실측). Qwen 사용자에게는 Public Client ID 를 안내하세요.
+
+**서비스 URL** — 리소스 식별자는 `system.service_url` + `/mcp` 입니다. 클라이언트는 자신이 접속한 주소와 이 값이 다르면 연결을 거부하므로, 서비스 URL 을 사용자가 실제로 쓰는 주소로 맞추세요. 준비 상태 목록이 `localhost` 로 남은 서비스 URL 을 경고합니다.
+
+**감사와 추적** — OAuth 로 들어온 MCP 요청은 `mcp_request_logs` 에 `auth_method = OIDC_ACCESS_TOKEN` 과 Keycloak `azp`(`oauth_client`) 로 남아 개인 키 요청과 구분됩니다. 처음 MCP 로 접속한 SSO 사용자는 브라우저 첫 로그인과 같은 규칙(자동 생성 설정, 기본 Role)으로 만들어집니다.
 
 ---
 

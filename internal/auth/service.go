@@ -37,9 +37,38 @@ type Principal struct {
 	KeyDBID            string   `json:"-"`
 	KeyScopes          []string `json:"-"`
 	KeyChannels        []string `json:"-"`
-	CSRFToken          string   `json:"csrfToken,omitempty"`
-	perm               map[string]bool
+	// Set for a Keycloak access token: the OAuth client it was issued to (azp)
+	// and the scopes it carries, so MCP can log and gate on them.
+	OAuthClient string   `json:"-"`
+	TokenScopes []string `json:"-"`
+	CSRFToken   string   `json:"csrfToken,omitempty"`
+	perm        map[string]bool
 }
+
+// AccessToken is what a verified OIDC access token proved about its caller.
+type AccessToken struct {
+	UserID   string
+	Subject  string
+	ClientID string
+	Scopes   []string
+}
+
+// BearerError explains a refused bearer token in the terms RFC 6750 gives a
+// client. invalid_token means "authenticate again"; insufficient_scope means
+// "authenticate again and ask for Scope". Description goes in the
+// WWW-Authenticate header, which only allows ASCII; Message is for people.
+type BearerError struct {
+	Code        string
+	Description string
+	Message     string
+	Scope       string
+}
+
+func (e *BearerError) Error() string { return e.Description }
+
+// IsMCPPath reports the MCP endpoint, which holds bearer tokens to the stricter
+// rules of the MCP authorization specification.
+func IsMCPPath(path string) bool { return path == "/mcp" || strings.HasPrefix(path, "/mcp/") }
 
 func (p *Principal) Has(permission string) bool {
 	if p == nil {
@@ -74,9 +103,12 @@ func (p *Principal) ChannelAllowed(channel string) bool {
 }
 
 type Service struct {
-	DB            *pgxpool.Pool
-	Secrets       *secrets.Manager
-	OIDCValidator func(context.Context, string) (string, error)
+	DB      *pgxpool.Pool
+	Secrets *secrets.Manager
+	// OIDCValidator verifies a Keycloak access token. forMCP applies the MCP
+	// authorization rules — the resource audience, the administrator switch and
+	// the required scope — without changing what the REST API accepts.
+	OIDCValidator func(ctx context.Context, raw string, forMCP bool) (*AccessToken, error)
 }
 
 func (s *Service) Bootstrap(ctx context.Context, cfg config.Config) error {
@@ -195,17 +227,24 @@ func (s *Service) Authenticate(r *http.Request) (*Principal, error) {
 			return s.authenticateKey(r.Context(), bearer, httpx.ClientIP(r))
 		}
 		if s.OIDCValidator != nil {
-			userID, err := s.OIDCValidator(r.Context(), bearer)
-			if err == nil {
-				p, loadErr := s.loadPrincipal(r.Context(), userID)
-				if loadErr != nil {
-					return nil, loadErr
+			token, err := s.OIDCValidator(r.Context(), bearer, IsMCPPath(r.URL.Path))
+			if err != nil {
+				var refused *BearerError
+				if errors.As(err, &refused) {
+					return nil, refused
 				}
-				p.AuthMethod = "OIDC_ACCESS_TOKEN"
-				return p, nil
+				return nil, &BearerError{Code: "invalid_token", Description: "The access token could not be verified", Message: "액세스 토큰을 검증할 수 없습니다. 다시 로그인하세요."}
 			}
+			p, loadErr := s.loadPrincipal(r.Context(), token.UserID)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			p.AuthMethod = "OIDC_ACCESS_TOKEN"
+			p.OAuthClient = token.ClientID
+			p.TokenScopes = token.Scopes
+			return p, nil
 		}
-		return nil, errors.New("invalid bearer token")
+		return nil, &BearerError{Code: "invalid_token", Description: "The bearer token is not recognised", Message: "인식할 수 없는 Bearer 토큰입니다."}
 	}
 	cookie, err := r.Cookie(SessionCookie)
 	if err != nil {

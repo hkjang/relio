@@ -148,6 +148,11 @@ func (s *Server) Handler() http.Handler {
 	// trailing slash used to fall through to the SPA and receive HTML.
 	mux.Handle("/mcp", s.mcpEntry())
 	mux.Handle("/mcp/", s.mcpEntry())
+	// RFC 9728 Protected Resource Metadata. Clients try the path-aware form
+	// for the endpoint they were given first, then the root form.
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource", s.protectedResourceMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", s.protectedResourceMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp/{$}", s.protectedResourceMetadata)
 	mux.HandleFunc("GET /analytics.js", s.analyticsLoader)
 	// Same-origin proxy to the Momento collector; 404 until an administrator
 	// enables a Momento provider with the proxy on. Unauthenticated like the
@@ -282,6 +287,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/admin/settings/{namespace}/{key}", s.requireAuth(http.HandlerFunc(s.putSetting), false))
 	mux.Handle("DELETE /api/v1/admin/settings/{namespace}/{key}", s.requireAuth(http.HandlerFunc(s.deleteSetting), false))
 	mux.Handle("GET /api/v1/admin/oidc", s.requireAuth(http.HandlerFunc(s.getOIDC), false))
+	mux.Handle("GET /api/v1/admin/mcp/oauth", s.requireAuth(http.HandlerFunc(s.mcpOAuthStatus), false))
 	mux.Handle("PUT /api/v1/admin/oidc", s.requireAuth(http.HandlerFunc(s.putOIDC), false))
 	mux.Handle("POST /api/v1/admin/oidc/test", s.requireAuth(http.HandlerFunc(s.testOIDC), false))
 	mux.Handle("GET /api/v1/admin/oidc/mappings", s.requireAuth(http.HandlerFunc(s.getOIDCMappings), false))
@@ -391,6 +397,21 @@ func (w *statusRecorder) Write(b []byte) (int, error) {
 // mcpEntry fronts the MCP endpoint with the two things a protocol client needs
 // before it can authenticate: a CORS preflight answer, and a 401 that says which
 // scheme to use. Everything else is the normal authenticated MCP handler.
+// protectedResourceMetadata tells an MCP client which authorization server
+// issues tokens for Relio. It is public by design — it names Keycloak and the
+// resource, nothing secret — and answers 404 while MCP OAuth is off, so a
+// client that finds nothing here stays with its Personal Key.
+func (s *Server) protectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	policy := s.OIDC.MCPOAuth(r.Context())
+	if !policy.Available {
+		httpx.ErrorJSON(w, r, http.StatusNotFound, "not_found", "이 서버는 MCP OAuth를 제공하지 않습니다. 개인 연동 키를 사용하세요.", nil)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	httpx.JSON(w, http.StatusOK, policy.ProtectedResourceMetadata())
+}
+
 func (s *Server) mcpEntry() http.Handler {
 	authed := s.requireAuth(s.MCP, true)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -423,13 +444,28 @@ func (s *Server) requireAuth(next http.Handler, mcpChannel bool) http.Handler {
 		start := time.Now()
 		p, err := s.Auth.Authenticate(r)
 		if err != nil {
+			var refused *auth.BearerError
+			errors.As(err, &refused)
 			if mcpChannel {
-				// A 401 with no WWW-Authenticate sends MCP clients hunting for
-				// OAuth metadata this server does not publish. Naming the scheme
-				// keeps them on the Personal Key they already hold.
-				w.Header().Set("WWW-Authenticate", `Bearer realm="Relio MCP"`)
+				// With MCP OAuth on, the challenge names the Protected Resource
+				// Metadata, which is how a client finds Keycloak. Without it the
+				// challenge names only the scheme, keeping clients on keys.
+				// RFC 6750 gives no error code to a request that sent no token.
+				challenge := refused
+				if httpx.Bearer(r) == "" {
+					challenge = nil
+				}
+				w.Header().Set("WWW-Authenticate", s.OIDC.MCPOAuth(r.Context()).Challenge(challenge))
+				if refused != nil && refused.Code == "insufficient_scope" {
+					httpx.ErrorJSON(w, r, http.StatusForbidden, "insufficient_scope", refused.Message, nil)
+					return
+				}
 			}
-			httpx.ErrorJSON(w, r, http.StatusUnauthorized, "authentication_required", "로그인이 필요합니다.", nil)
+			message := "로그인이 필요합니다."
+			if refused != nil && refused.Message != "" {
+				message = refused.Message
+			}
+			httpx.ErrorJSON(w, r, http.StatusUnauthorized, "authentication_required", message, nil)
 			return
 		}
 		if mcpChannel {

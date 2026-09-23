@@ -12,6 +12,10 @@ import type { PersonalKey } from '../types'
 
 type Notify = (m: string, e?: boolean) => void
 
+// What the server tells a user about signing in to MCP with the organisation
+// account. Present only when the administrator has enabled it and SSO works.
+export type McpOAuthInfo = { available: boolean; resource?: string; metadataUrl?: string; issuer?: string; scopes?: string[]; clientId?: string }
+
 export type McpToolCatalog = {
   name: string
   title: string
@@ -217,8 +221,11 @@ export function KeyModal({ scopes, tools, onClose, onCreated, onUpdated, notify,
 
 /** McpGuideModal is the connection instructions, kept next to the key that needs
  *  them rather than in a document nobody opens. */
-export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; keyPreview?: string }) {
+export function McpGuideModal({ onClose, keyPreview, oauth }: { onClose: () => void; keyPreview?: string; oauth?: McpOAuthInfo }) {
   const [tab, setTab] = useState<'connect' | 'config' | 'tools' | 'trouble'>('connect')
+  const oauthOn = !!oauth?.available && !!oauth.resource
+  const [method, setMethod] = useState<'key' | 'oauth'>('key')
+  const viaOAuth = oauthOn && method === 'oauth'
   const origin = location.origin
   const sample = keyPreview || 'relio_{keyId}_{secret}'
   const qwenCommand = `qwen mcp add --scope user --transport http relio ${origin}/mcp \\
@@ -258,6 +265,36 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
     }
   }
 }`
+  // OAuth clients must connect to the exact resource the server advertises —
+  // the service URL — not whatever address the browser happens to be using.
+  const resource = oauth?.resource || `${origin}/mcp`
+  const clientId = oauth?.clientId || ''
+  const qwenOAuthCommand = `qwen mcp add --scope user --transport http \\${clientId ? `\n  --oauth-client-id ${clientId} \\` : ''}
+  relio ${resource}`
+  const qwenOAuthConfig = `{
+  "mcpServers": {
+    "relio": {
+      "httpUrl": "${resource}",
+      "oauth": { "enabled": true${clientId ? `, "clientId": "${clientId}"` : ''} }
+    }
+  }
+}`
+  const openCodeOAuthConfig = `{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "relio": {
+      "type": "remote",
+      "url": "${resource}",
+      "enabled": true,
+      "oauth": ${clientId ? `{ "clientId": "${clientId}" }` : '{}'}
+    }
+  }
+}`
+  const resourceOrigin = (() => { try { return new URL(resource).origin } catch { return origin } })()
+  const methodSwitch = oauthOn && <div className="segmented auth-method" role="group" aria-label="인증 방식">
+    <button type="button" className={method === 'key' ? 'active' : ''} aria-pressed={method === 'key'} onClick={() => setMethod('key')}>개인 연동 키</button>
+    <button type="button" className={method === 'oauth' ? 'active' : ''} aria-pressed={method === 'oauth'} onClick={() => setMethod('oauth')}>조직 계정(OAuth)</button>
+  </div>
   const curl = `curl -sS ${origin}/mcp \\
   -H "Authorization: Bearer ${sample}" \\
   -H "Content-Type: application/json" \\
@@ -271,7 +308,27 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
           .map(([key, label]) => <button key={key} type="button" className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}
       </div>
 
-      {tab === 'connect' && <>
+      {(tab === 'connect' || tab === 'config') && methodSwitch}
+
+      {tab === 'connect' && viaOAuth && <>
+        <h3>엔드포인트</h3>
+        <CopyBlock text={resource} />
+        {resourceOrigin !== origin && <p className="guide-warning">조직 계정 로그인은 서비스 주소 <code>{resourceOrigin}</code>로 연결해야 합니다. 지금 브라우저 주소(<code>{origin}</code>)로 설정하면 클라이언트가 리소스 불일치로 거부합니다.</p>}
+        <h3>동작 방식</h3>
+        <ol className="guide-steps">
+          <li>클라이언트가 Relio에 접속하면 401 응답과 함께 메타데이터 주소를 받습니다.</li>
+          <li>메타데이터에서 조직 계정 서버(Keycloak)를 찾습니다.</li>
+          <li>브라우저가 열리면 평소처럼 조직 계정으로 로그인합니다.</li>
+          <li>발급된 토큰으로 MCP를 사용합니다. 키를 발급하거나 복사할 필요가 없습니다.</li>
+        </ol>
+        <h3>메타데이터</h3>
+        <CopyBlock text={oauth?.metadataUrl || ''} />
+        <p className="muted-copy">인증 서버 <code>{oauth?.issuer}</code> · 요청 Scope <code>{(oauth?.scopes || []).join(' ')}</code></p>
+        <h3>권한</h3>
+        <p className="muted-copy">개인 키와 달리 Scope로 권한을 좁힐 수 없습니다. 로그인한 계정의 Role 권한과 데이터 범위가 그대로 적용됩니다. 에이전트에 일부 권한만 주려면 개인 연동 키를 사용하세요.</p>
+      </>}
+
+      {tab === 'connect' && !viaOAuth && <>
         <h3>엔드포인트</h3>
         <CopyBlock text={`${origin}/mcp`} />
         <p className="muted-copy">Streamable HTTP 방식입니다. 서버가 먼저 보내는 SSE 스트림은 사용하지 않으므로 <code>GET /mcp</code>는 405를 반환합니다. 정상 동작입니다. 끝에 <code>/</code>가 붙은 <code>/mcp/</code>도 동일하게 동작합니다.</p>
@@ -287,7 +344,21 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
         <p className="muted-copy"><code>2025-11-25</code>, <code>2025-06-18</code>, <code>2025-03-26</code>, <code>2024-11-05</code> — 클라이언트가 요청한 버전을 그대로 사용합니다.</p>
       </>}
 
-      {tab === 'config' && <>
+      {tab === 'config' && viaOAuth && <>
+        <h3>Qwen Code</h3>
+        {clientId
+          ? <p className="muted-copy">추가한 뒤 Qwen을 실행해 <code>/mcp</code> → <b>relio</b> → <b>Authenticate</b>를 고르고 브라우저에서 로그인합니다.</p>
+          : <p className="guide-warning">Qwen Code는 Keycloak과의 동적 클라이언트 등록에 실패합니다(0.20.1에서 확인). 관리자에게 에이전트용 Public Client ID를 요청해 <code>--oauth-client-id</code>로 지정하세요.</p>}
+        <CopyBlock text={qwenOAuthCommand} />
+        <CopyBlock text={qwenOAuthConfig} />
+
+        <h3>OpenCode</h3>
+        <p className="muted-copy">설정한 뒤 아래 명령으로 로그인하면 <code>connected (OAuth)</code>로 표시됩니다.{!clientId && <> Client ID 없이 동적 등록을 사용하므로, Keycloak Trusted Hosts에 <code>opencode.ai</code>가 있어야 합니다.</>}</p>
+        <CopyBlock text={openCodeOAuthConfig} />
+        <CopyBlock text="opencode mcp auth relio" />
+      </>}
+
+      {tab === 'config' && !viaOAuth && <>
         <h3>Qwen Code · 권장</h3>
         <p className="muted-copy">Qwen은 <code>httpUrl</code>을 사용하는 네이티브 Streamable HTTP 설정이 필요합니다. <code>url</code>은 구형 SSE 설정이므로 사용하지 마세요.</p>
         <CopyBlock text={qwenCommand} />
@@ -306,7 +377,7 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
 
       {tab === 'tools' && <>
         <h3>도구는 권한의 교집합입니다</h3>
-        <p className="muted-copy">노출되는 도구는 <b>키 Scope</b> ∩ <b>사용자 권한</b> ∩ <b>관리자 Tool 허용목록</b>입니다. 세 가지 중 하나라도 빠지면 도구 목록에 나타나지 않으며, 호출해도 거부됩니다.</p>
+        <p className="muted-copy">노출되는 도구는 <b>키 Scope</b> ∩ <b>사용자 권한</b> ∩ <b>관리자 Tool 허용목록</b>입니다. 세 가지 중 하나라도 빠지면 도구 목록에 나타나지 않으며, 호출해도 거부됩니다.{oauthOn && <> 조직 계정(OAuth)으로 연결하면 키 Scope가 없으므로 <b>사용자 권한</b> ∩ <b>관리자 Tool 허용목록</b>이 적용됩니다.</>}</p>
         <div className="info-list">
           <div><span>조회 도구</span><b>고객, 담당자, 영업기회, 활동, 계약, Forecast, 고객의 목소리, 위험 분석</b></div>
           <div><span>기록 도구</span><b>고객·담당자·Lead·영업기회·활동·견적·계약·매출·목표 등록 및 업무 상태 수정</b></div>
@@ -322,7 +393,15 @@ export function McpGuideModal({ onClose, keyPreview }: { onClose: () => void; ke
           <div><span>403 invalid_origin</span><b>관리자 화면에서 클라이언트 Origin을 허용하세요.</b></div>
           <div><span>405 sse_not_supported</span><b>정상입니다. 이 서버는 POST만 사용합니다.</b></div>
           <div><span>failed to parse json · Failed to get tools</span><b>v1.11.7 이상에서는 <code>/mcp</code>와 <code>/mcp/</code> 모두 동작합니다. 그 이전 버전은 끝에 <code>/</code>가 붙으면 화면 HTML을 반환했으므로 서버를 올리거나 슬래시를 빼세요. Qwen은 <code>httpUrl</code>, OpenCode는 <code>type: remote</code> 설정을 사용하세요.</b></div>
-          <div><span>OAuth 로그인 창을 요구함</span><b>Relio는 개인 키 Bearer 인증만 사용합니다. OpenCode는 <code>oauth: false</code>로 두세요. OAuth 탐색(.well-known) 경로는 404를 반환하는 것이 정상입니다.</b></div>
+          {oauthOn ? <>
+            <div><span>needs authentication</span><b>조직 계정 로그인이 필요한 상태입니다. OpenCode는 <code>opencode mcp auth relio</code>, Qwen은 <code>/mcp</code> → relio → Authenticate를 실행하세요.</b></div>
+            <div><span>not issued for this resource (aud)</span><b>토큰의 aud에 Relio가 없습니다. Keycloak Client Scope에 Relio Audience Mapper가 있는지, 클라이언트가 그 Scope를 받는지 관리자에게 확인하세요.</b></div>
+            <div><span>403 insufficient_scope</span><b>토큰에 필수 Scope가 없습니다. 다시 로그인하면 클라이언트가 필요한 Scope를 요청합니다.</b></div>
+            <div><span>Policy 'Allowed Client Scopes' rejected</span><b>동적 등록 정책에서 필수 Scope가 허용되지 않았습니다. 관리자가 Anonymous 정책에 추가하거나, Public Client ID를 지정하세요.</b></div>
+            <div><span>Policy 'Trusted Hosts' rejected</span><b>동적 등록 요청의 주소가 신뢰 목록에 없습니다. <code>127.0.0.1</code>, <code>localhost</code>, OpenCode라면 <code>opencode.ai</code>를 관리자에게 요청하세요.</b></div>
+            <div><span>Failed to fetch authorization server metadata for client registration</span><b>Qwen Code의 동적 등록 제한입니다. <code>--oauth-client-id</code>로 Public Client ID를 지정하세요.</b></div>
+            <div><span>Protected resource does not match</span><b>클라이언트에 입력한 주소가 서비스 URL과 다릅니다. 연결 탭의 엔드포인트를 그대로 사용하세요.</b></div>
+          </> : <div><span>OAuth 로그인 창을 요구함</span><b>이 서버는 개인 키 Bearer 인증만 허용합니다. OpenCode는 <code>oauth: false</code>로 두세요. OAuth 탐색(.well-known) 경로는 404를 반환하는 것이 정상입니다.</b></div>}
           <div><span>Qwen Pending approval</span><b>Project Scope 서버는 작업공간 승인 후 연결됩니다. 바로 확인하려면 위 명령처럼 User Scope로 추가하세요.</b></div>
           <div><span>도구 호출이 isError로 반환됨</span><b>전송 오류가 아니라 도구가 실행되어 실패한 것입니다. 메시지에 사유가 들어 있습니다.</b></div>
         </div>

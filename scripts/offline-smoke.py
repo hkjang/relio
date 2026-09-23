@@ -454,6 +454,10 @@ slash_list = request(
 assert len(slash_list["result"]["tools"]) == len(tool_list["result"]["tools"])
 # The same shell answered OAuth discovery probes with HTML. A protocol client
 # has to see a plain 404 so it keeps using the Personal Key it already holds.
+# MCP OAuth is off by default: no metadata, and a challenge that names only
+# the scheme so clients stay on their Personal Key.
+for probe in ("/.well-known/oauth-protected-resource/mcp",):
+    expect_http_error(probe, contains="HTTP 404")
 for probe in ("/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server"):
     expect_http_error(probe, contains="HTTP 404")
 # Neither an unparseable body nor a session teardown may answer 200 with
@@ -529,7 +533,45 @@ opportunity_team_result = request(
     {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
 )
 assert "result" in opportunity_team_result, opportunity_team_result
-assert opportunity_team_result["result"]["structuredContent"][0]["role"] == "CONSULTANT"
+# structuredContent is a JSON object by specification; a list tool wraps its
+# rows. A bare array here made every SDK-based client reject the call.
+team = opportunity_team_result["result"]["structuredContent"]
+assert isinstance(team, dict) and team["count"] == len(team["items"]), team
+assert team["items"][0]["role"] == "CONSULTANT"
+# The text block keeps the original serialisation for clients that read text.
+assert json.loads(opportunity_team_result["result"]["content"][0]["text"])[0]["role"] == "CONSULTANT"
+# Arguments are checked against the tool schema before anything runs: a name
+# where a UUID belongs, a misspelled filter and a missing field all come back
+# as a message the model can act on, never as a database error.
+bad_id = request(
+    "/mcp",
+    "POST",
+    {"jsonrpc": "2.0", "id": 34, "method": "tools/call", "params": {"name": "get_customer", "arguments": {"id": "Offline Verification 고객"}}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert bad_id["result"]["isError"] is True and "UUID" in bad_id["result"]["content"][0]["text"], bad_id
+assert "SQLSTATE" not in bad_id["result"]["content"][0]["text"]
+missing = request(
+    "/mcp",
+    "POST",
+    {"jsonrpc": "2.0", "id": 35, "method": "tools/call", "params": {"name": "get_customer", "arguments": {}}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert missing["result"]["isError"] is True and "필수 입력" in missing["result"]["content"][0]["text"], missing
+renamed = request(
+    "/mcp",
+    "POST",
+    {"jsonrpc": "2.0", "id": 36, "method": "tools/call", "params": {"name": "get_opportunity_team", "arguments": {"ID": opportunity["id"]}}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert renamed["result"]["isError"] is False, renamed
+unknown = request(
+    "/mcp",
+    "POST",
+    {"jsonrpc": "2.0", "id": 37, "method": "tools/call", "params": {"name": "get_opportunity_team", "arguments": {"id": opportunity["id"], "owner": "me"}}},
+    {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
+)
+assert unknown["result"]["isError"] is True and "owner" in unknown["result"]["content"][0]["text"], unknown
 request(
     "/api/v1/admin/approval-policies",
     "POST",

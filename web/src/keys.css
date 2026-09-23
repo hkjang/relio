@@ -82,3 +82,9 @@
   .guide-trouble > div { flex-direction: column; gap: 4px; }
   .guide-trouble span { width: auto; }
 }
+
+/* Guide: which way to sign in. Shown only when the server accepts OAuth. */
+.auth-method{margin:4px 0 14px}
+.guide-steps{margin:6px 0 4px;padding-left:20px;display:flex;flex-direction:column;gap:5px;font-size:13px;color:#5d7285;line-height:1.6}
+.guide-warning{margin:6px 0 10px;padding:10px 12px;border:1px solid #f1d5a4;border-radius:8px;background:#fff7e8;color:#8a5a16;font-size:13px;line-height:1.55}
+.guide-warning code{background:#fdebc9}
