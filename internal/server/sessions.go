@@ -39,6 +39,10 @@ func (s *Server) mySessions(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, map[string]any{"id": id, "authMethod": method, "ip": ip, "userAgent": userAgent, "createdAt": created, "lastSeenAt": seen, "expiresAt": expires, "current": id == current})
 	}
+	if err = rows.Err(); err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
 }
 
