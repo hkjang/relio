@@ -127,6 +127,13 @@ func (s *Server) oidcMappings(r *http.Request) (map[string]any, error) {
 		}
 		roles = append(roles, map[string]any{"externalRole": external, "roleId": id, "roleName": name})
 	}
+	// The groups query below reuses rows, so the role stream has to be judged
+	// before the name moves on; the Err() at the end of the function only sees
+	// the second result set.
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
 	rows.Close()
 	groups := []map[string]any{}
 	rows, err = s.DB.Query(r.Context(), `SELECT m.external_group,m.organization_id,o.name FROM oidc_group_mappings m JOIN organizations o ON o.id=m.organization_id WHERE m.provider_id=$1 ORDER BY m.external_group`, provider.ID)
@@ -283,6 +290,10 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, map[string]any{"id": id, "username": username, "email": email, "displayName": name, "authSource": source, "organizationId": orgID, "organizationName": orgName, "managerId": manager, "title": title, "active": active, "isBootstrap": bootstrap, "lastLoginAt": last, "createdAt": created, "roles": roles})
 	}
+	if err = rows.Err(); err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
 }
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
@@ -412,6 +423,10 @@ func (s *Server) adminRoles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items = append(items, map[string]any{"id": id, "code": code, "name": name, "description": description, "dataScope": scope, "systemRole": system, "isDefault": isDefault, "permissions": permissions, "userCount": userCount})
+	}
+	if err = rows.Err(); err != nil {
+		s.serviceError(w, r, err)
+		return
 	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
 }

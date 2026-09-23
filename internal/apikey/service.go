@@ -400,6 +400,10 @@ func (s *Service) RevokeAll(ctx context.Context, p *auth.Principal, userID, ip, 
 		}
 		idsToRecord = append(idsToRecord, id)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
 	rows.Close()
 	for _, id := range idsToRecord {
 		if _, err = tx.Exec(ctx, `INSERT INTO personal_key_history(id,key_id,action,actor_id,details) VALUES($1,$2,'ADMIN_REVOKE',$3,jsonb_build_object('all',true))`, ids.New(), id, p.UserID); err != nil {

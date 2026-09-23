@@ -43,6 +43,10 @@ func (s *Server) adminOrganizations(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, map[string]any{"id": id, "parentId": parent, "name": name, "code": code, "type": typ, "active": active, "createdAt": created})
 	}
+	if err = rows.Err(); err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
 }
 func (s *Server) createOrganization(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +111,10 @@ func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items = append(items, auditItem(row))
+	}
+	if err = rows.Err(); err != nil {
+		s.serviceError(w, r, err)
+		return
 	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
 }
@@ -421,6 +429,10 @@ func (s *Server) customFields(w http.ResponseWriter, r *http.Request) {
 		var opts any
 		_ = json.Unmarshal(options, &opts)
 		items = append(items, map[string]any{"id": id, "entityType": entity, "key": key, "label": label, "type": typ, "required": required, "options": opts, "active": active, "displayOrder": order, "updatedAt": updated})
+	}
+	if err = rows.Err(); err != nil {
+		s.serviceError(w, r, err)
+		return
 	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
 }

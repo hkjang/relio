@@ -78,6 +78,10 @@ func (s *Server) myActivity(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, map[string]any{"channel": channel, "action": action, "resource": resource, "resourceId": resourceID, "ip": ip, "occurredAt": occurred})
 	}
+	if err = rows.Err(); err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
 }
 
