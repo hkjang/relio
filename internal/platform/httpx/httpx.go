@@ -46,6 +46,11 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 		return false
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		var max *http.MaxBytesError
+		if errors.As(err, &max) {
+			ErrorJSON(w, r, http.StatusRequestEntityTooLarge, "request_too_large", "요청 본문이 너무 큽니다.", nil)
+			return false
+		}
 		ErrorJSON(w, r, http.StatusBadRequest, "invalid_json", "요청에는 JSON 객체 하나만 허용됩니다.", nil)
 		return false
 	}
