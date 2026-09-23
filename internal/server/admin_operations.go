@@ -401,7 +401,9 @@ func (s *Server) customFields(w http.ResponseWriter, r *http.Request) {
 		s.serviceError(w, r, err)
 		return
 	}
-	rows, err := s.DB.Query(r.Context(), `SELECT id,entity_type,field_key,label,field_type,required,options,active,display_order,updated_at FROM custom_field_definitions ORDER BY entity_type,display_order,label`)
+	rows, err := s.DB.Query(r.Context(), `SELECT f.id,f.entity_type,f.field_key,f.label,f.field_type,f.required,f.options,f.active,f.display_order,f.updated_at,
+		COALESCE(f.workspace_id::text,''),COALESCE(w.name,''),COALESCE(f.phase,''),COALESCE(f.help_text,'')
+		FROM custom_field_definitions f LEFT JOIN voice_workspaces w ON w.id=f.workspace_id ORDER BY f.entity_type,f.display_order,f.label`)
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
@@ -409,18 +411,19 @@ func (s *Server) customFields(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, entity, key, label, typ string
+		var id, entity, key, label, typ, workspaceID, workspaceName, phase, help string
 		var required, active bool
 		var options []byte
 		var order int
 		var updated time.Time
-		if err = rows.Scan(&id, &entity, &key, &label, &typ, &required, &options, &active, &order, &updated); err != nil {
+		if err = rows.Scan(&id, &entity, &key, &label, &typ, &required, &options, &active, &order, &updated, &workspaceID, &workspaceName, &phase, &help); err != nil {
 			s.serviceError(w, r, err)
 			return
 		}
 		var opts any
 		_ = json.Unmarshal(options, &opts)
-		items = append(items, map[string]any{"id": id, "entityType": entity, "key": key, "label": label, "type": typ, "required": required, "options": opts, "active": active, "displayOrder": order, "updatedAt": updated})
+		items = append(items, map[string]any{"id": id, "entityType": entity, "key": key, "label": label, "type": typ, "required": required, "options": opts, "active": active, "displayOrder": order, "updatedAt": updated,
+			"workspaceId": workspaceID, "workspaceName": workspaceName, "phase": phase, "helpText": help})
 	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
 }
@@ -438,8 +441,16 @@ func (s *Server) createCustomField(w http.ResponseWriter, r *http.Request) {
 		Required     bool   `json:"required"`
 		Options      any    `json:"options"`
 		DisplayOrder int    `json:"displayOrder"`
+		WorkspaceID  string `json:"workspaceId"`
+		Phase        string `json:"phase"`
+		HelpText     string `json:"helpText"`
 	}
 	if !httpx.DecodeJSON(w, r, &in) {
+		return
+	}
+	phase, err := customFieldPhase(in.EntityType, in.Phase)
+	if err != nil {
+		s.serviceError(w, r, err)
 		return
 	}
 	allowedTypes := map[string]bool{"Text": true, "Textarea": true, "Number": true, "Money": true, "Percent": true, "Date": true, "Datetime": true, "Boolean": true, "Select": true, "Multi Select": true, "User": true, "Organization": true, "URL": true}
@@ -449,7 +460,7 @@ func (s *Server) createCustomField(w http.ResponseWriter, r *http.Request) {
 	}
 	id := ids.New()
 	raw, _ := json.Marshal(in.Options)
-	_, err := s.DB.Exec(r.Context(), `INSERT INTO custom_field_definitions(id,entity_type,field_key,label,field_type,required,options,display_order,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, strings.ToUpper(in.EntityType), strings.ToLower(in.Key), in.Label, in.Type, in.Required, raw, in.DisplayOrder, p.UserID)
+	_, err = s.DB.Exec(r.Context(), `INSERT INTO custom_field_definitions(id,entity_type,field_key,label,field_type,required,options,display_order,created_by,workspace_id,phase,help_text) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, id, strings.ToUpper(in.EntityType), strings.ToLower(in.Key), in.Label, in.Type, in.Required, raw, in.DisplayOrder, p.UserID, nullableID(in.WorkspaceID), phase, nullableID(in.HelpText))
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
@@ -491,4 +502,19 @@ func (s *Server) createStage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Audit.Record(r.Context(), audit.Event{ActorID: p.UserID, ActorName: p.Username, Channel: "ADMIN", Action: "PIPELINE_STAGE_CREATE", Resource: "pipeline_stage", ResourceID: id, After: in, IP: httpx.ClientIP(r), RequestID: httpx.RequestID(r.Context()), UserAgent: r.UserAgent()})
 	httpx.JSON(w, 201, map[string]any{"id": id})
+}
+
+// customFieldPhase says when a field is collected. Only request (VOICE) fields
+// have phases: intake, or resolution; everything else has none.
+func customFieldPhase(entity, phase string) (any, error) {
+	if !strings.EqualFold(strings.TrimSpace(entity), "VOICE") {
+		return nil, nil
+	}
+	switch strings.ToUpper(strings.TrimSpace(phase)) {
+	case "", "INTAKE":
+		return "INTAKE", nil
+	case "RESOLUTION":
+		return "RESOLUTION", nil
+	}
+	return nil, errors.New("phase는 INTAKE 또는 RESOLUTION이어야 합니다")
 }

@@ -4,6 +4,7 @@ import { initials, label } from '../labels'
 import { Pipeline, Stage, User, Version } from '../types'
 import Layout, { Confirm, Empty, Modal, navigate, Spinner, Status } from '../components/Layout'
 import { errorMessage } from '../App'
+import { VoiceAdmin } from './AdminVoice'
 
 type Props={path:string;user:User;version:Version;approvalEnabled:boolean;onLogout:()=>void;notify:(m:string,e?:boolean)=>void}
 export default function AdminPages(props:Props){const permissions=props.user.permissions||[];const canAdmin=props.user.isBootstrap||permissions.includes('admin:*')||permissions.includes('admin:read');if(!canAdmin)return <Layout area="admin" {...props} title="접근 권한 없음"><div className="panel"><Empty title="관리자 권한이 필요합니다" description="시스템 관리자에게 관리자 조회 권한을 요청하세요."/></div></Layout>;switch(props.path){case'/admin/operations':return <Operations {...props}/>;case'/admin/system':return <SystemSettings {...props}/>;case'/admin/oidc':return <OIDC {...props}/>;case'/admin/users':return <Users {...props}/>;case'/admin/roles':return <Roles {...props}/>;case'/admin/pipeline':return <AdminPipeline {...props}/>;case'/admin/sales-execution':return <SalesExecution {...props}/>;case'/admin/relationships':return <RelationshipIntelligenceSettings {...props}/>;case'/admin/approval':return <ApprovalPolicies {...props}/>;case'/admin/keys':return <KeyPolicies {...props}/>;case'/admin/custom-fields':return <CustomFields {...props}/>;case'/admin/products':return <Products {...props}/>;case'/admin/voice-categories':return <VoiceCategories {...props}/>;case'/admin/analytics':return <Analytics {...props}/>;case'/admin/security':return <Security {...props}/>;case'/admin/audit':return <Audit {...props}/>;case'/admin/data':return <DataManagement {...props}/>;default:return <Overview {...props}/>}}
@@ -381,14 +382,14 @@ function AdminKeyInventory({notify}:{notify:Props['notify']}){
 }
 
 const customFieldTypes=['Text','Textarea','Number','Money','Percent','Date','Datetime','Boolean','Select','Multi Select','User','Organization','URL']
-const customFieldEntities=['Customer','Contact','Lead','Opportunity','Quotation','Contract']
+const customFieldEntities=['Customer','Contact','Lead','Opportunity','Quotation','Contract','Voice']
 function CustomFields(props:Props){
   const [items,setItems]=useState<any[]|null>(null);const [modal,setModal]=useState<null|{field?:any}>(null);const [remove,setRemove]=useState<any>(null);const [busy,setBusy]=useState(false)
   const load=()=>api<{items:any[]}>('/api/v1/admin/custom-fields').then(v=>setItems(v.items)).catch(e=>props.notify(errorMessage(e),true))
   useEffect(()=>{void load()},[])
   async function confirmRemove(){if(!remove)return;setBusy(true);try{const result=await api<any>(`/api/v1/admin/custom-fields/${remove.id}`,{method:'DELETE'});props.notify(result?.note?`Field를 삭제했습니다. ${result.note}`:'Field를 삭제했습니다.');setRemove(null);await load()}catch(e){props.notify(errorMessage(e),true)}finally{setBusy(false)}}
   return <Frame {...props} title="사용자 정의 항목" subtitle="기업별 CRM 필드를 Schema ALTER 없이 Metadata + JSONB로 확장합니다." actions={<button className="btn btn-primary" onClick={()=>setModal({})}>＋ 항목 생성</button>}>{!items?<Spinner/>:<section className="panel table-panel">{items.length?<table><thead><tr><th>대상</th><th>표시명 · 키</th><th>유형</th><th>필수</th><th>순서</th><th>상태</th><th>관리</th></tr></thead><tbody>{items.map(x=><tr key={x.id}>
-    <td><Status value={x.entityType}/></td><td><b>{x.label}</b><code className="table-sub">{x.key}</code></td><td>{x.type}</td><td>{x.required?'필수':'선택'}</td><td>{x.displayOrder}</td><td><Status value={x.active?'ACTIVE':'DISABLED'}/></td>
+    <td><Status value={x.entityType}/>{x.entityType==='VOICE'&&<small className="table-sub">{x.workspaceName||'일반 요청'} · {x.phase==='RESOLUTION'?'해결 시':'접수 시'}</small>}</td><td><b>{x.label}</b><code className="table-sub">{x.key}</code></td><td>{x.type}</td><td>{x.required?'필수':'선택'}</td><td>{x.displayOrder}</td><td><Status value={x.active?'ACTIVE':'DISABLED'}/></td>
     <td><div className="row-menu"><button onClick={()=>setModal({field:x})}>편집</button><button className="danger" onClick={()=>setRemove(x)}>삭제</button></div></td>
   </tr>)}</tbody></table>:<Empty title="사용자 정의 항목이 없습니다" description="Customer, Contact, Lead, Opportunity, Quotation, Contract를 확장하세요." action={<button className="btn btn-primary" onClick={()=>setModal({})}>첫 항목 생성</button>}/>}</section>}
   {modal&&<FieldModal field={modal.field} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load()}} notify={props.notify}/>}
@@ -398,18 +399,27 @@ function CustomFields(props:Props){
 function FieldModal({field,onClose,onSaved,notify}:{field?:any;onClose:()=>void;onSaved:()=>void;notify:Props['notify']}){
   const editing=Boolean(field?.id)
   const [type,setType]=useState<string>(field?.type||'Text');const [busy,setBusy]=useState(false)
+  const [entity,setEntity]=useState<string>(field?.entityType||'Customer')
+  const [workspaces,setWorkspaces]=useState<{id:string;name:string}[]>([])
+  const voiceField=entity.toUpperCase()==='VOICE'
+  useEffect(()=>{if(voiceField)api<{items:{id:string;name:string}[]}>('/api/v1/admin/voice-workspaces').then(v=>setWorkspaces(v.items)).catch(()=>{})},[voiceField])
   const needsOptions=type==='Select'||type==='Multi Select'
   const initialOptions=Array.isArray(field?.options)?field.options.join('\n'):''
   async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);setBusy(true)
     const options=needsOptions?String(f.get('options')||'').split('\n').map(x=>x.trim()).filter(Boolean):null
-    const body={entityType:f.get('entity'),key:f.get('key'),label:f.get('label'),type,required:f.get('required')==='on',options,active:f.get('active')==='on',displayOrder:Number(f.get('order'))}
-    try{await api(editing?`/api/v1/admin/custom-fields/${field.id}`:'/api/v1/admin/custom-fields',{method:editing?'PUT':'POST',body:JSON.stringify(editing?{label:body.label,type:body.type,required:body.required,options:body.options,active:body.active,displayOrder:body.displayOrder}:{entityType:body.entityType,key:body.key,label:body.label,type:body.type,required:body.required,options:body.options,displayOrder:body.displayOrder})});notify(editing?'사용자 정의 항목를 저장했습니다.':'사용자 정의 항목를 만들었습니다.');onSaved()}catch(e){notify(errorMessage(e),true)}finally{setBusy(false)}}
+    const body={entityType:editing?field.entityType:entity,key:f.get('key'),label:f.get('label'),type,required:f.get('required')==='on',options,active:f.get('active')==='on',displayOrder:Number(f.get('order')),workspaceId:f.get('workspaceId')||'',phase:f.get('phase')||'',helpText:f.get('helpText')||''}
+    try{await api(editing?`/api/v1/admin/custom-fields/${field.id}`:'/api/v1/admin/custom-fields',{method:editing?'PUT':'POST',body:JSON.stringify(editing?{label:body.label,type:body.type,required:body.required,options:body.options,active:body.active,displayOrder:body.displayOrder,phase:body.phase,helpText:body.helpText}:{entityType:body.entityType,key:body.key,label:body.label,type:body.type,required:body.required,options:body.options,workspaceId:body.workspaceId,phase:body.phase,helpText:body.helpText,displayOrder:body.displayOrder})});notify(editing?'사용자 정의 항목를 저장했습니다.':'사용자 정의 항목를 만들었습니다.');onSaved()}catch(e){notify(errorMessage(e),true)}finally{setBusy(false)}}
   return <Modal title={editing?`${field.label} 편집`:'사용자 정의 항목 생성'} onClose={onClose}><form className="form" onSubmit={submit}>
-    <label>대상 업무<select name="entity" defaultValue={field?.entityType||'Customer'} disabled={editing}>{customFieldEntities.map(x=><option key={x} value={editing?field.entityType:x}>{editing?field.entityType:x}</option>)}</select>{editing&&<small>대상과 항목 키는 이미 저장된 값과 연결되어 변경할 수 없습니다.</small>}</label>
+    <label>대상 업무<select name="entity" value={editing?field.entityType:entity} onChange={e=>setEntity(e.target.value)} disabled={editing}>{editing?<option value={field.entityType}>{field.entityType}</option>:customFieldEntities.map(x=><option key={x} value={x}>{x==='Voice'?'Voice (고객 요청)':x}</option>)}</select>{editing&&<small>대상과 항목 키는 이미 저장된 값과 연결되어 변경할 수 없습니다.</small>}</label>
     <label>표시명 *<input name="label" required autoFocus defaultValue={field?.label||''}/></label>
     <label>항목 키 *<input name="key" required pattern="[a-z0-9_]+" defaultValue={field?.key||''} readOnly={editing} placeholder="purchase_cycle"/></label>
     <label>유형<select name="type" value={type} onChange={e=>setType(e.target.value)}>{customFieldTypes.map(x=><option key={x}>{x}</option>)}</select></label>
     {needsOptions&&<label>선택 항목 · 줄바꿈 구분<textarea name="options" rows={4} defaultValue={initialOptions} placeholder={'연간\n반기\n분기'}/></label>}
+    {voiceField&&<>
+      <label>업무 영역<select name="workspaceId" defaultValue={field?.workspaceId||''} disabled={editing}><option value="">일반 고객 요청</option>{workspaces.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select>{editing&&<small>업무 영역은 만든 뒤 바꿀 수 없습니다.</small>}</label>
+      <label>입력 시점<select name="phase" defaultValue={field?.phase||'INTAKE'}><option value="INTAKE">접수 시</option><option value="RESOLUTION">해결 시</option></select><small>접수 시에는 고객이 말한 것만, 해결 시에는 판명된 것만 받습니다.</small></label>
+      <label className="span-2">도움말<input name="helpText" defaultValue={field?.helpText||''} placeholder="입력란 아래에 보이는 안내 문구"/></label>
+    </>}
     <label>표시 순서<input name="order" type="number" defaultValue={field?.displayOrder??100}/></label>
     <label className="check-label"><input name="required" type="checkbox" defaultChecked={field?.required}/> 필수 입력</label>
     {editing&&<label className="check-label"><input name="active" type="checkbox" defaultChecked={field.active}/> 사용 중</label>}
@@ -444,42 +454,8 @@ function ProductModal({product,onClose,onSaved,notify}:{product?:any;onClose:()=
   </div><div className="modal-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>취소</button><button className="btn btn-primary" disabled={busy}>{busy?'저장 중…':editing?'변경 저장':'상품 등록'}</button></div></form></Modal>
 }
 
-type VoiceCategory={id:string;code:string;name:string;voiceType:string;responseHours:number;resolutionHours:number;active:boolean;displayOrder:number;usedCount:number}
-const voiceCategoryTypes=['COMPLAINT','REQUEST','INQUIRY','DEFECT','CHURN_RISK','PRAISE']
 function VoiceCategories(props:Props){
-  const [items,setItems]=useState<VoiceCategory[]|null>(null);const [modal,setModal]=useState<null|{category?:VoiceCategory}>(null);const [remove,setRemove]=useState<VoiceCategory|null>(null);const [busy,setBusy]=useState(false)
-  const load=()=>api<{items:VoiceCategory[]}>('/api/v1/admin/voice-categories').then(v=>setItems(v.items)).catch(e=>props.notify(errorMessage(e),true))
-  useEffect(()=>{void load()},[])
-  async function confirmRemove(){if(!remove)return;setBusy(true);try{const r=await api<any>(`/api/v1/admin/voice-categories/${remove.id}`,{method:'DELETE'});props.notify(r?.note||'요청 유형을 삭제했습니다.');setRemove(null);await load()}catch(e){props.notify(errorMessage(e),true)}finally{setBusy(false)}}
-  return <Frame {...props} title="고객 요청 유형 · SLA" subtitle="불만과 요청의 분류, 응답·해결 목표 시간을 관리자 정책으로 정의합니다." actions={<button className="btn btn-primary" onClick={()=>setModal({})}>＋ 유형 추가</button>}>
-    {!items?<Spinner/>:<section className="panel table-panel">{items.length?<table><thead><tr><th>유형명 · 코드</th><th>구분</th><th>응답 목표</th><th>해결 목표</th><th>접수 건수</th><th>상태</th><th>관리</th></tr></thead><tbody>{items.map(x=><tr key={x.id}>
-      <td><b>{x.name}</b><code className="table-sub">{x.code}</code></td>
-      <td><Status value={x.voiceType}/></td>
-      <td>{x.responseHours}시간</td>
-      <td>{x.resolutionHours >= 24 ? `${Math.round(x.resolutionHours/24)}일` : `${x.resolutionHours}시간`}</td>
-      <td>{x.usedCount}건</td>
-      <td><Status value={x.active?'ACTIVE':'DISABLED'}/></td>
-      <td><div className="row-menu"><button onClick={()=>setModal({category:x})}>편집</button><button className="danger" onClick={()=>setRemove(x)}>삭제</button></div></td>
-    </tr>)}</tbody></table>:<Empty title="요청 유형이 없습니다" description="납기 지연, 품질 불량처럼 자주 접수되는 유형을 정의하면 기한이 자동 계산됩니다." action={<button className="btn btn-primary" onClick={()=>setModal({})}>첫 유형 추가</button>}/>}</section>}
-    {modal&&<VoiceCategoryModal category={modal.category} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);load()}} notify={props.notify}/>}
-    {remove&&<Confirm title="요청 유형 삭제" description={`${remove.name} 유형을 제거합니다. 이미 접수된 건이 있으면 이력 보존을 위해 사용 중지로 전환됩니다.`} requireText={remove.code} busy={busy} onCancel={()=>setRemove(null)} onConfirm={confirmRemove}/>}
-  </Frame>
-}
-function VoiceCategoryModal({category,onClose,onSaved,notify}:{category?:VoiceCategory;onClose:()=>void;onSaved:()=>void;notify:Props['notify']}){
-  const editing=Boolean(category?.id);const [busy,setBusy]=useState(false)
-  async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);setBusy(true)
-    const body={code:f.get('code'),name:f.get('name'),voiceType:f.get('voiceType'),responseHours:Number(f.get('responseHours')),resolutionHours:Number(f.get('resolutionHours')),active:f.get('active')==='on',displayOrder:Number(f.get('displayOrder'))}
-    try{await api(editing?`/api/v1/admin/voice-categories/${category!.id}`:'/api/v1/admin/voice-categories',{method:editing?'PUT':'POST',body:JSON.stringify(body)});notify(editing?'요청 유형을 저장했습니다.':'요청 유형을 추가했습니다.');onSaved()}catch(err){notify(errorMessage(err),true)}finally{setBusy(false)}}
-  return <Modal title={editing?`${category!.name} 편집`:'고객 요청 유형 추가'} onClose={onClose}><form className="form" onSubmit={submit}><div className="form-grid">
-    <label>유형명 *<input name="name" required autoFocus defaultValue={category?.name||''} placeholder="납기 지연"/></label>
-    <label>코드 *<input name="code" required pattern="[A-Za-z0-9_]+" defaultValue={category?.code||''} readOnly={editing} placeholder="DELIVERY_DELAY"/></label>
-    <label>구분 *<select name="voiceType" defaultValue={category?.voiceType||'COMPLAINT'}>{voiceCategoryTypes.map(x=><option key={x} value={x}>{label(x)}</option>)}</select></label>
-    <label>표시 순서<input name="displayOrder" type="number" defaultValue={category?.displayOrder??100}/></label>
-    <label>응답 목표 (시간) *<input name="responseHours" type="number" min="1" required defaultValue={category?.responseHours??8}/><small>접수 후 첫 응대까지</small></label>
-    <label>해결 목표 (시간) *<input name="resolutionHours" type="number" min="1" required defaultValue={category?.resolutionHours??72}/><small>접수 후 해결까지</small></label>
-    {editing&&<label className="check-label span-2"><input type="checkbox" name="active" defaultChecked={category!.active}/> 사용 중</label>}
-  </div><div className="alert"><b>심각도가 기한을 더 조입니다</b><span>긴급은 응답 2시간·해결 24시간, 높음은 응답 4시간·해결 48시간을 넘지 않도록 자동 단축됩니다.</span></div>
-    <div className="modal-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>취소</button><button className="btn btn-primary" disabled={busy}>{busy?'저장 중…':editing?'변경 저장':'유형 추가'}</button></div></form></Modal>
+  return <Frame {...props} title="고객 요청 유형 · 업무 영역" subtitle="요청 유형과 SLA, 부서별 업무 영역과 격리·지식 게이트를 관리자 정책으로 정의합니다."><VoiceAdmin notify={props.notify}/></Frame>
 }
 
 type AnalyticsProvider={id:string;provider:string;name:string;enabled:boolean;siteId?:string;scriptOrigin?:string;scriptPath?:string;collectOrigins:string[];scriptAttributes:Record<string,string>;respectDnt:boolean;authenticatedOnly:boolean;sameOriginProxy:boolean;displayOrder:number}

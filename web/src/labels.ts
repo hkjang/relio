@@ -98,7 +98,7 @@ const dictionary: Record<string, string> = {
   RESOLVED: '해결',
   CREATED: '접수', STATUS_CHANGE: '상태 변경', COMMENT: '내부 메모',
   CUSTOMER_CONTACT: '고객 응대', ASSIGNED: '담당자 변경', ESCALATED: '상위 보고',
-  REOPENED: '재처리', SATISFACTION: '만족도 등록',
+  REOPENED: '재처리', SATISFACTION: '만족도 등록', KNOWLEDGE_REVIEW: '지식 반영 판정',
 }
 
 /** label turns an API code into Korean, leaving unknown values untouched. */

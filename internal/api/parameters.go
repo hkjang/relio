@@ -115,6 +115,11 @@ func voiceFilters(fallbackLimit int) []query {
 		text("ownerId", "이 담당자에게 배정된 요청만 반환합니다."),
 		flag("overdue", "응답 또는 해결 기한을 넘긴 요청만 반환합니다."),
 		flag("open", "아직 종결되지 않은 요청만 반환합니다."),
+		text("workspaceId", "이 업무 영역의 요청만 반환합니다."),
+		text("categoryId", "이 요청 유형의 요청만 반환합니다."),
+		choice("knowledgeStatus", "지식 반영 상태입니다.", "UNREVIEWED", "IN_REVIEW", "APPROVED", "EXCLUDED"),
+		flag("reviewPending", "해결·종결되었지만 아직 검토하지 않은 요청(지식 검토 대기)만 반환합니다."),
+		number("minAgeDays", "접수 후 이 일수 이상 지난 미종결 요청만 반환합니다. SLA를 쓰지 않는 업무 영역의 묵은 건 관리용입니다.", 0, 0, 3650),
 		limit(fallbackLimit, 200),
 	}
 }
@@ -226,9 +231,23 @@ var queryParameters = map[string][]query{
 		choice("status", "처리 상태입니다.", "OPEN", "ACCEPTED", "DISMISSED", "COMPLETED"),
 		limit(50, 200),
 	},
-	"GET /voices":            voiceFilters(50),
-	"GET /voices/export":     voiceFilters(200),
-	"GET /voices/summary":    {text("customerId", "이 고객의 요약만 반환합니다.")},
+	"GET /voices":         voiceFilters(50),
+	"GET /voices/export":  voiceFilters(200),
+	"GET /voices/summary": {text("customerId", "이 고객의 요약만 반환합니다."), text("workspaceId", "이 업무 영역의 요약만 반환합니다.")},
+	"GET /voices/knowledge": {
+		text("q", "오류코드나 증상. 공백으로 나눈 모든 단어가 들어 있는 사례만 찾습니다."),
+		text("workspaceId", "이 업무 영역의 사례만 찾습니다."),
+		text("fieldFilters", `항목 값 필터. {"service_type":"아이핀"} 형태의 JSON입니다.`),
+		choice("causeEvidence", "원인 근거 수준입니다.", "CONFIRMED", "PRESUMED", "UNIDENTIFIED"),
+		flag("includeUnreviewed", "검토 전(미검토·검토중) 사례도 포함합니다. 기본은 지식으로 반영된 사례만입니다."),
+		limit(10, 50),
+	},
+	"GET /voices/history": {
+		text("customerId", "고객 ID. customerCode와 둘 중 하나가 필요합니다."),
+		text("customerCode", "고객 코드(회원사코드 등)."),
+		text("workspaceId", "이 업무 영역의 이력만 반환합니다."),
+		limit(30, 200),
+	},
 	"GET /voices/categories": {flag("includeInactive", "사용 중지된 유형도 함께 반환합니다.")},
 	"GET /approvals": {
 		choice("status", "승인 요청 상태입니다.", "PENDING", "APPROVED", "REJECTED", "CANCELLED"),

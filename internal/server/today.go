@@ -9,6 +9,7 @@ import (
 	"github.com/hkjang/relio/internal/auth"
 	"github.com/hkjang/relio/internal/crm"
 	"github.com/hkjang/relio/internal/platform/httpx"
+	"github.com/hkjang/relio/internal/voice"
 )
 
 // The dashboard used to list metrics, which tells a salesperson how things are
@@ -38,7 +39,7 @@ func (s *Server) collectToday(ctx context.Context, p *auth.Principal) ([]todayIt
 		rows, err := s.DB.Query(ctx, `SELECT v.id,v.title,c.name,v.severity,
 			LEAST(COALESCE(v.response_due_at,'infinity'),COALESCE(v.resolution_due_at,'infinity')) AS due
 			FROM customer_voices v JOIN customers c ON c.id=v.customer_id
-			WHERE `+crm.ScopeSQL("v")+` AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED') AND (
+			WHERE `+voice.VisibleSQL(p, "v")+` AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED') AND (
 				(v.response_due_at IS NOT NULL AND v.first_responded_at IS NULL AND v.response_due_at < now())
 				OR (v.resolution_due_at IS NOT NULL AND v.resolved_at IS NULL AND v.resolution_due_at < now()))
 			ORDER BY due LIMIT 12`, scope...)

@@ -962,6 +962,43 @@ request("/api/v1/admin/settings/system/locale", "PUT", {"value": "en-US", "value
 request("/api/v1/admin/settings/system/locale", "DELETE", None, csrf_header)
 assert "locale" not in {item["key"] for item in request("/api/v1/admin/settings?namespace=system")["items"]}
 
+# VOC workspaces: a department preset, its SLA-free types and fields, quick
+# member registration, the structured resolution and the knowledge gate.
+department = request("/api/v1/admin/organizations", "POST", {"name": "Offline 회원사 지원부", "code": "OFFLINE_MS", "type": "DEPARTMENT"}, csrf_header)
+preset = request("/api/v1/admin/voice-presets/MEMBER_SUPPORT/apply", "POST", {"organizationId": department["id"]}, csrf_header)
+assert len(preset["created"]) == 15 and not preset["skipped"], preset
+again = request("/api/v1/admin/voice-presets/MEMBER_SUPPORT/apply", "POST", {"organizationId": department["id"]}, csrf_header)
+assert not again["created"] and len(again["skipped"]) == 15, again
+member_ws = next(w for w in request("/api/v1/voices/workspaces")["items"] if w["code"] == "MEMBER_SUPPORT")
+assert len(member_ws["categories"]) == 8 and not member_ws["slaEnabled"] and member_ws["isolated"] and member_ws["knowledgeGate"]
+expect_http_error(f"/api/v1/voices/workspaces/{member_ws['id']}/customers", "POST", {"name": "코드 오류", "customerCode": "123"}, csrf_header, contains="회원사코드")
+member = request(f"/api/v1/voices/workspaces/{member_ws['id']}/customers", "POST", {"name": "Offline 회원사", "customerCode": "100000000001"}, csrf_header)
+assert member["customerCode"] == "100000000001"
+expect_http_error(f"/api/v1/voices/workspaces/{member_ws['id']}/customers", "POST", {"name": "중복", "customerCode": "100000000001"}, csrf_header, contains="Offline 회원사")
+error_type = next(c for c in member_ws["categories"] if c["code"] == "MS_SERVICE_ERROR")
+intake = {"customerId": member["id"], "categoryId": error_type["id"], "title": "Offline E1003", "body": "E1003 발생", "severity": "CRITICAL"}
+expect_http_error("/api/v1/voices", "POST", {**intake, "customFields": {}}, csrf_header, contains="서비스 구분")
+case = request("/api/v1/voices", "POST", {**intake, "customFields": {"service_type": "아이핀", "dev_method": "미확인", "error_code": "E1003"}}, csrf_header)
+assert case["slaApplied"] is False and not case.get("responseDueAt") and case["knowledgeStatus"] == "UNREVIEWED"
+case = request(f"/api/v1/voices/{case['id']}", "PUT", {"status": "IN_PROGRESS", "version": case["version"]}, csrf_header)
+expect_http_error(f"/api/v1/voices/{case['id']}", "PUT", {"status": "RESOLVED", "resolution": "안내", "version": case["version"]}, csrf_header, contains="원인 근거")
+case = request(f"/api/v1/voices/{case['id']}", "PUT", {"status": "RESOLVED", "resolution": "리턴 URL 재등록", "causeEvidence": "CONFIRMED", "customFields": {"resolver": "회원사 조치"}, "version": case["version"]}, csrf_header)
+assert case["status"] == "RESOLVED" and case["causeEvidence"] == "CONFIRMED"
+assert request("/api/v1/voices/knowledge?q=E1003")["items"] == []
+assert request(f"/api/v1/voices/summary?workspaceId={member_ws['id']}")["knowledgePending"] == 1
+case = request(f"/api/v1/voices/{case['id']}/knowledge", "PUT", {"knowledgeStatus": "APPROVED", "note": "offline"}, csrf_header)
+assert case["knowledgeStatus"] == "APPROVED"
+found = request("/api/v1/voices/knowledge?q=E1003")["items"]
+assert [x["voiceNo"] for x in found] == [case["voiceNo"]] and found[0]["fields"]["resolver"] == "회원사 조치"
+assert len(request("/api/v1/voices/history?customerCode=100000000001")["items"]) == 1
+reopened = request(f"/api/v1/voices/{case['id']}", "PUT", {"status": "IN_PROGRESS", "version": case["version"]}, csrf_header)
+assert reopened["knowledgeStatus"] == "UNREVIEWED" and request("/api/v1/voices/knowledge?q=E1003")["items"] == []
+imported = request(f"/api/v1/voices/workspaces/{member_ws['id']}/customers/import", "POST", {"rows": [{"name": "일괄 1", "customerCode": "100000000002"}, {"name": "기존", "customerCode": "100000000001"}, {"name": "오류", "customerCode": "x"}]}, csrf_header)
+assert (imported["created"], imported["unchanged"], imported["failed"]) == (1, 1, 1), imported
+# An isolated workspace's requests and members never feed the sales signals.
+request("/api/v1/intelligence/run", "POST", {}, csrf_header)
+assert not request(f"/api/v1/customers/{member['id']}/intelligence").get("signals")
+
 # Activity and customer list filters must actually narrow the result set.
 filtered_customers = request("/api/v1/customers?customerType=PROSPECT&limit=200")["items"]
 assert all(item["customerType"] == "PROSPECT" for item in filtered_customers)

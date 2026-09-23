@@ -34,8 +34,11 @@ type Category struct {
 	VoiceType       string `json:"voiceType"`
 	ResponseHours   int    `json:"responseHours"`
 	ResolutionHours int    `json:"resolutionHours"`
-	Active          bool   `json:"active"`
-	DisplayOrder    int    `json:"displayOrder"`
+	// SLAEnabled false means no deadline is computed, stored or shown.
+	SLAEnabled   bool   `json:"slaEnabled"`
+	WorkspaceID  string `json:"workspaceId,omitempty"`
+	Active       bool   `json:"active"`
+	DisplayOrder int    `json:"displayOrder"`
 }
 
 type Voice struct {
@@ -69,9 +72,19 @@ type Voice struct {
 	SatisfactionScore   *int           `json:"satisfactionScore,omitempty"`
 	SatisfactionComment string         `json:"satisfactionComment,omitempty"`
 	CustomFields        map[string]any `json:"customFields"`
-	Version             int            `json:"version"`
-	CreatedAt           time.Time      `json:"createdAt"`
-	UpdatedAt           time.Time      `json:"updatedAt"`
+	WorkspaceID         string         `json:"workspaceId,omitempty"`
+	WorkspaceName       string         `json:"workspaceName,omitempty"`
+	CustomerCode        string         `json:"customerCode,omitempty"`
+	CauseEvidence       string         `json:"causeEvidence,omitempty"`
+	KnowledgeStatus     string         `json:"knowledgeStatus"`
+	KnowledgeReviewedAt *time.Time     `json:"knowledgeReviewedAt,omitempty"`
+	KnowledgeReviewer   string         `json:"knowledgeReviewer,omitempty"`
+	// SLAApplied is false for a type with SLA switched off; screens then show
+	// elapsed days instead of deadlines.
+	SLAApplied bool      `json:"slaApplied"`
+	Version    int       `json:"version"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 	// Derived for the UI so the list can highlight risk without extra calls.
 	ResponseOverdue   bool `json:"responseOverdue"`
 	ResolutionOverdue bool `json:"resolutionOverdue"`
@@ -115,6 +128,9 @@ type UpdateInput struct {
 	SatisfactionScore   *int   `json:"satisfactionScore"`
 	SatisfactionComment string `json:"satisfactionComment"`
 	Note                string `json:"note"`
+	// CauseEvidence is how well the root cause is established. A knowledge
+	// gated workspace requires it before a case can be resolved.
+	CauseEvidence string `json:"causeEvidence"`
 }
 
 var (
@@ -162,8 +178,11 @@ func (s *Service) Categories(ctx context.Context, p *auth.Principal, includeInac
 	if err := auth.Require(p, "voice:read"); err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT id,code,name,voice_type,response_hours,resolution_hours,active,display_order
-		FROM voice_categories WHERE (active OR $1) ORDER BY display_order,name`, includeInactive)
+	// A type of an isolated workspace is only offered to that workspace's members.
+	rows, err := s.DB.Query(ctx, `SELECT c.id,c.code,c.name,c.voice_type,c.response_hours,c.resolution_hours,c.sla_enabled,COALESCE(c.workspace_id::text,''),c.active,c.display_order
+		FROM voice_categories c LEFT JOIN voice_workspaces w ON w.id=c.workspace_id
+		WHERE (c.active OR $4) AND (c.workspace_id IS NULL OR `+workspaceAccessSQL(p)+`) AND `+bindCaller+`
+		ORDER BY c.display_order,c.name`, p.DataScope, p.UserID, orgArg(p), includeInactive)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +190,7 @@ func (s *Service) Categories(ctx context.Context, p *auth.Principal, includeInac
 	out := []Category{}
 	for rows.Next() {
 		var c Category
-		if err = rows.Scan(&c.ID, &c.Code, &c.Name, &c.VoiceType, &c.ResponseHours, &c.ResolutionHours, &c.Active, &c.DisplayOrder); err != nil {
+		if err = rows.Scan(&c.ID, &c.Code, &c.Name, &c.VoiceType, &c.ResponseHours, &c.ResolutionHours, &c.SLAEnabled, &c.WorkspaceID, &c.Active, &c.DisplayOrder); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -184,13 +203,17 @@ const voiceColumns = `v.id,v.voice_no,v.customer_id,c.name,COALESCE(v.contact_id
 	v.voice_type,v.channel,v.title,COALESCE(v.body,''),v.severity,v.status,v.owner_id,u.display_name,
 	v.occurred_at,v.response_due_at,v.resolution_due_at,v.first_responded_at,v.resolved_at,v.closed_at,
 	COALESCE(v.resolution,''),COALESCE(v.root_cause,''),COALESCE(v.preventive_action,''),
-	v.satisfaction_score,COALESCE(v.satisfaction_comment,''),v.custom_fields,v.version,v.created_at,v.updated_at`
+	v.satisfaction_score,COALESCE(v.satisfaction_comment,''),v.custom_fields,v.version,v.created_at,v.updated_at,
+	COALESCE(v.workspace_id::text,''),COALESCE(ws.name,''),COALESCE(c.customer_code,''),COALESCE(v.cause_evidence,''),
+	v.knowledge_status,v.knowledge_reviewed_at,COALESCE(kr.display_name,''),COALESCE(cat.sla_enabled,true)`
 
 const voiceJoins = `FROM customer_voices v
 	JOIN customers c ON c.id=v.customer_id
 	JOIN users u ON u.id=v.owner_id
 	LEFT JOIN contacts ct ON ct.id=v.contact_id
-	LEFT JOIN voice_categories cat ON cat.id=v.category_id`
+	LEFT JOIN voice_categories cat ON cat.id=v.category_id
+	LEFT JOIN voice_workspaces ws ON ws.id=v.workspace_id
+	LEFT JOIN users kr ON kr.id=v.knowledge_reviewed_by`
 
 func scanVoice(rows pgx.Rows) (Voice, error) {
 	var x Voice
@@ -200,7 +223,9 @@ func scanVoice(rows pgx.Rows) (Voice, error) {
 		&x.VoiceType, &x.Channel, &x.Title, &x.Body, &x.Severity, &x.Status, &x.OwnerID, &x.OwnerName,
 		&x.OccurredAt, &x.ResponseDueAt, &x.ResolutionDueAt, &x.FirstRespondedAt, &x.ResolvedAt, &x.ClosedAt,
 		&x.Resolution, &x.RootCause, &x.PreventiveAction,
-		&x.SatisfactionScore, &x.SatisfactionComment, &raw, &x.Version, &x.CreatedAt, &x.UpdatedAt)
+		&x.SatisfactionScore, &x.SatisfactionComment, &raw, &x.Version, &x.CreatedAt, &x.UpdatedAt,
+		&x.WorkspaceID, &x.WorkspaceName, &x.CustomerCode, &x.CauseEvidence,
+		&x.KnowledgeStatus, &x.KnowledgeReviewedAt, &x.KnowledgeReviewer, &x.SLAApplied)
 	if err != nil {
 		return Voice{}, err
 	}
@@ -233,13 +258,22 @@ func decorate(x *Voice) {
 }
 
 type Query struct {
-	CustomerID string
-	Status     string
-	VoiceType  string
-	Severity   string
-	OwnerID    string
-	Overdue    bool
-	OpenOnly   bool
+	CustomerID  string
+	WorkspaceID string
+	CategoryID  string
+	Status      string
+	VoiceType   string
+	Severity    string
+	OwnerID     string
+	Overdue     bool
+	OpenOnly    bool
+	// KnowledgeStatus filters on the verification gate.
+	KnowledgeStatus string
+	// ReviewPending lists closed cases a reviewer has not looked at yet.
+	ReviewPending bool
+	// MinAgeDays keeps open cases at least this many days old: the way a
+	// department without SLA finds work that has been waiting too long.
+	MinAgeDays int
 	Limit      int
 }
 
@@ -250,7 +284,7 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, q Query) ([]Voice
 	if q.Limit < 1 || q.Limit > 200 {
 		q.Limit = 50
 	}
-	query := `SELECT ` + voiceColumns + ` ` + voiceJoins + ` WHERE ` + crm.ScopeSQL("v") + `
+	query := `SELECT ` + voiceColumns + ` ` + voiceJoins + ` WHERE ` + VisibleSQL(p, "v") + `
 		AND ($4='' OR v.customer_id::text=$4)
 		AND ($5='' OR v.status=$5)
 		AND ($6='' OR v.voice_type=$6)
@@ -260,13 +294,18 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, q Query) ([]Voice
 		AND (NOT $10 OR (v.status NOT IN ('RESOLVED','CLOSED','REJECTED') AND (
 			(v.response_due_at IS NOT NULL AND v.first_responded_at IS NULL AND v.response_due_at < now())
 			OR (v.resolution_due_at IS NOT NULL AND v.resolved_at IS NULL AND v.resolution_due_at < now()))))
+		AND ($12='' OR v.workspace_id::text=$12)
+		AND ($13='' OR v.category_id::text=$13)
+		AND ($14='' OR v.knowledge_status=$14)
+		AND (NOT $15 OR (v.status IN ('RESOLVED','CLOSED') AND v.knowledge_status='UNREVIEWED'))
+		AND ($16=0 OR (v.status NOT IN ('RESOLVED','CLOSED','REJECTED') AND v.occurred_at <= now()-make_interval(days => $16)))
 		ORDER BY (v.status NOT IN ('RESOLVED','CLOSED','REJECTED')) DESC,
 			CASE v.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'NORMAL' THEN 2 ELSE 3 END,
 			v.occurred_at DESC
 		LIMIT $11`
 	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, orgArg(p), q.CustomerID,
 		strings.ToUpper(q.Status), strings.ToUpper(q.VoiceType), strings.ToUpper(q.Severity), q.OwnerID,
-		q.OpenOnly, q.Overdue, q.Limit)
+		q.OpenOnly, q.Overdue, q.Limit, q.WorkspaceID, q.CategoryID, strings.ToUpper(q.KnowledgeStatus), q.ReviewPending, max(q.MinAgeDays, 0))
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +332,7 @@ func (s *Service) Get(ctx context.Context, p *auth.Principal, id string) (Voice,
 	if err := auth.Require(p, "voice:read"); err != nil {
 		return Voice{}, nil, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT `+voiceColumns+` `+voiceJoins+` WHERE v.id=$4 AND `+crm.ScopeSQL("v"),
+	rows, err := s.DB.Query(ctx, `SELECT `+voiceColumns+` `+voiceJoins+` WHERE v.id=$4 AND `+VisibleSQL(p, "v"),
 		p.DataScope, p.UserID, orgArg(p), id)
 	if err != nil {
 		return Voice{}, nil, err
@@ -370,12 +409,84 @@ func (s *Service) slaDeadlines(ctx context.Context, categoryID, severity string,
 	return &response, &resolution
 }
 
+// category returns a request type the caller may use, active or not.
+func (s *Service) category(ctx context.Context, p *auth.Principal, id string) (Category, error) {
+	items, err := s.Categories(ctx, p, true)
+	if err != nil {
+		return Category{}, err
+	}
+	for _, c := range items {
+		if c.ID == id {
+			return c, nil
+		}
+	}
+	return Category{}, errors.New("voice category not found")
+}
+
+// intakeContext resolves what a request's type decides: its workspace, its
+// field definitions and whether it keeps an SLA.
+type intakeContext struct {
+	category  *Category
+	workspace *Workspace
+	fields    []Field
+}
+
+func (s *Service) intakeFor(ctx context.Context, p *auth.Principal, categoryID string) (intakeContext, error) {
+	var out intakeContext
+	if strings.TrimSpace(categoryID) != "" {
+		c, err := s.category(ctx, p, strings.TrimSpace(categoryID))
+		if err != nil {
+			return out, err
+		}
+		out.category = &c
+		if c.WorkspaceID != "" {
+			w, err := s.workspace(ctx, p, c.WorkspaceID)
+			if err != nil {
+				return out, err
+			}
+			out.workspace = &w
+		}
+	}
+	workspaceID := ""
+	if out.workspace != nil {
+		workspaceID = out.workspace.ID
+	}
+	fields, err := s.fields(ctx, workspaceID)
+	out.fields = fields
+	return out, err
+}
+
 func (s *Service) Create(ctx context.Context, p *auth.Principal, in Input, m crm.RequestMeta) (Voice, error) {
 	if err := auth.Require(p, "voice:write"); err != nil {
 		return Voice{}, err
 	}
+	intake, err := s.intakeFor(ctx, p, in.CategoryID)
+	if err != nil {
+		return Voice{}, err
+	}
+	if intake.category != nil {
+		if !intake.category.Active {
+			return Voice{}, errors.New("사용이 중지된 요청 유형입니다")
+		}
+		// A workspace type decides the broad voice type; the intake screen
+		// asks only for the type the department defined.
+		if strings.TrimSpace(in.VoiceType) == "" {
+			in.VoiceType = intake.category.VoiceType
+		}
+	}
+	if intake.workspace != nil && intake.category == nil {
+		return Voice{}, errors.New("요청 유형을 선택해야 합니다")
+	}
 	if err := validate(in); err != nil {
 		return Voice{}, err
+	}
+	// Fields are checked only where they are defined; requests outside any
+	// workspace with no definitions keep accepting what they always did.
+	fieldValues := orEmpty(in.CustomFields)
+	if len(intake.fields) > 0 {
+		if fieldValues, err = validateFieldValues(intake.fields, "INTAKE", fieldValues, true); err != nil {
+			return Voice{}, err
+		}
 	}
 	// Reuse the CRM read check so a VOC cannot be filed against a customer the
 	// user is not allowed to see.
@@ -399,8 +510,22 @@ func (s *Service) Create(ctx context.Context, p *auth.Principal, in Input, m crm
 	if in.OccurredAt != nil {
 		occurred = *in.OccurredAt
 	}
-	responseDue, resolutionDue := s.slaDeadlines(ctx, in.CategoryID, severity, occurred)
-	fields, _ := json.Marshal(orEmpty(in.CustomFields))
+	var responseDue, resolutionDue *time.Time
+	if intake.category == nil || intake.category.SLAEnabled {
+		responseDue, resolutionDue = s.slaDeadlines(ctx, in.CategoryID, severity, occurred)
+	}
+	fields, _ := json.Marshal(fieldValues)
+	// An isolated workspace's request belongs to the owning department, so its
+	// members find it through their Data Scope even when the customer is owned
+	// elsewhere.
+	organizationID := customer.OrganizationID
+	workspaceID := ""
+	if intake.workspace != nil {
+		workspaceID = intake.workspace.ID
+		if intake.workspace.Isolated {
+			organizationID = intake.workspace.OrganizationID
+		}
+	}
 
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -414,11 +539,11 @@ func (s *Service) Create(ctx context.Context, p *auth.Principal, in Input, m crm
 	id := ids.New()
 	_, err = tx.Exec(ctx, `INSERT INTO customer_voices(id,voice_no,customer_id,contact_id,opportunity_id,contract_id,category_id,
 		voice_type,channel,title,body,severity,status,owner_id,organization_id,occurred_at,response_due_at,resolution_due_at,
-		custom_fields,created_by,updated_by)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'RECEIVED',$13,$14,$15,$16,$17,$18,$19,$19)`,
+		custom_fields,created_by,updated_by,workspace_id)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'RECEIVED',$13,$14,$15,$16,$17,$18,$19,$19,$20)`,
 		id, voiceNo, in.CustomerID, nullable(in.ContactID), nullable(in.OpportunityID), nullable(in.ContractID), nullable(in.CategoryID),
 		strings.ToUpper(in.VoiceType), channel, strings.TrimSpace(in.Title), nullable(in.Body), severity, owner,
-		nullable(customer.OrganizationID), occurred, responseDue, resolutionDue, fields, p.UserID)
+		nullable(organizationID), occurred, responseDue, resolutionDue, fields, p.UserID, nullable(workspaceID))
 	if err != nil {
 		return Voice{}, err
 	}
@@ -478,6 +603,54 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id string, in U
 	if status == "RESOLVED" && strings.TrimSpace(coalesce(in.Resolution, before.Resolution)) == "" {
 		return Voice{}, errors.New("resolution is required before a record can be resolved")
 	}
+	evidence := strings.ToUpper(strings.TrimSpace(in.CauseEvidence))
+	if evidence != "" && !causeEvidence[evidence] {
+		return Voice{}, errors.New("causeEvidence must be CONFIRMED, PRESUMED or UNIDENTIFIED")
+	}
+	if in.CategoryID != "" && in.CategoryID != before.CategoryID {
+		next, err := s.category(ctx, p, in.CategoryID)
+		if err != nil {
+			return Voice{}, err
+		}
+		// Moving a case into another workspace would move it across a data
+		// boundary; that is a new intake, not an edit.
+		if next.WorkspaceID != before.WorkspaceID {
+			return Voice{}, errors.New("다른 업무 영역의 요청 유형으로는 변경할 수 없습니다")
+		}
+	}
+	intake, err := s.intakeFor(ctx, p, before.CategoryID)
+	if err != nil {
+		return Voice{}, err
+	}
+	fieldPatch := map[string]any{}
+	if len(in.CustomFields) > 0 {
+		if len(intake.fields) == 0 && before.WorkspaceID == "" {
+			fieldPatch = in.CustomFields
+		} else if fieldPatch, err = validateFieldValues(intake.fields, "", in.CustomFields, false); err != nil {
+			return Voice{}, err
+		}
+	}
+	resolving := status == "RESOLVED" && before.Status != "RESOLVED"
+	if resolving {
+		merged := map[string]any{}
+		for k, v := range before.CustomFields {
+			merged[k] = v
+		}
+		for k, v := range fieldPatch {
+			merged[k] = v
+		}
+		// Required resolution fields are checked on the values the case will
+		// hold, so a value recorded earlier still counts.
+		resolutionFields := phaseFields(intake.fields, "RESOLUTION")
+		if _, err = validateFieldValues(resolutionFields, "RESOLUTION", onlyDefined(resolutionFields, merged), true); err != nil {
+			return Voice{}, err
+		}
+		if intake.workspace != nil && intake.workspace.KnowledgeGate && coalesce(evidence, before.CauseEvidence) == "" {
+			return Voice{}, errors.New("원인 근거(확인·추정·미특정)를 선택해야 해결로 변경할 수 있습니다")
+		}
+	}
+	reopening := terminal[before.Status] && !terminal[status]
+	patch, _ := json.Marshal(fieldPatch)
 	severity := strings.ToUpper(in.Severity)
 	if severity == "" {
 		severity = before.Severity
@@ -516,6 +689,11 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id string, in U
 		preventive_action=COALESCE(NULLIF($11,''),preventive_action),
 		satisfaction_score=COALESCE($12,satisfaction_score),
 		satisfaction_comment=COALESCE(NULLIF($13,''),satisfaction_comment),
+		cause_evidence=COALESCE(NULLIF($16,''),cause_evidence),
+		custom_fields=custom_fields||$17::jsonb,
+		knowledge_status=CASE WHEN $18 THEN 'UNREVIEWED' ELSE knowledge_status END,
+		knowledge_reviewed_by=CASE WHEN $18 THEN NULL ELSE knowledge_reviewed_by END,
+		knowledge_reviewed_at=CASE WHEN $18 THEN NULL ELSE knowledge_reviewed_at END,
 		first_responded_at=CASE WHEN first_responded_at IS NULL AND $5<>'RECEIVED' THEN now() ELSE first_responded_at END,
 		resolved_at=CASE WHEN $5 IN ('RESOLVED','CLOSED') AND resolved_at IS NULL THEN now()
 			WHEN $5 NOT IN ('RESOLVED','CLOSED') THEN NULL ELSE resolved_at END,
@@ -526,7 +704,8 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id string, in U
 		id, strings.TrimSpace(in.Title), strings.TrimSpace(in.Body), severity, status, owner,
 		nullable(in.CategoryID), nullable(in.ContactID),
 		strings.TrimSpace(in.Resolution), strings.TrimSpace(in.RootCause), strings.TrimSpace(in.PreventiveAction),
-		in.SatisfactionScore, strings.TrimSpace(in.SatisfactionComment), p.UserID, before.Version)
+		in.SatisfactionScore, strings.TrimSpace(in.SatisfactionComment), p.UserID, before.Version,
+		evidence, string(patch), reopening && before.KnowledgeStatus != "UNREVIEWED")
 	if err != nil {
 		return Voice{}, err
 	}
@@ -545,6 +724,13 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id string, in U
 		}
 	} else if strings.TrimSpace(in.Note) != "" {
 		if err = appendEvent(ctx, tx, id, "COMMENT", "", "", in.Note, p.UserID); err != nil {
+			return Voice{}, err
+		}
+	}
+	if reopening && before.KnowledgeStatus != "UNREVIEWED" {
+		// A reopened case may no longer mean what the reviewer approved, so it
+		// goes back through the gate instead of staying agent knowledge.
+		if err = appendEvent(ctx, tx, id, "KNOWLEDGE_REVIEW", "", "", "재처리로 지식 반영 상태를 미검토로 되돌렸습니다. (이전: "+knowledgeLabel(before.KnowledgeStatus)+")", p.UserID); err != nil {
 			return Voice{}, err
 		}
 	}
@@ -568,6 +754,28 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id string, in U
 		IP:     m.IP, RequestID: m.RequestID, UserAgent: m.UserAgent})
 	out, _, err := s.Get(ctx, p, id)
 	return out, err
+}
+
+func phaseFields(defs []Field, phase string) []Field {
+	out := []Field{}
+	for _, f := range defs {
+		if f.Phase == phase {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// onlyDefined keeps the values a definition list knows, so a check of one
+// phase is not tripped by keys left over from a retired field.
+func onlyDefined(defs []Field, values map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, f := range defs {
+		if v, ok := values[f.Key]; ok {
+			out[f.Key] = v
+		}
+	}
+	return out
 }
 
 func coalesce(values ...string) string {
@@ -626,7 +834,10 @@ type Summary struct {
 	ChurnRisk         int      `json:"churnRisk"`
 	AverageResolution float64  `json:"averageResolutionHours"`
 	Satisfaction      *float64 `json:"satisfactionAverage,omitempty"`
-	ByType            []Bucket `json:"byType"`
+	// KnowledgePending counts closed cases no reviewer has judged yet: the
+	// queue behind the knowledge gate.
+	KnowledgePending int      `json:"knowledgePending"`
+	ByType           []Bucket `json:"byType"`
 }
 
 type Bucket struct {
@@ -634,7 +845,7 @@ type Bucket struct {
 	Count int    `json:"count"`
 }
 
-func (s *Service) Summary(ctx context.Context, p *auth.Principal, customerID string) (Summary, error) {
+func (s *Service) Summary(ctx context.Context, p *auth.Principal, customerID, workspaceID string) (Summary, error) {
 	if err := auth.Require(p, "voice:read"); err != nil {
 		return Summary{}, err
 	}
@@ -648,16 +859,17 @@ func (s *Service) Summary(ctx context.Context, p *auth.Principal, customerID str
 		count(*) FILTER (WHERE v.resolved_at IS NOT NULL AND v.resolved_at > now()-interval '30 days'),
 		count(*) FILTER (WHERE v.voice_type='CHURN_RISK' AND v.status NOT IN ('RESOLVED','CLOSED','REJECTED')),
 		COALESCE(avg(EXTRACT(EPOCH FROM (v.resolved_at-v.occurred_at))/3600) FILTER (WHERE v.resolved_at IS NOT NULL),0),
-		avg(v.satisfaction_score) FILTER (WHERE v.satisfaction_score IS NOT NULL)
-		FROM customer_voices v WHERE `+crm.ScopeSQL("v")+` AND ($4='' OR v.customer_id::text=$4)`,
-		p.DataScope, p.UserID, orgArg(p), customerID).
-		Scan(&out.Open, &out.Overdue, &out.Critical, &out.ResolvedLast30, &out.ChurnRisk, &out.AverageResolution, &out.Satisfaction)
+		avg(v.satisfaction_score) FILTER (WHERE v.satisfaction_score IS NOT NULL),
+		count(*) FILTER (WHERE v.status IN ('RESOLVED','CLOSED') AND v.knowledge_status='UNREVIEWED')
+		FROM customer_voices v WHERE `+VisibleSQL(p, "v")+` AND ($4='' OR v.customer_id::text=$4) AND ($5='' OR v.workspace_id::text=$5)`,
+		p.DataScope, p.UserID, orgArg(p), customerID, workspaceID).
+		Scan(&out.Open, &out.Overdue, &out.Critical, &out.ResolvedLast30, &out.ChurnRisk, &out.AverageResolution, &out.Satisfaction, &out.KnowledgePending)
 	if err != nil {
 		return Summary{}, err
 	}
 	rows, err := s.DB.Query(ctx, `SELECT v.voice_type,count(*) FROM customer_voices v
-		WHERE `+crm.ScopeSQL("v")+` AND ($4='' OR v.customer_id::text=$4)
-		GROUP BY v.voice_type ORDER BY count(*) DESC`, p.DataScope, p.UserID, orgArg(p), customerID)
+		WHERE `+VisibleSQL(p, "v")+` AND ($4='' OR v.customer_id::text=$4) AND ($5='' OR v.workspace_id::text=$5)
+		GROUP BY v.voice_type ORDER BY count(*) DESC`, p.DataScope, p.UserID, orgArg(p), customerID, workspaceID)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -693,9 +905,9 @@ func ValidateCategory(code, name, voiceType string, responseHours, resolutionHou
 
 func (s *Service) CreateCategory(ctx context.Context, c Category) (string, error) {
 	id := ids.New()
-	_, err := s.DB.Exec(ctx, `INSERT INTO voice_categories(id,code,name,voice_type,response_hours,resolution_hours,display_order)
-		VALUES($1,$2,$3,$4,$5,$6,$7)`,
+	_, err := s.DB.Exec(ctx, `INSERT INTO voice_categories(id,code,name,voice_type,response_hours,resolution_hours,display_order,workspace_id,sla_enabled)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		id, strings.ToUpper(strings.TrimSpace(c.Code)), strings.TrimSpace(c.Name), strings.ToUpper(c.VoiceType),
-		c.ResponseHours, c.ResolutionHours, c.DisplayOrder)
+		c.ResponseHours, c.ResolutionHours, c.DisplayOrder, nullable(c.WorkspaceID), c.SLAEnabled)
 	return id, err
 }

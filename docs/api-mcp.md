@@ -84,6 +84,25 @@ Relio 가 받는 토큰의 조건 — 서명(RS256, Keycloak JWKS), Issuer 일�
 
 OAuth 로 연결한 에이전트의 도구 범위는 **사용자 Role 권한 ∩ 관리자 Tool 허용목록** 입니다(개인 키 Scope 없음). Keycloak 설정 순서는 [관리자 가이드 4.4](ADMIN_GUIDE.md#44-조직-계정oauth으로-mcp-연결) 를 보세요.
 
+### 2.5 고객 요청 업무 영역 (부서 VOC) 도구
+
+부서 업무 영역(예: 회원사 민원)을 쓰는 사용자에게 보이는 도구입니다. `fields` 인자의 스키마는 호출자가 쓸 수 있는 업무 영역의 항목 정의로 **요청마다 생성** 되며, 선택형 항목은 허용값이 `enum` 으로 들어갑니다. 쓰기 도구는 `readOnlyHint: false` 이고 설명에 "담당자 승인 후 실행" 을 명시합니다.
+
+| 도구 | 필수 인자 | 동작 |
+|---|---|---|
+| `search_voice_knowledge` | `query` | 해결·종결 건에서 오류코드·증상을 찾습니다. 기본은 `knowledgeStatus=APPROVED`(반영) 건만. `includeUnreviewed: true` 면 미검토·검토중도 포함하며 '제외' 건은 어떤 경우에도 반환하지 않습니다. `fields`(항목값 일치), `causeEvidence` 로 좁힙니다. 결과: `title`, `customerSaid`(원문), `rootCause`, `resolution`, `causeEvidence`, `knowledgeStatus`, `fields`(해결 주체 포함) |
+| `get_customer_voice_history` | `customerCode` 또는 `customerId` | 그 고객의 종결 건 전체(해결·종결·반려), 최신순, `limit` 최대 200. 지식 게이트 미적용, 상태 필드는 포함 |
+| `file_customer_voice` | `title` | 접수. `customerCode` 로 고객 지정, `category` 에 유형 이름·코드·ID, `fields` 에 접수 항목 |
+| `record_voice_response` | `id`, `note` | 처리 이력 추가(append-only). `eventType`: `CUSTOMER_CONTACT`(고객 응대) · `COMMENT`(내부 메모, 회고 요약) · `ESCALATED`(상위 보고) |
+| `resolve_customer_voice` | `id`, `resolution` | 해결 처리. `causeEvidence`(지식 게이트 영역은 필수), `rootCause`, `fields`(해결 항목). 접수 상태면 처리 중을 거쳐 해결로 바꾸며 두 단계 모두 이력에 남습니다 |
+| `register_workspace_customer` | `workspaceId`, `name`, `customerCode` | 간이 등록. 같은 코드가 있으면 등록하지 않고 `existing` 으로 기존 고객을 돌려줍니다 |
+| `import_workspace_customers` | `workspaceId`, `items` | 일괄 등록(최대 5000행). 행마다 `CREATED`·`UPDATED`·`UNCHANGED`·`ERROR` |
+| `get_voice_categories` | — | 유형 목록과 업무 영역, 영역별 항목 정의·허용값, SLA 적용 여부 |
+
+**지식 반영 상태를 바꾸는 도구는 없습니다.** REST `PUT /api/v1/voices/{id}/knowledge` 도 `voice:knowledge-review` 권한과 **화면 세션** 을 요구하며, 개인 연동 키·OAuth 토큰으로는 거부됩니다.
+
+REST: `GET /api/v1/voices/workspaces`, `GET /api/v1/voices/knowledge`(`q`, `fieldFilters` JSON, `causeEvidence`, `includeUnreviewed`), `GET /api/v1/voices/history`, `POST /api/v1/voices/workspaces/{id}/customers`, `POST /api/v1/voices/workspaces/{id}/customers/import`. 목록 `GET /api/v1/voices` 는 `workspaceId`, `categoryId`, `knowledgeStatus`, `reviewPending`, `minAgeDays` 필터를 받습니다.
+
 ---
 
 ## 3. 13가지 핵심 MCP Tools 명세 (MCP Tool Directory)

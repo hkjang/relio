@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -10,16 +11,23 @@ import (
 )
 
 func (s *Server) listVoices(w http.ResponseWriter, r *http.Request) {
+	// The export handler reads the same filters, so a download always matches
+	// the screen it was taken from.
 	q := r.URL.Query()
 	items, err := s.Voices.List(r.Context(), principal(r), voice.Query{
-		CustomerID: q.Get("customerId"),
-		Status:     q.Get("status"),
-		VoiceType:  q.Get("voiceType"),
-		Severity:   q.Get("severity"),
-		OwnerID:    q.Get("ownerId"),
-		Overdue:    q.Get("overdue") == "true",
-		OpenOnly:   q.Get("open") == "true",
-		Limit:      httpx.IntQuery(r, "limit", 50, 1, 200),
+		CustomerID:      q.Get("customerId"),
+		WorkspaceID:     q.Get("workspaceId"),
+		CategoryID:      q.Get("categoryId"),
+		Status:          q.Get("status"),
+		VoiceType:       q.Get("voiceType"),
+		Severity:        q.Get("severity"),
+		OwnerID:         q.Get("ownerId"),
+		Overdue:         q.Get("overdue") == "true",
+		OpenOnly:        q.Get("open") == "true",
+		KnowledgeStatus: q.Get("knowledgeStatus"),
+		ReviewPending:   q.Get("reviewPending") == "true",
+		MinAgeDays:      httpx.IntQuery(r, "minAgeDays", 0, 0, 3650),
+		Limit:           httpx.IntQuery(r, "limit", 50, 1, 200),
 	})
 	if err != nil {
 		s.serviceError(w, r, err)
@@ -83,7 +91,7 @@ func (s *Server) commentVoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) voiceSummary(w http.ResponseWriter, r *http.Request) {
-	v, err := s.Voices.Summary(r.Context(), principal(r), r.URL.Query().Get("customerId"))
+	v, err := s.Voices.Summary(r.Context(), principal(r), r.URL.Query().Get("customerId"), r.URL.Query().Get("workspaceId"))
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
@@ -108,7 +116,9 @@ func (s *Server) adminVoiceCategories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.DB.Query(r.Context(), `SELECT c.id,c.code,c.name,c.voice_type,c.response_hours,c.resolution_hours,c.active,c.display_order,
-		(SELECT count(*) FROM customer_voices v WHERE v.category_id=c.id) FROM voice_categories c ORDER BY c.display_order,c.name`)
+		(SELECT count(*) FROM customer_voices v WHERE v.category_id=c.id),c.sla_enabled,COALESCE(c.workspace_id::text,''),COALESCE(w.name,'')
+		FROM voice_categories c LEFT JOIN voice_workspaces w ON w.id=c.workspace_id
+		ORDER BY COALESCE(w.display_order,0),w.name NULLS FIRST,c.display_order,c.name`)
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
@@ -116,15 +126,16 @@ func (s *Server) adminVoiceCategories(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, code, name, kind string
+		var id, code, name, kind, workspaceID, workspaceName string
 		var response, resolution, order, used int
-		var active bool
-		if err = rows.Scan(&id, &code, &name, &kind, &response, &resolution, &active, &order, &used); err != nil {
+		var active, sla bool
+		if err = rows.Scan(&id, &code, &name, &kind, &response, &resolution, &active, &order, &used, &sla, &workspaceID, &workspaceName); err != nil {
 			s.serviceError(w, r, err)
 			return
 		}
 		items = append(items, map[string]any{"id": id, "code": code, "name": name, "voiceType": kind,
-			"responseHours": response, "resolutionHours": resolution, "active": active, "displayOrder": order, "usedCount": used})
+			"responseHours": response, "resolutionHours": resolution, "active": active, "displayOrder": order, "usedCount": used,
+			"slaEnabled": sla, "workspaceId": workspaceID, "workspaceName": workspaceName})
 	}
 	httpx.JSON(w, 200, map[string]any{"items": items})
 }
@@ -137,7 +148,12 @@ type voiceCategoryInput struct {
 	ResolutionHours int    `json:"resolutionHours"`
 	Active          *bool  `json:"active"`
 	DisplayOrder    int    `json:"displayOrder"`
+	WorkspaceID     string `json:"workspaceId"`
+	// SLAEnabled defaults to true so existing clients keep their deadlines.
+	SLAEnabled *bool `json:"slaEnabled"`
 }
+
+func (in voiceCategoryInput) sla() bool { return in.SLAEnabled == nil || *in.SLAEnabled }
 
 func (in voiceCategoryInput) validate() error {
 	return voice.ValidateCategory(in.Code, in.Name, in.VoiceType, in.ResponseHours, in.ResolutionHours)
@@ -159,6 +175,7 @@ func (s *Server) createVoiceCategory(w http.ResponseWriter, r *http.Request) {
 	id, err := s.Voices.CreateCategory(r.Context(), voice.Category{
 		Code: in.Code, Name: in.Name, VoiceType: in.VoiceType,
 		ResponseHours: in.ResponseHours, ResolutionHours: in.ResolutionHours, DisplayOrder: in.DisplayOrder,
+		WorkspaceID: in.WorkspaceID, SLAEnabled: in.sla(),
 	})
 	if err != nil {
 		s.serviceError(w, r, err)
@@ -186,8 +203,22 @@ func (s *Server) updateVoiceCategory(w http.ResponseWriter, r *http.Request) {
 	if in.Active != nil {
 		active = *in.Active
 	}
-	_, err := s.DB.Exec(r.Context(), `UPDATE voice_categories SET name=$2,voice_type=$3,response_hours=$4,resolution_hours=$5,active=$6,display_order=$7,updated_at=now() WHERE id=$1`,
-		id, strings.TrimSpace(in.Name), strings.ToUpper(in.VoiceType), in.ResponseHours, in.ResolutionHours, active, in.DisplayOrder)
+	// The workspace of a type is fixed once it has requests: moving it would
+	// move them across a data boundary.
+	var used int
+	var currentWorkspace string
+	if err := s.DB.QueryRow(r.Context(), `SELECT COALESCE(workspace_id::text,''),(SELECT count(*) FROM customer_voices v WHERE v.category_id=c.id) FROM voice_categories c WHERE c.id=$1`, id).Scan(&currentWorkspace, &used); err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	if used > 0 && currentWorkspace != in.WorkspaceID {
+		s.serviceError(w, r, errors.New("이미 접수된 요청이 있는 유형은 업무 영역을 바꿀 수 없습니다"))
+		return
+	}
+	_, err := s.DB.Exec(r.Context(), `UPDATE voice_categories SET name=$2,voice_type=$3,response_hours=$4,resolution_hours=$5,active=$6,display_order=$7,
+		workspace_id=$8,sla_enabled=$9,updated_at=now() WHERE id=$1`,
+		id, strings.TrimSpace(in.Name), strings.ToUpper(in.VoiceType), in.ResponseHours, in.ResolutionHours, active, in.DisplayOrder,
+		nullableID(in.WorkspaceID), in.sla())
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
@@ -237,14 +268,19 @@ func (s *Server) exportVoices(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	body, count, err := s.Voices.CSV(r.Context(), p, voice.Query{
-		CustomerID: q.Get("customerId"),
-		Status:     q.Get("status"),
-		VoiceType:  q.Get("voiceType"),
-		Severity:   q.Get("severity"),
-		OwnerID:    q.Get("ownerId"),
-		Overdue:    q.Get("overdue") == "true",
-		OpenOnly:   q.Get("open") == "true",
-		Limit:      httpx.IntQuery(r, "limit", 200, 1, 200),
+		CustomerID:      q.Get("customerId"),
+		WorkspaceID:     q.Get("workspaceId"),
+		CategoryID:      q.Get("categoryId"),
+		Status:          q.Get("status"),
+		VoiceType:       q.Get("voiceType"),
+		Severity:        q.Get("severity"),
+		OwnerID:         q.Get("ownerId"),
+		Overdue:         q.Get("overdue") == "true",
+		OpenOnly:        q.Get("open") == "true",
+		KnowledgeStatus: q.Get("knowledgeStatus"),
+		ReviewPending:   q.Get("reviewPending") == "true",
+		MinAgeDays:      httpx.IntQuery(r, "minAgeDays", 0, 0, 3650),
+		Limit:           httpx.IntQuery(r, "limit", 200, 1, 200),
 	})
 	if err != nil {
 		s.serviceError(w, r, err)
@@ -260,4 +296,11 @@ func (s *Server) exportVoices(w http.ResponseWriter, r *http.Request) {
 	// Excel needs the BOM to read UTF-8 Korean correctly.
 	_, _ = w.Write([]byte("\xef\xbb\xbf"))
 	_, _ = w.Write([]byte(body))
+}
+
+func nullableID(v string) any {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return strings.TrimSpace(v)
 }

@@ -672,17 +672,18 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	add("target:write", "create_target", "영업목표 등록", "사용자 또는 조직의 기간별 영업목표를 등록합니다.", schema([]string{"periodStart", "periodEnd", "amount"}, map[string]any{"userId": str("대상 사용자 ID · 비우면 본인"), "organizationId": str("대상 조직 ID"), "periodStart": str("YYYY-MM-DD"), "periodEnd": str("YYYY-MM-DD"), "amount": number("목표 금액")}), false, false)
 	add("notification:read", "list_notifications", "알림 조회", "본인의 알림을 읽지 않은 항목만 또는 전체로 조회합니다.", schema(nil, map[string]any{"unreadOnly": boolean("읽지 않은 알림만 조회"), "limit": integer("최대 결과 수")}), true, false)
 	add("notification:write", "mark_notification_read", "알림 읽음 처리", "본인의 알림 한 건을 읽음 처리합니다.", schema([]string{"id"}, map[string]any{"id": str("알림 ID")}), false, false)
-	voiceProps := map[string]any{"customerId": str("고객 ID"), "status": str("RECEIVED, IN_REVIEW, IN_PROGRESS, PENDING_CUSTOMER, RESOLVED, CLOSED, REJECTED"), "voiceType": str("COMPLAINT, REQUEST, INQUIRY, DEFECT, PRAISE, CHURN_RISK"), "severity": str("LOW, NORMAL, HIGH, CRITICAL"), "open": str("true면 미해결 건만"), "overdue": str("true면 응답·해결 기한 초과 건만"), "limit": integer("최대 결과 수")}
+	voiceProps := map[string]any{"customerId": str("고객 ID"), "status": str("RECEIVED, IN_REVIEW, IN_PROGRESS, PENDING_CUSTOMER, RESOLVED, CLOSED, REJECTED"), "voiceType": str("COMPLAINT, REQUEST, INQUIRY, DEFECT, PRAISE, CHURN_RISK"), "severity": str("LOW, NORMAL, HIGH, CRITICAL"), "open": str("true면 미해결 건만"), "overdue": str("true면 응답·해결 기한 초과 건만"), "limit": integer("최대 결과 수"),
+		"workspaceId": str("업무 영역 ID"), "knowledgeStatus": str("UNREVIEWED, IN_REVIEW, APPROVED, EXCLUDED"), "reviewPending": boolean("true면 해결·종결되었지만 검토 전인 건만"), "minAgeDays": integer("접수 후 이 일수 이상 지난 미종결 건만")}
 	add("voice:read", "list_customer_voices", "고객 요청 조회", "불만, 요청, 문의와 이탈 징후를 조건으로 조회합니다. 기한 초과 여부가 함께 계산됩니다.", schema(nil, voiceProps), true, false)
 	add("voice:read", "get_customer_voice", "고객 요청 상세", "고객 요청 한 건과 전체 처리 이력을 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 요청 ID")}), true, false)
-	add("voice:read", "get_voice_summary", "고객 요청 요약", "미해결, 기한 초과, 긴급, 이탈 징후 건수와 평균 해결 시간, 만족도를 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID · 비우면 전체")}), true, false)
+	add("voice:read", "get_voice_summary", "고객 요청 요약", "미해결, 기한 초과, 긴급, 이탈 징후 건수와 평균 해결 시간, 만족도, 지식 검토 대기 건수를 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID · 비우면 전체"), "workspaceId": str("업무 영역 ID · 비우면 전체")}), true, false)
 	add("voice:read", "get_overdue_voices", "기한 초과 요청", "응답 또는 해결 기한을 넘긴 미해결 요청만 조회합니다.", schema(nil, map[string]any{"limit": integer("최대 결과 수")}), true, false)
 	add("voice:read", "get_customer_churn_risk", "고객 이탈 위험도", "이탈 징후, 미해결 불만, 미착수 갱신, 접점 공백을 합산한 위험도와 근거를 조회합니다.", schema([]string{"id"}, map[string]any{"id": str("고객 ID")}), true, false)
 	add("voice:read", "get_top_churn_risks", "이탈 위험 고객 순위", "담당 범위에서 이탈 위험이 높은 고객을 근거와 함께 조회합니다.", schema(nil, map[string]any{"limit": integer("최대 결과 수")}), true, false)
-	add("customer:read voice:read voice:write", "file_customer_voice", "고객 요청 접수", "고객이 제기한 불만, 요청, 문의를 접수합니다. 유형과 심각도에 따라 응답·해결 기한이 자동 설정됩니다.", schema([]string{"customerId", "voiceType", "title"}, map[string]any{"customerId": str("고객 ID"), "contactId": str("요청 담당자 ID"), "categoryId": str("세부 분류 ID"), "voiceType": str("COMPLAINT, REQUEST, INQUIRY, DEFECT, PRAISE, CHURN_RISK"), "channel": str("PHONE, EMAIL, VISIT, PORTAL, CHAT, PARTNER, OTHER"), "title": str("제목"), "body": str("고객이 말한 내용"), "severity": str("LOW, NORMAL, HIGH, CRITICAL")}), false, false)
-	add("voice:read voice:write", "record_voice_response", "고객 응대 기록", "고객에게 안내한 내용이나 내부 확인 사항을 처리 이력에 남깁니다. 고객 응대로 기록하면 응답 기한이 충족됩니다.", schema([]string{"id", "note"}, map[string]any{"id": str("고객 요청 ID"), "note": str("기록할 내용"), "eventType": str("CUSTOMER_CONTACT, COMMENT, ESCALATED")}), false, false)
+	add("voice:read voice:write", "record_voice_response", "처리 기록 추가", "요청의 처리 이력에 한 줄을 추가합니다(기존 기록은 수정되지 않음). eventType으로 구분합니다: CUSTOMER_CONTACT=고객 응대(응답 기한 충족), COMMENT=내부 메모(에이전트 회고 요약 포함), ESCALATED=상위 보고."+confirmFirst, schema([]string{"id", "note"}, map[string]any{"id": str("고객 요청 ID"), "note": str("기록할 내용"), "eventType": map[string]any{"type": "string", "enum": []string{"CUSTOMER_CONTACT", "COMMENT", "ESCALATED"}, "description": "기록 구분 · 기본 CUSTOMER_CONTACT"}}), false, false)
 	add("voice:read voice:write", "progress_customer_voice", "고객 요청 상태 변경", "요청 상태를 진행, 해결 등으로 변경합니다. 해결로 변경할 때는 해결 내용이 반드시 필요합니다.", schema([]string{"id", "status", "version"}, map[string]any{"id": str("고객 요청 ID"), "status": str("IN_REVIEW, IN_PROGRESS, PENDING_CUSTOMER, RESOLVED, CLOSED, REJECTED"), "version": integer("현재 버전"), "resolution": str("해결 내용 · RESOLVED로 변경할 때 필수"), "rootCause": str("근본 원인"), "preventiveAction": str("재발 방지 조치"), "note": str("변경 사유")}), false, false)
-	add("voice:read", "get_voice_categories", "요청 유형 조회", "접수 가능한 요청 유형과 응답·해결 목표 시간을 조회합니다.", schema(nil, map[string]any{}), true, false)
+	add("voice:read", "get_voice_categories", "요청 유형 조회", "접수 가능한 요청 유형과 업무 영역, 영역별 접수·해결 항목과 허용값, SLA 적용 여부를 조회합니다.", schema(nil, map[string]any{}), true, false)
+	s.addVoiceTools(ctx, p, add)
 	add("intelligence:read", "get_customer_signals", "고객 Signal 조회", "고객에게서 감지된 변화(접촉 공백, 정체, 만료 임박, 긍정 신호)를 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID · 비우면 담당 범위 전체"), "severity": str("LOW, MEDIUM, HIGH, CRITICAL"), "sentiment": str("POSITIVE, NEGATIVE, NEUTRAL"), "signalType": str("NO_CONTACT, DEAL_STALLED, CRITICAL_VOC, CONTRACT_EXPIRING, DECISION_MAKER_MISSING, ENGAGEMENT_INCREASE, QUOTE_REQUESTED, CLOSE_DATE_PASSED"), "limit": integer("최대 결과 수")}), true, false)
 	add("intelligence:read", "get_customer_risks", "고객 Risk 조회", "0~100 점수로 정량화된 관계, 갱신, VOC, Deal 위험을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID · 비우면 담당 범위 전체"), "riskType": str("RELATIONSHIP_RISK, RENEWAL_RISK, VOC_RISK, DEAL_RISK"), "minScore": integer("최소 위험 점수"), "limit": integer("최대 결과 수")}), true, false)
 	add("intelligence:read", "get_deal_insights", "Deal Insight 조회", "여러 신호를 묶어 사람이 읽을 수 있게 요약한 분석을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "limit": integer("최대 결과 수")}), true, false)
@@ -795,6 +796,12 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 		return nil, err
 	}
 	meta := crm.RequestMeta{Channel: "MCP", IP: httpx.ClientIP(r), RequestID: httpx.RequestID(ctx), UserAgent: r.UserAgent()}
+	if handled, ok, err := s.callVoiceTool(ctx, p, call.Name, a, meta); ok {
+		if err != nil {
+			return nil, err
+		}
+		return toolResult(handled), nil
+	}
 	var v any
 	switch call.Name {
 	case "search_customers":
@@ -813,7 +820,7 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 		var before crm.Customer
 		before, err = s.CRM.GetCustomer(ctx, p, strArg(a, "id"))
 		if err == nil {
-			in := crm.CustomerInput{Name: before.Name, RegistrationNo: before.RegistrationNo, CustomerType: before.CustomerType, Grade: before.Grade, Industry: before.Industry, Website: before.Website, Phone: before.Phone, Email: before.Email, Address: before.Address, OwnerID: before.OwnerID, Health: before.Health, AnnualRevenue: before.AnnualRevenue, EmployeeCount: before.EmployeeCount, CustomFields: before.CustomFields, Version: before.Version}
+			in := crm.CustomerInput{Name: before.Name, RegistrationNo: before.RegistrationNo, CustomerCode: before.CustomerCode, CustomerType: before.CustomerType, Grade: before.Grade, Industry: before.Industry, Website: before.Website, Phone: before.Phone, Email: before.Email, Address: before.Address, OwnerID: before.OwnerID, Health: before.Health, AnnualRevenue: before.AnnualRevenue, EmployeeCount: before.EmployeeCount, CustomFields: before.CustomFields, Version: before.Version}
 			err = decodeArgs(a, &in)
 			if err == nil {
 				v, err = s.CRM.UpdateCustomer(ctx, p, before.ID, in, meta)
@@ -962,7 +969,9 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 	case "list_customer_voices":
 		v, err = s.Voices.List(ctx, p, voice.Query{CustomerID: strArg(a, "customerId"), Status: strArg(a, "status"),
 			VoiceType: strArg(a, "voiceType"), Severity: strArg(a, "severity"),
-			OpenOnly: strArg(a, "open") == "true", Overdue: strArg(a, "overdue") == "true", Limit: intArg(a, "limit", 50)})
+			OpenOnly: strArg(a, "open") == "true", Overdue: strArg(a, "overdue") == "true", Limit: intArg(a, "limit", 50),
+			WorkspaceID: strArg(a, "workspaceId"), KnowledgeStatus: strArg(a, "knowledgeStatus"),
+			ReviewPending: boolArg(a, "reviewPending", false), MinAgeDays: intArg(a, "minAgeDays", 0)})
 	case "get_customer_voice":
 		var record voice.Voice
 		var events []voice.Event
@@ -971,7 +980,7 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 			v = map[string]any{"voice": record, "events": events}
 		}
 	case "get_voice_summary":
-		v, err = s.Voices.Summary(ctx, p, strArg(a, "customerId"))
+		v, err = s.Voices.Summary(ctx, p, strArg(a, "customerId"), strArg(a, "workspaceId"))
 	case "get_overdue_voices":
 		v, err = s.Voices.List(ctx, p, voice.Query{Overdue: true, OpenOnly: true, Limit: intArg(a, "limit", 25)})
 	case "get_customer_signals":
@@ -1008,14 +1017,6 @@ func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall,
 		v, err = s.Voices.Risk(ctx, p, strArg(a, "id"))
 	case "get_top_churn_risks":
 		v, err = s.Voices.TopRisks(ctx, p, intArg(a, "limit", 5))
-	case "get_voice_categories":
-		v, err = s.Voices.Categories(ctx, p, false)
-	case "file_customer_voice":
-		var in voice.Input
-		err = decodeArgs(a, &in)
-		if err == nil {
-			v, err = s.Voices.Create(ctx, p, in, meta)
-		}
 	case "record_voice_response":
 		eventType := strArg(a, "eventType")
 		if eventType == "" {
