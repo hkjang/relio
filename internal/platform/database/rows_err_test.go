@@ -10,13 +10,11 @@ import (
 	"testing"
 )
 
-// scannedPackages are the directories this invariant is enforced over. The
-// list is deliberately narrow rather than exception-ridden: every loop in
-// these packages feeds a caller that can return an error, so a stream failure
-// has somewhere to go. internal/intelligence keeps two best-effort lookups
-// (contactRoles, stageLimits) whose signatures cannot carry an error, so that
-// package is left for a later pass instead of being whitelisted line by line.
-var scannedPackages = []string{"server", "crm", "apikey", "auth", "oidc", "audit", "admin", "approval", "voice", "relationship", "analytics", "job", "personal", "mcp"}
+// The invariant covers the whole internal tree with no allow-list. An
+// enumerated list only holds while somebody remembers to extend it, and a
+// package that arrives with a merge (internal/mail did) is exactly the one
+// nobody thinks to add; scanning everything makes a new package opt out
+// loudly rather than slip in silently.
 
 // rowsLoop is one `for <rows>.Next()` loop and where it sits.
 type rowsLoop struct {
@@ -37,24 +35,17 @@ func TestEveryRowsLoopChecksRowsErr(t *testing.T) {
 	if _, err := os.Stat(root); err != nil {
 		t.Fatalf("cannot reach the internal tree from this package: %v", err)
 	}
-	for _, pkg := range scannedPackages {
-		dir := filepath.Join(root, pkg)
-		if _, err := os.Stat(dir); err != nil {
-			t.Fatalf("scanned package %s is missing: %v", pkg, err)
-		}
-	}
 	fset := token.NewFileSet()
+	files := 0
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return err
-		}
-		if !inScannedPackage(root, path) {
-			return nil
 		}
 		file, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
 			return err
 		}
+		files++
 		for _, loop := range uncheckedRowsLoops(file, fset, path) {
 			t.Errorf("%s:%d: the %s.Next() loop never checks %s.Err(); a broken stream ends the loop exactly like the last row and the caller returns a partial result as a success", loop.path, loop.line, loop.name, loop.name)
 		}
@@ -63,20 +54,11 @@ func TestEveryRowsLoopChecksRowsErr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-}
-
-func inScannedPackage(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
+	// A walk that reached nothing would report no offenders either, so the
+	// count is what tells the two apart.
+	if files < 50 {
+		t.Fatalf("only %d source files were scanned; the walk is not reaching the internal tree", files)
 	}
-	top := strings.Split(filepath.ToSlash(rel), "/")[0]
-	for _, pkg := range scannedPackages {
-		if top == pkg {
-			return true
-		}
-	}
-	return false
 }
 
 // uncheckedRowsLoops reports every `for <name>.Next()` loop in the file whose

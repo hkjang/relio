@@ -239,51 +239,55 @@ type contactRoles struct {
 }
 
 // contactRoles counts the decision makers and champions of every customer in
-// the set. Like the per-deal query it replaces it is best effort: a deal whose
-// count could not be read is judged as having none, which is what the rules
-// already did when this query failed.
-func (s *Service) contactRoles(ctx context.Context, customerIDs []string) map[string]contactRoles {
+// the set. A read that fails is reported rather than answered with an empty
+// map: absent counts are indistinguishable from real zeroes downstream, so
+// swallowing the failure fires NO_DECISION_MAKER and NO_CHAMPION on every deal
+// in the set and saveHealthSnapshots records those verdicts as if they were
+// measured. A customer with no contacts at all stays absent, as before.
+func (s *Service) contactRoles(ctx context.Context, customerIDs []string) (map[string]contactRoles, error) {
 	out := map[string]contactRoles{}
 	if len(customerIDs) == 0 {
-		return out
+		return out, nil
 	}
 	rows, err := s.DB.Query(ctx, `SELECT customer_id::text,count(*) FILTER (WHERE decision_maker=true),count(*) FILTER (WHERE relationship_role='CHAMPION') FROM contacts WHERE customer_id=ANY($1::text[]::uuid[]) GROUP BY customer_id`, customerIDs)
 	if err != nil {
-		return out
+		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var customerID string
 		var roles contactRoles
-		if rows.Scan(&customerID, &roles.DecisionMakers, &roles.Champions) != nil {
-			return out
+		if err := rows.Scan(&customerID, &roles.DecisionMakers, &roles.Champions); err != nil {
+			return nil, err
 		}
 		out[customerID] = roles
 	}
-	return out
+	return out, rows.Err()
 }
 
 // stageLimits reads the max_days of every stage in the set. A stage without a
-// limit stays absent, which leaves STAGE_STALLED on its configured default.
-func (s *Service) stageLimits(ctx context.Context, stageIDs []string) map[string]*int {
+// limit stays absent, which leaves STAGE_STALLED on its configured default; a
+// stage whose limit could not be read is a failure instead, because falling
+// back to the default silently judges the deal against the wrong threshold.
+func (s *Service) stageLimits(ctx context.Context, stageIDs []string) (map[string]*int, error) {
 	out := map[string]*int{}
 	if len(stageIDs) == 0 {
-		return out
+		return out, nil
 	}
 	rows, err := s.DB.Query(ctx, `SELECT id::text,max_days FROM pipeline_stages WHERE id=ANY($1::text[]::uuid[])`, stageIDs)
 	if err != nil {
-		return out
+		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var stageID string
 		var maxDays *int
-		if rows.Scan(&stageID, &maxDays) != nil {
-			return out
+		if err := rows.Scan(&stageID, &maxDays); err != nil {
+			return nil, err
 		}
 		out[stageID] = maxDays
 	}
-	return out
+	return out, rows.Err()
 }
 
 // healthFacts is everything the rules read besides the rule itself. Collecting
@@ -497,8 +501,14 @@ func (s *Service) healthOf(ctx context.Context, opportunities []crm.Opportunity)
 		scoring = append(scoring, opportunities[i])
 	}
 	customerIDs, stageIDs, opportunityIDs := healthInputs(scoring)
-	roles := s.contactRoles(ctx, customerIDs)
-	limits := s.stageLimits(ctx, stageIDs)
+	roles, err := s.contactRoles(ctx, customerIDs)
+	if err != nil {
+		return nil, err
+	}
+	limits, err := s.stageLimits(ctx, stageIDs)
+	if err != nil {
+		return nil, err
+	}
 	history, err := s.changesFor(ctx, opportunityIDs, historySince(rules, now))
 	if err != nil {
 		return nil, err
