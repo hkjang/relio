@@ -35,6 +35,7 @@ import (
 	"github.com/hkjang/relio/internal/relationship"
 	"github.com/hkjang/relio/internal/voice"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -718,23 +719,67 @@ func (s *Server) serviceError(w http.ResponseWriter, r *http.Request, err error)
 	msg := err.Error()
 	status := http.StatusBadRequest
 	code := "invalid_request"
-	if errors.Is(err, pgx.ErrNoRows) || strings.Contains(msg, "not found") {
+	sqlstate := ""
+	var pgErr *pgconn.PgError
+	isPg := errors.As(err, &pgErr) || strings.Contains(msg, "SQLSTATE")
+	switch {
+	case errors.Is(err, pgx.ErrNoRows) || msg == "no rows in result set":
 		status = 404
 		code = "not_found"
-		if errors.Is(err, pgx.ErrNoRows) || msg == "no rows in result set" {
-			// The driver's phrasing reached API and MCP clients verbatim.
-			msg = "요청한 데이터를 찾을 수 없거나 접근 권한이 없습니다."
+		// The driver's phrasing reached API and MCP clients verbatim.
+		msg = "요청한 데이터를 찾을 수 없거나 접근 권한이 없습니다."
+	case isPg:
+		// A PostgreSQL error before the English substrings below, because they
+		// read the driver's own sentence: "permission denied for table contacts"
+		// left as a 403 carrying the table name, and "relation ... does not
+		// exist" left as a 400 for what is a server defect. The same table is
+		// in internal/mcp/results.go sanitizeToolError, which is how the MCP
+		// path reads the same error; keep the two in step.
+		if pgErr != nil {
+			sqlstate = pgErr.Code
 		}
-	} else if strings.Contains(msg, "permission") || strings.Contains(msg, "access denied") || strings.Contains(msg, "designated approver") {
+		status, code, msg = pgErrorVerdict(sqlstate)
+	case strings.Contains(msg, "not found"):
+		status = 404
+		code = "not_found"
+	case strings.Contains(msg, "permission") || strings.Contains(msg, "access denied") || strings.Contains(msg, "designated approver"):
 		status = 403
 		code = "forbidden"
-	} else if strings.Contains(msg, "another user") || strings.Contains(msg, "already") || strings.Contains(msg, "pending") {
+	case strings.Contains(msg, "another user") || strings.Contains(msg, "already") || strings.Contains(msg, "pending"):
 		status = 409
 		code = "conflict"
 	}
 	if status >= 500 {
-		s.Log.Error("service error", "error", err, "requestId", httpx.RequestID(r.Context()))
+		s.Log.Error("service error", "error", err, "sqlstate", sqlstate, "requestId", httpx.RequestID(r.Context()))
 		msg = "서버 오류가 발생했습니다."
 	}
 	httpx.ErrorJSON(w, r, status, code, msg, nil)
+}
+
+// pgErrorVerdict maps a SQLSTATE to the status, code and sentence a REST client
+// receives. The sentences are the ones internal/mcp/results.go sanitizeToolError
+// gives an MCP client for the same code, so one database error does not become
+// two different answers depending on which door the caller came through. The
+// two functions stay separate on purpose: MCP returns a string, REST returns a
+// verdict, and internal/server already imports internal/mcp. An unrecognised
+// code — including a missing one — is a server defect, not the caller's fault;
+// serviceError logs the original and answers with the generic sentence.
+func pgErrorVerdict(sqlstate string) (int, string, string) {
+	switch sqlstate {
+	case "22P02":
+		return http.StatusBadRequest, "invalid_request", "입력 값의 형식이 올바르지 않습니다. ID는 목록·검색 도구가 돌려준 UUID를 그대로 사용하세요."
+	case "22007", "22008":
+		return http.StatusBadRequest, "invalid_request", "날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식을 사용하세요."
+	case "22003":
+		return http.StatusBadRequest, "invalid_request", "숫자가 허용 범위를 벗어났습니다."
+	case "23502", "23514":
+		return http.StatusBadRequest, "invalid_request", "필수 값이 비었거나 허용되지 않는 값입니다."
+	case "23505":
+		return http.StatusConflict, "conflict", "같은 값이 이미 등록되어 있습니다. 기존 데이터를 조회해 수정하세요."
+	case "23503":
+		return http.StatusConflict, "conflict", "연결 대상이 없거나 다른 데이터가 참조하고 있어 처리할 수 없습니다."
+	case "40001", "40P01":
+		return http.StatusConflict, "conflict", "동시에 처리된 다른 요청과 충돌했습니다. 잠시 후 다시 시도하세요."
+	}
+	return http.StatusInternalServerError, "internal_error", ""
 }
