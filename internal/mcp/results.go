@@ -55,6 +55,12 @@ func structuredObject(v any) (map[string]any, []byte, error) {
 // invalid input syntax for type uuid (SQLSTATE 22P02)" — which exposes schema
 // detail and gives the model nothing it can act on. The original is logged
 // with the request id so an operator can still find it.
+//
+// The same SQLSTATE table is in internal/server/server.go pgErrorVerdict, which
+// is how the REST path reads the same error. The sentences below are shared
+// with it word for word; change one and change the other. The two stay separate
+// because the return contracts differ — a string here, status+code+message
+// there — and internal/server imports this package, not the other way round.
 func sanitizeToolError(err error, requestID string) string {
 	message := err.Error()
 	var arg *argumentError
