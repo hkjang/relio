@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -11,10 +12,24 @@ import (
 
 	"github.com/hkjang/relio/migrations"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const migrationLockID int64 = 733_541_122_020_268
+
+// Unreachable reports whether an error is the driver failing to reach
+// PostgreSQL — a name that did not resolve, a refused connection, a dial that
+// timed out — rather than PostgreSQL rejecting something. Such an error carries
+// no SQLSTATE, so the SQLSTATE tables in internal/server and internal/mcp
+// cannot classify it, and its Error() carries fragments of the DSN: the
+// database role, the database name and the internal host:port. It must never
+// reach a client verbatim; the callers answer with a generic server error and
+// keep the original in the log.
+func Unreachable(err error) bool {
+	var connErr *pgconn.ConnectError
+	return errors.As(err, &connErr)
+}
 
 func Open(ctx context.Context, dsn string, logger *slog.Logger) (*pgxpool.Pool, error) {
 	var lastErr error
