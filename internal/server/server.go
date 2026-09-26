@@ -29,6 +29,7 @@ import (
 	"github.com/hkjang/relio/internal/mcp"
 	"github.com/hkjang/relio/internal/oidc"
 	"github.com/hkjang/relio/internal/personal"
+	"github.com/hkjang/relio/internal/platform/database"
 	"github.com/hkjang/relio/internal/platform/httpx"
 	"github.com/hkjang/relio/internal/platform/ids"
 	"github.com/hkjang/relio/internal/platform/timezone"
@@ -739,6 +740,18 @@ func (s *Server) serviceError(w http.ResponseWriter, r *http.Request, err error)
 			sqlstate = pgErr.Code
 		}
 		status, code, msg = pgErrorVerdict(sqlstate)
+	case database.Unreachable(err):
+		// PostgreSQL was never reached, so there is no SQLSTATE for the table
+		// above to read and the default 400 used to hand the client the driver's
+		// own sentence — which carries the database role, the database name and
+		// the internal host:port. A database that went away is a server fault,
+		// and the 5xx also keeps the idempotency cache from storing the answer.
+		// This sits after isPg on purpose: a refused authentication wraps a
+		// PgError (28P01) in a ConnectError, and that one should still log its
+		// sqlstate. Both end as a 500. msg is left alone — the status >= 500
+		// block below logs the original and replaces the sentence.
+		status = http.StatusInternalServerError
+		code = "internal_error"
 	case strings.Contains(msg, "not found"):
 		status = 404
 		code = "not_found"

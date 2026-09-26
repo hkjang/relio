@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/hkjang/relio/internal/platform/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -71,7 +72,11 @@ func sanitizeToolError(err error, requestID string) string {
 		return "요청한 데이터를 찾을 수 없거나 접근 권한이 없습니다."
 	}
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) || strings.Contains(message, "SQLSTATE") {
+	// database.Unreachable is the failure that carries no SQLSTATE: the driver
+	// never reached PostgreSQL, so without it this fell through to the last line
+	// and handed the model a sentence carrying fragments of the DSN. code stays
+	// empty, so the switch below passes it through to the generic sentence.
+	if errors.As(err, &pgErr) || strings.Contains(message, "SQLSTATE") || database.Unreachable(err) {
 		code := ""
 		if pgErr != nil {
 			code = pgErr.Code
