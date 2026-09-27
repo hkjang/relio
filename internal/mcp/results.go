@@ -62,6 +62,8 @@ func structuredObject(v any) (map[string]any, []byte, error) {
 // with it word for word; change one and change the other. The two stay separate
 // because the return contracts differ — a string here, status+code+message
 // there — and internal/server imports this package, not the other way round.
+// internal/server/sqlstate_parity_test.go compares the two tables and fails
+// when they drift.
 func sanitizeToolError(err error, requestID string) string {
 	message := err.Error()
 	var arg *argumentError
