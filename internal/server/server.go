@@ -777,6 +777,7 @@ func (s *Server) serviceError(w http.ResponseWriter, r *http.Request, err error)
 // verdict, and internal/server already imports internal/mcp. An unrecognised
 // code — including a missing one — is a server defect, not the caller's fault;
 // serviceError logs the original and answers with the generic sentence.
+// sqlstate_parity_test.go compares the two tables and fails when they drift.
 func pgErrorVerdict(sqlstate string) (int, string, string) {
 	switch sqlstate {
 	case "22P02":
