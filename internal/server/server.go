@@ -752,6 +752,18 @@ func (s *Server) serviceError(w http.ResponseWriter, r *http.Request, err error)
 		// block below logs the original and replaces the sentence.
 		status = http.StatusInternalServerError
 		code = "internal_error"
+	case database.Interrupted(err):
+		// The query was cut short instead of answered — today almost always a
+		// caller that went away, which makes net/http cancel r.Context(). There
+		// is no SQLSTATE and no ConnectError, so this fell through to the default
+		// 400 and told the client, the logs and the metrics that the input was
+		// wrong while handing back the driver's "context canceled". This sits
+		// after database.Unreachable on purpose: a dial that timed out wraps
+		// context.DeadlineExceeded inside a *pgconn.ConnectError, and that one
+		// must keep the verdict above so its sqlstate still reaches the log.
+		// msg is left alone — the status >= 500 block below replaces it.
+		status = http.StatusInternalServerError
+		code = "internal_error"
 	case strings.Contains(msg, "not found"):
 		status = 404
 		code = "not_found"

@@ -74,11 +74,14 @@ func sanitizeToolError(err error, requestID string) string {
 		return "요청한 데이터를 찾을 수 없거나 접근 권한이 없습니다."
 	}
 	var pgErr *pgconn.PgError
-	// database.Unreachable is the failure that carries no SQLSTATE: the driver
-	// never reached PostgreSQL, so without it this fell through to the last line
-	// and handed the model a sentence carrying fragments of the DSN. code stays
-	// empty, so the switch below passes it through to the generic sentence.
-	if errors.As(err, &pgErr) || strings.Contains(message, "SQLSTATE") || database.Unreachable(err) {
+	// database.Unreachable and database.Interrupted are the two failures that
+	// carry no SQLSTATE: the driver never reached PostgreSQL, or the query was
+	// cut short by a cancelled or expired context. Without them this fell through
+	// to the last line and handed the model the driver's own sentence — fragments
+	// of the DSN in the first case, "context canceled" in the second. code stays
+	// empty either way, so the switch below passes it through to the generic
+	// sentence, which is what the REST door answers with for the same error.
+	if errors.As(err, &pgErr) || strings.Contains(message, "SQLSTATE") || database.Unreachable(err) || database.Interrupted(err) {
 		code := ""
 		if pgErr != nil {
 			code = pgErr.Code

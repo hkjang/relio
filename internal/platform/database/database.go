@@ -31,6 +31,22 @@ func Unreachable(err error) bool {
 	return errors.As(err, &connErr)
 }
 
+// Interrupted reports whether a query was cut short rather than answered — the
+// caller went away and net/http cancelled the request context, or a deadline
+// passed. pgx returns ctx.Err() from the connection-acquisition step, so such an
+// error carries no SQLSTATE and is no *pgconn.ConnectError either; it used to
+// fall past every classification and be answered as a malformed request.
+// Interrupting a query is a server-side event, so the callers answer with a
+// generic server error and keep the original in the log.
+//
+// Why a context predicate lives in the database package: the same reason as
+// Unreachable above — internal/server and internal/mcp both read this one
+// definition, so a database error gets the same verdict whichever door the
+// caller came through.
+func Interrupted(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 func Open(ctx context.Context, dsn string, logger *slog.Logger) (*pgxpool.Pool, error) {
 	var lastErr error
 	for attempt := 1; attempt <= 20; attempt++ {
