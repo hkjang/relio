@@ -159,6 +159,8 @@ Sales Intelligence MCP는 `find_deals_at_risk`, `explain_deal_risk`, `recommend_
 
 필요 도구는 Go 1.24+, Node.js 24+, Docker입니다.
 
+`make test`는 백엔드 테스트와 정적 분석, 프런트엔드 타입 검사와 회귀 테스트를 수행합니다.
+
 ```bash
 make test
 make build
