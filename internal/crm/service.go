@@ -156,7 +156,10 @@ func ScopeSQL(alias string) string { return scopeSQL(alias) }
 // what they typed. Interpolating the raw text left % and _ as wildcards, so a
 // search for "50%" listed every customer containing "50" and a search for "%"
 // listed everything. Callers pair it with LIKE ... ESCAPE '\' and keep the
-// empty-string guard, because a blank query still means "no filter".
+// empty-string guard, because a blank query still means "no filter". The
+// pattern is lowercased, so the other side of the comparison has to be folded
+// too; TestEveryFreeTextSearchComparesAgainstFoldedText holds every caller to
+// that.
 func searchPattern(q string) string {
 	q = strings.TrimSpace(q)
 	if q == "" {
