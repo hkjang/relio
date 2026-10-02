@@ -1,0 +1,10 @@
+{
+  "name": "relio",
+  "private": true,
+  "description": "web/ 의 프런트엔드 명령을 저장소 루트에서도 그대로 쓰게 하는 위임 스크립트. 제품 빌드는 Makefile 이 정본이다.",
+  "scripts": {
+    "web:deps": "test -d web/node_modules || npm --prefix web ci --no-audit --no-fund",
+    "typecheck": "npm run web:deps && npm --prefix web run typecheck",
+    "build": "npm run web:deps && npm --prefix web run build"
+  }
+}
