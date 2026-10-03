@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -31,10 +32,11 @@ type routedOperation struct {
 	authenticated         bool
 }
 
-// packageFiles parses the non-test sources of a package directory, because
+// parsePackage parses the non-test sources of a package directory, because
 // http.ServeMux does not report what was registered on it and a Go value cannot
-// be asked which query keys it reads.
-func packageFiles(t *testing.T, dir string) []*ast.File {
+// be asked which query keys it reads. The file set comes back with the files so
+// a failure can name the line it read.
+func parsePackage(t *testing.T, dir string) (*token.FileSet, []*ast.File) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -53,8 +55,20 @@ func packageFiles(t *testing.T, dir string) []*ast.File {
 		}
 		out = append(out, file)
 	}
-	return out
+	return fset, out
 }
+
+func packageFiles(t *testing.T, dir string) []*ast.File {
+	t.Helper()
+	_, files := parsePackage(t, dir)
+	return files
+}
+
+// knownIntQueries is how many httpx.IntQuery/ClampQuery call sites the handlers
+// held when the bound scanner was written. The scanner silently reads nothing if
+// the call shape it looks for changes, and a scanner that reads nothing agrees
+// with every document, so the count is checked rather than assumed.
+const knownIntQueries = 38
 
 func stringLit(expr ast.Expr) (string, bool) {
 	lit, ok := expr.(*ast.BasicLit)
@@ -465,6 +479,182 @@ func TestDocumentedSortValuesMatchTheQueryBuilder(t *testing.T) {
 		}
 		if len(documented) != len(accepted) {
 			t.Errorf("%s: crm.%s accepts %d sort values, the document lists %d", operation, function, len(accepted), len(documented))
+		}
+	}
+}
+
+// intQuerySite is one httpx.IntQuery or httpx.ClampQuery call: the range the
+// handler really enforces and the value it answers with outside that range.
+type intQuerySite struct {
+	fallback, min, max int
+	position           string
+}
+
+// intLit reads a Go integer literal. The two shapes that matter here are easy to
+// get wrong: versionFilter's fallback is `-1`, which parses as a unary minus and
+// not as a literal at all, and `1_000_000` carries underscores that strconv.Atoi
+// rejects but ParseInt in base 0 accepts.
+func intLit(expr ast.Expr) (int, bool) {
+	if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.SUB {
+		n, ok := intLit(unary.X)
+		return -n, ok
+	}
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.INT {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(lit.Value, 0, 64)
+	return int(n), err == nil
+}
+
+// intQuerySitesByHandler maps each *Server method to the bounded integer query
+// keys its body reads, carrying the literals of each call. It also reports how
+// many call sites it read, for the count guard.
+func intQuerySitesByHandler(t *testing.T) (map[string]map[string]intQuerySite, int) {
+	t.Helper()
+	out := map[string]map[string]intQuerySite{}
+	seen := 0
+	fset, files := parsePackage(t, ".")
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) != 5 {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || (sel.Sel.Name != "IntQuery" && sel.Sel.Name != "ClampQuery") {
+					return true
+				}
+				if receiver, ok := sel.X.(*ast.Ident); !ok || receiver.Name != "httpx" {
+					return true
+				}
+				position := fset.Position(sel.Sel.Pos())
+				where := fmt.Sprintf("%s:%d", position.Filename, position.Line)
+				key, ok := stringLit(call.Args[1])
+				if !ok {
+					t.Errorf("%s: %s is called with a key that is not a string literal, so the bound scanner cannot read it", where, sel.Sel.Name)
+					return true
+				}
+				site := intQuerySite{position: where}
+				for i, target := range []*int{&site.fallback, &site.min, &site.max} {
+					n, ok := intLit(call.Args[2+i])
+					if !ok {
+						t.Errorf("%s: %s(%q) argument %d is not an integer literal, so the bound scanner cannot read it", where, sel.Sel.Name, key, 3+i)
+						return true
+					}
+					*target = n
+				}
+				seen++
+				if out[fn.Name.Name] == nil {
+					out[fn.Name.Name] = map[string]intQuerySite{}
+				}
+				if earlier, ok := out[fn.Name.Name][key]; ok && earlier != site {
+					t.Errorf("handler %s reads %q twice with different bounds: %s says %d..%d, %s says %d..%d",
+						fn.Name.Name, key, earlier.position, earlier.min, earlier.max, site.position, site.min, site.max)
+				}
+				out[fn.Name.Name][key] = site
+				return true
+			})
+		}
+	}
+	return out, seen
+}
+
+// documentedBound is the published range of one `type: integer` query parameter.
+type documentedBound struct {
+	min, max   int
+	deflt      int
+	hasDefault bool
+}
+
+func documentedIntegerBounds(t *testing.T, operation string) map[string]documentedBound {
+	t.Helper()
+	method, path, _ := strings.Cut(operation, " ")
+	operations, ok := documentPaths(t)[path]
+	if !ok {
+		t.Fatalf("%s is not in the OpenAPI document", operation)
+	}
+	out := map[string]documentedBound{}
+	for _, parameter := range parameterList(t, operations, strings.ToLower(method)) {
+		if parameter["$ref"] != nil {
+			continue
+		}
+		schema, ok := parameter["schema"].(map[string]any)
+		if !ok || schema["type"] != "integer" {
+			continue
+		}
+		name, _ := parameter["name"].(string)
+		bound := documentedBound{}
+		low, ok := schema["minimum"].(int)
+		if !ok {
+			t.Errorf("%s: integer parameter %q publishes no minimum, so a client cannot tell what the server accepts", operation, name)
+			continue
+		}
+		high, ok := schema["maximum"].(int)
+		if !ok {
+			t.Errorf("%s: integer parameter %q publishes no maximum, so a client cannot tell what the server accepts", operation, name)
+			continue
+		}
+		bound.min, bound.max = low, high
+		if raw, present := schema["default"]; present {
+			deflt, ok := raw.(int)
+			if !ok {
+				t.Errorf("%s: integer parameter %q publishes a non-integer default %#v", operation, name, raw)
+				continue
+			}
+			bound.deflt, bound.hasDefault = deflt, true
+		}
+		out[name] = bound
+	}
+	return out
+}
+
+// The range of an integer query key is written down twice — once in
+// internal/api/parameters.go for the document and once in the httpx.IntQuery
+// call that enforces it — and until this test nothing tied the two together.
+// Editing one side left the build and every other test green while the published
+// schema lied: a generated client rejects a value the server accepts, or the
+// server quietly swaps an accepted-looking value for its fallback and answers
+// with a different number than the caller asked for, which is exactly the
+// accident httpx.IntQuery's own doc comment records.
+func TestDocumentedIntegerBoundsMatchTheHandler(t *testing.T) {
+	handlers, seen := intQuerySitesByHandler(t)
+	if seen < knownIntQueries {
+		t.Fatalf("read only %d httpx.IntQuery/ClampQuery call sites, want at least %d; the bound scanner is broken", seen, knownIntQueries)
+	}
+	for _, route := range routedOperationList(t) {
+		operation := route.method + " " + route.path
+		read := handlers[route.handler]
+		for name, documented := range documentedIntegerBounds(t, operation) {
+			site, ok := read[name]
+			if !ok {
+				t.Errorf("%s: OpenAPI documents integer parameter %q, which handler %s never reads with httpx.IntQuery or httpx.ClampQuery", operation, name, route.handler)
+				continue
+			}
+			if documented.min != site.min || documented.max != site.max {
+				t.Errorf("%s: %s — document %d..%d, handler %d..%d (%s)",
+					operation, name, documented.min, documented.max, site.min, site.max, site.position)
+			}
+			// number() publishes the fallback as the schema default only when it
+			// is a value the range admits; a fallback outside the range means
+			// "no filter" and is not something a client may send.
+			inRange := site.fallback >= site.min && site.fallback <= site.max
+			switch {
+			case inRange && !documented.hasDefault:
+				t.Errorf("%s: %s — handler falls back to %d, inside %d..%d, but the document publishes no default (%s)",
+					operation, name, site.fallback, site.min, site.max, site.position)
+			case inRange && documented.deflt != site.fallback:
+				t.Errorf("%s: %s — document default %d, handler fallback %d (%s)",
+					operation, name, documented.deflt, site.fallback, site.position)
+			case !inRange && documented.hasDefault:
+				t.Errorf("%s: %s — handler falls back to %d, outside %d..%d, so the document must publish no default, not %d (%s)",
+					operation, name, site.fallback, site.min, site.max, documented.deflt, site.position)
+			}
 		}
 	}
 }
