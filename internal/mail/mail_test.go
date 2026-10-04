@@ -509,7 +509,9 @@ func TestConfigJSONOmitsCredentials(t *testing.T) {
 	}
 }
 
-func TestEverySwitchedEventHasASeededSetting(t *testing.T) {
+// The seeded row and the admin screen are checked in event_contract_test.go;
+// this one only reads EventSettingKeys, which is what its name now says.
+func TestEverySwitchedEventFollowsTheKeyConvention(t *testing.T) {
 	keys := EventSettingKeys()
 	for _, event := range []string{EventApprovalRequested, EventApprovalDecided, EventVoiceAssigned, EventContractRenewal} {
 		if _, ok := keys[event]; !ok {
