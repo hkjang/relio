@@ -23,7 +23,7 @@ import (
 // omits is a valid filter a generated client cannot ask for.
 //
 // This test compares the two as sets, so ordering is free. It is a net, not a
-// bug fix — the six comparable keys all agree today.
+// bug fix — every comparable pair agrees today.
 
 // knownEnumQueries is how many enum query parameters the document published, and
 // knownCheckConstraints how many CHECK (col IN (...)) constraints migrations/
@@ -31,21 +31,49 @@ import (
 // shape they look for changes — the document grows a $ref indirection, or a
 // constraint is spelled differently — and a walk that reads nothing agrees with
 // everything, so the counts are checked rather than assumed.
+// knownMappedEnums is how many (operation, parameter) pairs were compared
+// through enumParameterTables when the mapping was added. The mapping bypasses
+// the column-name fold, so a pair that stops being found there stops being
+// compared at all rather than failing, and this count is what notices.
 const (
 	knownEnumQueries      = 26
 	knownCheckConstraints = 42
+	knownMappedEnums      = 13
 )
+
+// enumParameterTables says which table an operation filters, for the enum
+// parameters whose column name appears on several unrelated tables. `status` is
+// constrained on eleven tables and `severity` on three, so the column name
+// alone cannot resolve them — but which table a given operation reads is a
+// fact about that endpoint, and writing it down once here closes the largest
+// hole in the comparison: fourteen of the forty-two CHECK constraints.
+//
+// This is a third hand-written list, so three guards keep it honest: a pair
+// listed here that the document no longer publishes fails, a table name that no
+// CHECK constrains fails, and knownMappedEnums notices if the mapping quietly
+// stops resolving. A mapped pair skips the column-name fold in
+// effectiveCheckValues and looks the constraint up by (table, column) instead;
+// the fold still serves the six parameters whose column name is unambiguous.
+var enumParameterTables = map[string]map[string]string{
+	"GET /voices":                {"status": "customer_voices", "severity": "customer_voices"},
+	"GET /voices/export":         {"status": "customer_voices", "severity": "customer_voices"},
+	"GET /opportunities":         {"status": "opportunities"},
+	"GET /signals":               {"status": "signals", "severity": "signals"},
+	"GET /risks":                 {"status": "risks", "severity": "risks"},
+	"GET /insights":              {"status": "insights"},
+	"GET /recommendations":       {"status": "recommendations"},
+	"GET /approvals":             {"status": "approval_requests"},
+	"GET /admin/mail/deliveries": {"status": "mail_deliveries"},
+}
 
 // enumParametersNotBackedByACheck are the enum query parameters deliberately
 // left out of the comparison, with the reason. An enum parameter that is neither
-// listed here nor resolvable to exactly one CHECK constraint fails the test, so
-// a new filter cannot slip through unexamined.
+// listed here, nor mapped to a table in enumParameterTables, nor resolvable to
+// exactly one CHECK constraint fails the test, so a new filter cannot slip
+// through unexamined.
 var enumParametersNotBackedByACheck = map[string]string{
-	"sort":   "a sort key, not a column value; TestDocumentedSortValuesMatchTheQueryBuilder covers it",
-	"prompt": "an OIDC request parameter sent on to Keycloak, not a column",
-	"status": "eleven tables constrain a `status` column and no two agree, so the column name alone does not say which table an operation filters",
-	"severity": "customer_voices allows LOW/NORMAL/HIGH/CRITICAL while signals and risks allow LOW/MEDIUM/HIGH/CRITICAL; " +
-		"both are published correctly today but the column name alone does not say which",
+	"sort":             "a sort key, not a column value; TestDocumentedSortValuesMatchTheQueryBuilder covers it",
+	"prompt":           "an OIDC request parameter sent on to Keycloak, not a column",
 	"forecastCategory": "no CHECK constrains forecast_category; the database does not restrict it",
 }
 
@@ -71,7 +99,7 @@ var (
 )
 
 // snakeCase converts a camelCase query parameter name to the column name it
-// would have, which is how all six comparable keys line up.
+// would have, which is how every comparable key lines up.
 func snakeCase(name string) string {
 	var b strings.Builder
 	for _, r := range name {
@@ -279,6 +307,7 @@ func TestDocumentedEnumValuesMatchTheMigrations(t *testing.T) {
 	sort.Strings(operations)
 
 	compared := map[string]bool{}
+	mapped := 0
 	for _, operation := range operations {
 		names := make([]string, 0, len(documented[operation]))
 		for name := range documented[operation] {
@@ -287,6 +316,24 @@ func TestDocumentedEnumValuesMatchTheMigrations(t *testing.T) {
 		sort.Strings(names)
 		for _, name := range names {
 			published := documented[operation][name]
+			// A mapped pair names its table outright, so it is looked up by
+			// (table, column) and never reaches the column-name fold.
+			if table, isMapped := enumParameterTables[operation][name]; isMapped {
+				col := column{table: table, name: snakeCase(name)}
+				constraint, found := constraints[col]
+				if !found {
+					t.Errorf("%s: %s — the mapping points at %s.%s but no CHECK constrains it; correct the table in enumParameterTables",
+						operation, name, col.table, col.name)
+					continue
+				}
+				mapped++
+				compared[name] = true
+				if document, migration := sortedSet(published), sortedSet(constraint.values); document != migration {
+					t.Errorf("%s: %s — document %s, migrations %s (%s:%d)",
+						operation, name, document, migration, constraint.file, constraint.line)
+				}
+				continue
+			}
 			if _, excluded := enumParametersNotBackedByACheck[name]; excluded {
 				continue
 			}
@@ -310,10 +357,36 @@ func TestDocumentedEnumValuesMatchTheMigrations(t *testing.T) {
 		}
 	}
 
+	// A mapping entry for a parameter the operation no longer publishes compares
+	// nothing while looking like coverage, so it is reported rather than left to
+	// rot. Renaming an operation or dropping a filter lands here.
+	mappedOperations := make([]string, 0, len(enumParameterTables))
+	for operation := range enumParameterTables {
+		mappedOperations = append(mappedOperations, operation)
+	}
+	sort.Strings(mappedOperations)
+	for _, operation := range mappedOperations {
+		names := make([]string, 0, len(enumParameterTables[operation]))
+		for name := range enumParameterTables[operation] {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if _, published := documented[operation][name]; !published {
+				t.Errorf("%s: %s — enumParameterTables maps this to %s, but the operation no longer publishes this enum parameter; drop the mapping entry",
+					operation, name, enumParameterTables[operation][name])
+			}
+		}
+	}
+
+	if mapped < knownMappedEnums {
+		t.Errorf("compared only %d (operation, parameter) pairs through enumParameterTables, want at least %d; the mapping is no longer reaching the constraints", mapped, knownMappedEnums)
+	}
+
 	// An exclusion that stopped being true is worse than no exclusion: it hides
-	// a column the comparison could now check. Only `status` and `severity` are
-	// ambiguous today, and no table constrains a `sort`, `prompt` or
-	// `forecast_category` column at all.
+	// a column the comparison could now check. No table constrains a `sort`,
+	// `prompt` or `forecast_category` column at all today, so this is what
+	// notices if one grows a CHECK later.
 	for name, reason := range enumParametersNotBackedByACheck {
 		col := snakeCase(name)
 		if _, isAmbiguous := ambiguous[col]; isAmbiguous {
