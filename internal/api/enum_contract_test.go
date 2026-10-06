@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hkjang/relio/internal/voice"
 	"github.com/hkjang/relio/migrations"
 )
 
@@ -400,5 +401,38 @@ func TestDocumentedEnumValuesMatchTheMigrations(t *testing.T) {
 
 	if len(compared) == 0 {
 		t.Fatalf("no enum parameter was compared against a CHECK constraint; the two walks are no longer meeting")
+	}
+}
+
+// The event types a caller may record on a VOC request live in
+// voice.CommentEventTypes, which the MCP tool schema publishes and
+// Service.Comment enforces — one list, so those two cannot drift. The third
+// hand-written copy is the CHECK on customer_voice_events.event_type, and that
+// one is an intended *superset*: CREATED, STATUS_CHANGE, ASSIGNED, RESOLVED,
+// REOPENED, SATISFACTION and KNOWLEDGE_REVIEW are written by the service on
+// state transitions and knowledge review, and a caller cannot send them. So
+// this checks a subset, not equality — a published value the database would
+// reject with SQLSTATE 23514 is the failure worth catching.
+func TestCommentEventTypesAreAllowedByTheCheckConstraint(t *testing.T) {
+	constraints, _ := migrationCheckConstraints(t)
+	col := column{table: "customer_voice_events", name: "event_type"}
+	constraint, found := constraints[col]
+	if !found {
+		t.Fatalf("no CHECK (%s IN (...)) was parsed out of migrations/; the migration walk no longer reaches it", col.name)
+	}
+	allowed := map[string]bool{}
+	for _, value := range constraint.values {
+		allowed[value] = true
+	}
+	missing := []string{}
+	for _, eventType := range voice.CommentEventTypes {
+		if !allowed[eventType] {
+			missing = append(missing, eventType)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Errorf("voice.CommentEventTypes publishes %s, which no value of %s.%s allows (%s:%d, which allows %s); recording one of them would fail the CHECK",
+			sortedSet(missing), col.table, col.name, constraint.file, constraint.line, sortedSet(constraint.values))
 	}
 }

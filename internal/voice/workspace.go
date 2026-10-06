@@ -58,11 +58,19 @@ type Field struct {
 
 // Cause evidence levels and knowledge states. The labels are the words the
 // requirement uses, so screens, exports and agents say the same thing.
+//
+// CommentEventTypes are the event types a caller may record on a request
+// without changing its state. The MCP tool schema publishes this list and
+// Service.Comment enforces it, so both read the same values at compile time;
+// the rest of customer_voice_events.event_type is written by the service
+// itself on state transitions and knowledge review, not by callers.
 var (
 	CauseEvidenceLevels = []string{"CONFIRMED", "PRESUMED", "UNIDENTIFIED"}
 	KnowledgeStatuses   = []string{"UNREVIEWED", "IN_REVIEW", "APPROVED", "EXCLUDED"}
+	CommentEventTypes   = []string{"CUSTOMER_CONTACT", "COMMENT", "ESCALATED"}
 	causeEvidence       = setOf(CauseEvidenceLevels)
 	knowledgeStatuses   = setOf(KnowledgeStatuses)
+	commentEventTypes   = setOf(CommentEventTypes)
 )
 
 func setOf(values []string) map[string]bool {

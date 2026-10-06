@@ -818,7 +818,7 @@ func (s *Service) Comment(ctx context.Context, p *auth.Principal, id, eventType,
 		return nil, errors.New("note is required")
 	}
 	eventType = strings.ToUpper(eventType)
-	if eventType != "COMMENT" && eventType != "CUSTOMER_CONTACT" && eventType != "ESCALATED" {
+	if !commentEventTypes[eventType] {
 		return nil, errors.New("invalid eventType")
 	}
 	if _, _, err := s.Get(ctx, p, id); err != nil {

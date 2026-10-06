@@ -1,9 +1,13 @@
 package voice
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hkjang/relio/internal/auth"
+	"github.com/hkjang/relio/internal/crm"
 )
 
 func TestTransitionsRequireAPathThroughHandling(t *testing.T) {
@@ -248,5 +252,36 @@ func TestCSVLabelsCoverEveryCodeTheExportEmits(t *testing.T) {
 		if csvLabel(channel) == channel {
 			t.Fatalf("channel %q has no Korean label for the export", channel)
 		}
+	}
+}
+
+func TestCommentRejectsAnEventTypeOutsideTheSharedList(t *testing.T) {
+	// The real Service.Comment, not a stand-in, so the production wiring is what
+	// rejects the value. IsBootstrap is the field a real bootstrap administrator
+	// carries, and auth.Has reads it before the unexported permission map, so the
+	// call gets past auth.Require and reaches the eventType check. Comment
+	// validates eventType before it touches the database, so a nil pool is safe
+	// here — which is also why only the rejection path can be proven without one.
+	p := &auth.Principal{IsBootstrap: true}
+	if _, err := (&Service{}).Comment(context.Background(), p, "v-1", "BOGUS", "note", crm.RequestMeta{}); err == nil {
+		t.Fatal("an eventType outside CommentEventTypes must be rejected")
+	} else if err.Error() != "invalid eventType" {
+		t.Fatalf("want %q, got %q", "invalid eventType", err)
+	}
+
+	// Every published value must get *past* that same check in the same real
+	// function, or the MCP schema advertises values the enforcement rejects.
+	// Comment reaches s.Get next, which panics on the nil pool — and because the
+	// panic can only come from after the eventType check, surviving that far is
+	// itself the proof the value was accepted. Asserting membership in
+	// commentEventTypes instead would pass even if Comment consulted a different
+	// set, which is the mis-wiring this is here to catch.
+	for _, eventType := range CommentEventTypes {
+		func() {
+			defer func() { recover() }()
+			if _, err := (&Service{}).Comment(context.Background(), p, "v-1", eventType, "note", crm.RequestMeta{}); err != nil && err.Error() == "invalid eventType" {
+				t.Errorf("%s is published in CommentEventTypes but Comment rejects it", eventType)
+			}
+		}()
 	}
 }
