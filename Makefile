@@ -13,7 +13,7 @@ web:
 test:
 	go test ./...
 	go vet ./...
-	cd web && npm ci && npm run typecheck && npm test && npm run build
+	cd web && npm ci && npm audit --audit-level=high && npm run typecheck && npm test && npm run build
 
 build: web
 	go build -trimpath -ldflags="$(LDFLAGS)" -o dist/relio ./cmd/relio
