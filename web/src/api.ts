@@ -13,7 +13,10 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   if (options.method && !['GET','HEAD'].includes(options.method.toUpperCase()) && csrfToken) headers.set('X-CSRF-Token', csrfToken)
   const response = await fetch(path, { ...options, headers, credentials: 'same-origin' })
   if (response.status === 204) return undefined as T
-  const body = await response.json().catch(() => ({}))
+  const body = await response.json().catch(() => {
+    if (response.ok) throw new APIError(response.status, 'invalid_response', '서버 응답을 읽을 수 없습니다. 처리 결과를 확인해 주세요.')
+    return {}
+  })
   if (!response.ok) {
     const err = body?.error
     throw new APIError(response.status, err?.code || 'request_failed', err?.message || `요청 실패 (${response.status})`)
