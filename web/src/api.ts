@@ -29,9 +29,16 @@ export const currencyMoney = (value?: number, currency = 'KRW') => new Intl.Numb
 export const number = (value?: number) => new Intl.NumberFormat('ko-KR').format(value || 0)
 export const date = (value?: string) => value ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(value)) : '—'
 export const dateTime = (value?: string) => value ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(value)) : '—'
+const startOfDay = (value: Date) => { const day = new Date(value); day.setHours(0, 0, 0, 0); return day }
 export const relative = (value?: string) => {
   if (!value) return '기록 없음'
-  const days = Math.floor((Date.now() - new Date(value).getTime()) / 86400000)
+  const at = new Date(value)
+  if (Number.isNaN(at.getTime())) return '기록 없음'
+  // Elapsed time would call yesterday 23:59 '오늘'; count calendar days instead.
+  // Rounded, not floored: the browser's time zone is the viewer's, not the
+  // server's, and a spring-forward midnight-to-midnight is 23 hours, which
+  // floor would read as 0 days and label yesterday '오늘' all over again.
+  const days = Math.round((startOfDay(new Date()).getTime() - startOfDay(at).getTime()) / 86400000)
   if (days <= 0) return '오늘'
   if (days === 1) return '어제'
   if (days < 30) return `${days}일 전`
