@@ -71,3 +71,27 @@ test('relative reports 기록 없음 for a missing value', () => {
 test('relative reports 기록 없음 for an unparseable value instead of throwing', () => {
   assert.equal(relative('not-a-date'), '기록 없음')
 })
+
+// A truthy but unparseable timestamp used to reach Intl.DateTimeFormat.format as
+// an Invalid Date, which throws RangeError: Invalid time value. There is no
+// ErrorBoundary under web/src, so that throw during render takes the whole
+// screen down rather than one cell.
+test('date reports the em dash for an unparseable value instead of throwing', () => {
+  assert.equal(date('not-a-date'), '—')
+  assert.equal(date('2026-13-45'), '—')
+  assert.equal(date('not-a-date'), date(undefined))
+})
+
+test('dateTime reports the em dash for an unparseable value instead of throwing', () => {
+  assert.equal(dateTime('2026-13-45'), '—')
+  assert.equal(dateTime('not-a-date'), '—')
+  assert.equal(dateTime('2026-13-45'), dateTime(''))
+})
+
+// The guard must not touch the happy path: the expected values are rebuilt from
+// the same Intl options the pages have been rendering all along.
+test('date and dateTime keep formatting a parseable value exactly as before', () => {
+  const day = { year: 'numeric', month: 'short', day: 'numeric' } as const
+  assert.equal(date(sample), new Intl.DateTimeFormat('ko-KR', day).format(new Date(sample)))
+  assert.equal(dateTime(sample), new Intl.DateTimeFormat('ko-KR', { ...day, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(sample)))
+})

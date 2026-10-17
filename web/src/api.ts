@@ -27,8 +27,12 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 export const money = (value?: number) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW', maximumFractionDigits: 0 }).format(value || 0)
 export const currencyMoney = (value?: number, currency = 'KRW') => new Intl.NumberFormat('ko-KR', { style: 'currency', currency, maximumFractionDigits: currency === 'KRW' ? 0 : 2 }).format(value || 0)
 export const number = (value?: number) => new Intl.NumberFormat('ko-KR').format(value || 0)
-export const date = (value?: string) => value ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(value)) : '—'
-export const dateTime = (value?: string) => value ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(value)) : '—'
+// Intl.DateTimeFormat.format throws RangeError on an Invalid Date, and nothing
+// under src/ catches it, so an unparseable timestamp would blank the screen
+// instead of one cell. Fold it into the same em dash a missing value gets.
+const parsed = (value?: string) => { if (!value) return null; const at = new Date(value); return Number.isNaN(at.getTime()) ? null : at }
+export const date = (value?: string) => { const at = parsed(value); return at ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' }).format(at) : '—' }
+export const dateTime = (value?: string) => { const at = parsed(value); return at ? new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(at) : '—' }
 const startOfDay = (value: Date) => { const day = new Date(value); day.setHours(0, 0, 0, 0); return day }
 export const relative = (value?: string) => {
   if (!value) return '기록 없음'
