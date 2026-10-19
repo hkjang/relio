@@ -249,6 +249,10 @@ var queryParameters = map[string][]query{
 		limit(30, 200),
 	},
 	"GET /voices/categories": {flag("includeInactive", "사용 중지된 유형도 함께 반환합니다.")},
+	"GET /voices/workspaces/{id}/customers": {
+		text("q", "회원사명 또는 회원사코드 검색어입니다."),
+		limit(20, 100),
+	},
 	"GET /approvals": {
 		choice("status", "승인 요청 상태입니다.", "PENDING", "APPROVED", "REJECTED", "CANCELLED"),
 	},

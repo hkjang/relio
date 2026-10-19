@@ -169,14 +169,16 @@ type bundlePipeline struct {
 }
 
 type bundleCustomField struct {
-	EntityType   string `json:"entityType"`
-	Key          string `json:"key"`
-	Label        string `json:"label"`
-	Type         string `json:"type"`
-	Required     bool   `json:"required"`
-	Options      any    `json:"options,omitempty"`
-	Active       bool   `json:"active"`
-	DisplayOrder int    `json:"displayOrder"`
+	EntityType   string            `json:"entityType"`
+	Key          string            `json:"key"`
+	Label        string            `json:"label"`
+	Type         string            `json:"type"`
+	Required     bool              `json:"required"`
+	Options      any               `json:"options,omitempty"`
+	OptionLabels map[string]string `json:"optionLabels,omitempty"`
+	DefaultValue any               `json:"defaultValue,omitempty"`
+	Active       bool              `json:"active"`
+	DisplayOrder int               `json:"displayOrder"`
 }
 
 type bundleHealthRule struct {
@@ -325,18 +327,25 @@ func (s *Server) configurationBundle(ctx context.Context, p *auth.Principal) (co
 }
 
 func (s *Server) collectBundleTables(ctx context.Context, bundle *configurationBundle) error {
-	rows, err := s.DB.Query(ctx, `SELECT entity_type,field_key,label,field_type,required,options,active,display_order FROM custom_field_definitions ORDER BY entity_type,display_order,field_key`)
+	// Workspace fields are exported with their workspace template, not as
+	// general fields. The configuration bundle does not carry workspaces, so
+	// importing one here would silently remove its data boundary.
+	rows, err := s.DB.Query(ctx, `SELECT entity_type,field_key,label,field_type,required,options,option_labels,default_value,active,display_order FROM custom_field_definitions WHERE workspace_id IS NULL ORDER BY entity_type,display_order,field_key`)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var item bundleCustomField
-		var raw []byte
-		if err = rows.Scan(&item.EntityType, &item.Key, &item.Label, &item.Type, &item.Required, &raw, &item.Active, &item.DisplayOrder); err != nil {
+		var raw, labels, defaultValue []byte
+		if err = rows.Scan(&item.EntityType, &item.Key, &item.Label, &item.Type, &item.Required, &raw, &labels, &defaultValue, &item.Active, &item.DisplayOrder); err != nil {
 			rows.Close()
 			return err
 		}
 		_ = json.Unmarshal(raw, &item.Options)
+		_ = json.Unmarshal(labels, &item.OptionLabels)
+		if len(defaultValue) > 0 {
+			_ = json.Unmarshal(defaultValue, &item.DefaultValue)
+		}
 		bundle.CustomFields = append(bundle.CustomFields, item)
 	}
 	if err = rows.Err(); err != nil {
@@ -521,6 +530,9 @@ func validateConfigurationBundle(bundle configurationBundle) error {
 	for _, item := range bundle.CustomFields {
 		if !validEntities[strings.ToUpper(item.EntityType)] || !bundleNamePattern.MatchString(strings.ToLower(item.Key)) || strings.TrimSpace(item.Label) == "" || !validFieldTypes[item.Type] {
 			return fmt.Errorf("custom field %s.%s is invalid", item.EntityType, item.Key)
+		}
+		if _, _, _, err := customFieldValues(item.Type, item.Options, item.OptionLabels, item.DefaultValue); err != nil {
+			return fmt.Errorf("custom field %s.%s is invalid: %w", item.EntityType, item.Key, err)
 		}
 	}
 	for _, item := range bundle.DealHealthRules {
@@ -745,7 +757,15 @@ func (s *Server) applyConfigurationBundle(ctx context.Context, p *auth.Principal
 		if rawErr != nil {
 			return bundlePreview{}, rawErr
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO custom_field_definitions(id,entity_type,field_key,label,field_type,required,options,active,display_order,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(entity_type,field_key) DO UPDATE SET label=excluded.label,field_type=excluded.field_type,required=excluded.required,options=excluded.options,active=excluded.active,display_order=excluded.display_order,updated_at=now()`, ids.New(), strings.ToUpper(item.EntityType), strings.ToLower(item.Key), item.Label, item.Type, item.Required, raw, item.Active, item.DisplayOrder, p.UserID)
+		labels, labelsErr := jsonDocument(item.OptionLabels)
+		if labelsErr != nil {
+			return bundlePreview{}, labelsErr
+		}
+		defaultValue, defaultErr := jsonDocument(item.DefaultValue)
+		if defaultErr != nil {
+			return bundlePreview{}, defaultErr
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO custom_field_definitions(id,entity_type,field_key,label,field_type,required,options,option_labels,default_value,active,display_order,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(entity_type,field_key) WHERE workspace_id IS NULL DO UPDATE SET label=excluded.label,field_type=excluded.field_type,required=excluded.required,options=excluded.options,option_labels=excluded.option_labels,default_value=excluded.default_value,active=excluded.active,display_order=excluded.display_order,updated_at=now()`, ids.New(), strings.ToUpper(item.EntityType), strings.ToLower(item.Key), item.Label, item.Type, item.Required, raw, labels, defaultValue, item.Active, item.DisplayOrder, p.UserID)
 		if err != nil {
 			return bundlePreview{}, err
 		}

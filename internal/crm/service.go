@@ -206,7 +206,7 @@ func (s *Service) SearchCustomers(ctx context.Context, p *auth.Principal, filter
 	if order == "" {
 		order = "c.updated_at DESC,c.id"
 	}
-	query := `SELECT c.id,c.name,COALESCE(c.registration_no,''),COALESCE(c.customer_code,''),c.customer_type,COALESCE(c.grade,''),COALESCE(c.industry,''),COALESCE(c.website,''),COALESCE(c.phone,''),COALESCE(c.email,''),COALESCE(c.address,''),c.owner_id,u.display_name,COALESCE(c.organization_id::text,''),c.health,COALESCE(c.annual_revenue,0),COALESCE(c.employee_count,0),c.custom_fields,c.version,c.created_at,c.updated_at FROM customers c JOIN users u ON u.id=c.owner_id WHERE c.active=true AND c.merged_into_id IS NULL AND ` + CustomerScopeSQL(p, "c") + ` AND ($4='' OR lower(c.name) LIKE $4 ESCAPE '\' OR lower(COALESCE(c.registration_no,'')) LIKE $4 ESCAPE '\' OR lower(COALESCE(c.customer_code,'')) LIKE $4 ESCAPE '\') AND ($5='' OR c.customer_type=$5) AND ($6='' OR COALESCE(c.grade,'')=$6) ORDER BY ` + order + ` LIMIT $7 OFFSET $8`
+	query := `SELECT c.id,c.name,COALESCE(c.registration_no,''),COALESCE(c.customer_code,''),COALESCE(c.home_workspace_id::text,''),c.customer_type,COALESCE(c.grade,''),COALESCE(c.industry,''),COALESCE(c.website,''),COALESCE(c.phone,''),COALESCE(c.email,''),COALESCE(c.address,''),c.owner_id,u.display_name,COALESCE(c.organization_id::text,''),c.health,COALESCE(c.annual_revenue,0),COALESCE(c.employee_count,0),c.custom_fields,c.version,c.created_at,c.updated_at FROM customers c JOIN users u ON u.id=c.owner_id WHERE c.active=true AND c.merged_into_id IS NULL AND ` + CustomerScopeSQL(p, "c") + ` AND ($4='' OR lower(c.name) LIKE $4 ESCAPE '\' OR lower(COALESCE(c.registration_no,'')) LIKE $4 ESCAPE '\' OR lower(COALESCE(c.customer_code,'')) LIKE $4 ESCAPE '\') AND ($5='' OR c.customer_type=$5) AND ($6='' OR COALESCE(c.grade,'')=$6) ORDER BY ` + order + ` LIMIT $7 OFFSET $8`
 	rows, err := s.DB.Query(ctx, query, p.DataScope, p.UserID, nullable(p.OrganizationID), searchPattern(filter.Q), strings.ToUpper(strings.TrimSpace(filter.CustomerType)), strings.ToUpper(strings.TrimSpace(filter.Grade)), limit+1, offset)
 	if err != nil {
 		return Page[Customer]{}, err
@@ -216,7 +216,7 @@ func (s *Service) SearchCustomers(ctx context.Context, p *auth.Principal, filter
 	for rows.Next() {
 		var x Customer
 		var raw []byte
-		if err = rows.Scan(&x.ID, &x.Name, &x.RegistrationNo, &x.CustomerCode, &x.CustomerType, &x.Grade, &x.Industry, &x.Website, &x.Phone, &x.Email, &x.Address, &x.OwnerID, &x.OwnerName, &x.OrganizationID, &x.Health, &x.AnnualRevenue, &x.EmployeeCount, &raw, &x.Version, &x.CreatedAt, &x.UpdatedAt); err != nil {
+		if err = rows.Scan(&x.ID, &x.Name, &x.RegistrationNo, &x.CustomerCode, &x.HomeWorkspaceID, &x.CustomerType, &x.Grade, &x.Industry, &x.Website, &x.Phone, &x.Email, &x.Address, &x.OwnerID, &x.OwnerName, &x.OrganizationID, &x.Health, &x.AnnualRevenue, &x.EmployeeCount, &raw, &x.Version, &x.CreatedAt, &x.UpdatedAt); err != nil {
 			return Page[Customer]{}, err
 		}
 		_ = json.Unmarshal(raw, &x.CustomFields)
@@ -242,7 +242,7 @@ func (s *Service) GetCustomer(ctx context.Context, p *auth.Principal, id string)
 	}
 	var x Customer
 	var raw []byte
-	err := s.DB.QueryRow(ctx, `SELECT c.id,c.name,COALESCE(c.registration_no,''),COALESCE(c.customer_code,''),c.customer_type,COALESCE(c.grade,''),COALESCE(c.industry,''),COALESCE(c.website,''),COALESCE(c.phone,''),COALESCE(c.email,''),COALESCE(c.address,''),c.owner_id,u.display_name,COALESCE(c.organization_id::text,''),c.health,COALESCE(c.annual_revenue,0),COALESCE(c.employee_count,0),c.custom_fields,c.version,c.created_at,c.updated_at FROM customers c JOIN users u ON u.id=c.owner_id WHERE c.id=$4 AND c.active=true AND `+CustomerScopeSQL(p, "c"), p.DataScope, p.UserID, nullable(p.OrganizationID), id).Scan(&x.ID, &x.Name, &x.RegistrationNo, &x.CustomerCode, &x.CustomerType, &x.Grade, &x.Industry, &x.Website, &x.Phone, &x.Email, &x.Address, &x.OwnerID, &x.OwnerName, &x.OrganizationID, &x.Health, &x.AnnualRevenue, &x.EmployeeCount, &raw, &x.Version, &x.CreatedAt, &x.UpdatedAt)
+	err := s.DB.QueryRow(ctx, `SELECT c.id,c.name,COALESCE(c.registration_no,''),COALESCE(c.customer_code,''),COALESCE(c.home_workspace_id::text,''),c.customer_type,COALESCE(c.grade,''),COALESCE(c.industry,''),COALESCE(c.website,''),COALESCE(c.phone,''),COALESCE(c.email,''),COALESCE(c.address,''),c.owner_id,u.display_name,COALESCE(c.organization_id::text,''),c.health,COALESCE(c.annual_revenue,0),COALESCE(c.employee_count,0),c.custom_fields,c.version,c.created_at,c.updated_at FROM customers c JOIN users u ON u.id=c.owner_id WHERE c.id=$4 AND c.active=true AND `+CustomerScopeSQL(p, "c"), p.DataScope, p.UserID, nullable(p.OrganizationID), id).Scan(&x.ID, &x.Name, &x.RegistrationNo, &x.CustomerCode, &x.HomeWorkspaceID, &x.CustomerType, &x.Grade, &x.Industry, &x.Website, &x.Phone, &x.Email, &x.Address, &x.OwnerID, &x.OwnerName, &x.OrganizationID, &x.Health, &x.AnnualRevenue, &x.EmployeeCount, &raw, &x.Version, &x.CreatedAt, &x.UpdatedAt)
 	_ = json.Unmarshal(raw, &x.CustomFields)
 	return x, err
 }
@@ -267,12 +267,12 @@ var ErrCustomerCodeTaken = errors.New("customer code is already registered")
 // customerCodeConflict turns the unique-index violation into a sentence that
 // names the existing customer when the caller may see it, and only says the
 // code is taken when it may not — a code must not reveal a hidden customer.
-func (s *Service) customerCodeConflict(ctx context.Context, p *auth.Principal, err error, code string) error {
+func (s *Service) customerCodeConflict(ctx context.Context, p *auth.Principal, err error, code, workspaceID string) error {
 	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "23505" || pgErr.ConstraintName != "customers_customer_code_key" {
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" || (pgErr.ConstraintName != "customers_customer_code_key" && pgErr.ConstraintName != "customers_customer_code_scope_key") {
 		return err
 	}
-	if existing, lookupErr := s.CustomerByCode(ctx, p, code); lookupErr == nil {
+	if existing, lookupErr := s.CustomerByCodeIn(ctx, p, workspaceID, code); lookupErr == nil {
 		return fmt.Errorf("%w: 고객 코드 %s는 이미 '%s' 고객에 등록되어 있습니다", ErrCustomerCodeTaken, code, existing.Name)
 	}
 	return fmt.Errorf("%w: 고객 코드 %s는 이미 다른 고객에 등록되어 있습니다", ErrCustomerCodeTaken, code)
@@ -280,26 +280,51 @@ func (s *Service) customerCodeConflict(ctx context.Context, p *auth.Principal, e
 
 // CustomerByCode finds a customer by its code within the caller's Data Scope.
 func (s *Service) CustomerByCode(ctx context.Context, p *auth.Principal, code string) (Customer, error) {
+	return s.CustomerByCodeIn(ctx, p, "", code)
+}
+
+// CustomerByCodeIn resolves a code inside one VOC workspace. Without a
+// workspace it refuses an ambiguous code instead of choosing an arbitrary
+// customer when departments use workspace-local code uniqueness.
+func (s *Service) CustomerByCodeIn(ctx context.Context, p *auth.Principal, workspaceID, code string) (Customer, error) {
 	if err := auth.Require(p, "customer:read"); err != nil {
 		return Customer{}, err
 	}
-	var id string
-	err := s.DB.QueryRow(ctx, `SELECT c.id FROM customers c WHERE c.customer_code=$4 AND c.active=true AND `+CustomerScopeSQL(p, "c"),
-		p.DataScope, p.UserID, nullable(p.OrganizationID), strings.TrimSpace(code)).Scan(&id)
+	rows, err := s.DB.Query(ctx, `SELECT c.id FROM customers c WHERE c.customer_code=$4 AND c.active=true AND c.merged_into_id IS NULL
+		AND ($5='' OR c.home_workspace_id::text=$5) AND `+CustomerScopeSQL(p, "c")+` ORDER BY c.id LIMIT 2`,
+		p.DataScope, p.UserID, nullable(p.OrganizationID), strings.TrimSpace(code), strings.TrimSpace(workspaceID))
 	if err != nil {
 		return Customer{}, err
 	}
-	return s.GetCustomer(ctx, p, id)
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return Customer{}, err
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		return Customer{}, err
+	}
+	if len(ids) == 0 {
+		return Customer{}, pgx.ErrNoRows
+	}
+	if len(ids) > 1 {
+		return Customer{}, errors.New("같은 고객 코드가 여러 업무 영역에 있습니다. workspaceId를 지정하세요")
+	}
+	return s.GetCustomer(ctx, p, ids[0])
 }
 func (s *Service) CreateCustomer(ctx context.Context, p *auth.Principal, in CustomerInput, m RequestMeta) (Customer, error) {
-	return s.CreateCustomerIn(ctx, p, in, "", "", m)
+	return s.CreateCustomerIn(ctx, p, in, "", "", "GLOBAL", m)
 }
 
 // CreateCustomerIn creates a customer that belongs to the given organisation
 // instead of the owner's. A department registering its members through its
 // own VOC workspace needs them in the department, where its Data Scope finds
 // them, even when an administrator does the registering.
-func (s *Service) CreateCustomerIn(ctx context.Context, p *auth.Principal, in CustomerInput, organizationID, homeWorkspaceID string, m RequestMeta) (Customer, error) {
+func (s *Service) CreateCustomerIn(ctx context.Context, p *auth.Principal, in CustomerInput, organizationID, homeWorkspaceID, customerCodeScope string, m RequestMeta) (Customer, error) {
 	if err := auth.Require(p, "customer:write"); err != nil {
 		return Customer{}, err
 	}
@@ -307,6 +332,9 @@ func (s *Service) CreateCustomerIn(ctx context.Context, p *auth.Principal, in Cu
 		return Customer{}, err
 	}
 	id := ids.New()
+	if strings.TrimSpace(customerCodeScope) == "" {
+		customerCodeScope = "GLOBAL"
+	}
 	owner := in.OwnerID
 	if owner == "" || (!p.IsBootstrap && !p.Has("admin:write")) {
 		owner = p.UserID
@@ -319,9 +347,9 @@ func (s *Service) CreateCustomerIn(ctx context.Context, p *auth.Principal, in Cu
 	if health == "" {
 		health = "NORMAL"
 	}
-	_, err := s.DB.Exec(ctx, `INSERT INTO customers(id,name,registration_no,customer_type,grade,industry,website,phone,email,address,owner_id,organization_id,health,annual_revenue,employee_count,custom_fields,created_by,updated_by,customer_code,home_workspace_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($18::uuid,(SELECT organization_id FROM users WHERE id=$11)),$12,$13,$14,$15,$16,$16,$17,$19)`, id, strings.TrimSpace(in.Name), nullable(in.RegistrationNo), typ, nullable(in.Grade), nullable(in.Industry), nullable(in.Website), nullable(in.Phone), nullable(in.Email), nullable(in.Address), owner, health, in.AnnualRevenue, in.EmployeeCount, jsonValue(in.CustomFields), p.UserID, nullable(in.CustomerCode), nullable(organizationID), nullable(homeWorkspaceID))
+	_, err := s.DB.Exec(ctx, `INSERT INTO customers(id,name,registration_no,customer_type,grade,industry,website,phone,email,address,owner_id,organization_id,health,annual_revenue,employee_count,custom_fields,created_by,updated_by,customer_code,home_workspace_id,customer_code_scope) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($18::uuid,(SELECT organization_id FROM users WHERE id=$11)),$12,$13,$14,$15,$16,$16,$17,$19,$20)`, id, strings.TrimSpace(in.Name), nullable(in.RegistrationNo), typ, nullable(in.Grade), nullable(in.Industry), nullable(in.Website), nullable(in.Phone), nullable(in.Email), nullable(in.Address), owner, health, in.AnnualRevenue, in.EmployeeCount, jsonValue(in.CustomFields), p.UserID, nullable(in.CustomerCode), nullable(organizationID), nullable(homeWorkspaceID), customerCodeScope)
 	if err != nil {
-		return Customer{}, s.customerCodeConflict(ctx, p, err, in.CustomerCode)
+		return Customer{}, s.customerCodeConflict(ctx, p, err, in.CustomerCode, homeWorkspaceID)
 	}
 	out, err := s.GetCustomer(ctx, p, id)
 	if err == nil {
@@ -364,7 +392,7 @@ func (s *Service) UpdateCustomer(ctx context.Context, p *auth.Principal, id stri
 	// registered into a VOC workspace, say — must not quietly move it.
 	cmd, err := s.DB.Exec(ctx, `UPDATE customers SET name=$1,registration_no=$2,customer_type=$3,grade=$4,industry=$5,website=$6,phone=$7,email=$8,address=$9,owner_id=$10,organization_id=CASE WHEN owner_id=$10 THEN organization_id ELSE (SELECT organization_id FROM users WHERE id=$10) END,health=$11,annual_revenue=$12,employee_count=$13,custom_fields=$14,updated_by=$15,updated_at=now(),version=version+1,customer_code=$18 WHERE id=$16 AND version=$17`, strings.TrimSpace(in.Name), nullable(in.RegistrationNo), typ, nullable(in.Grade), nullable(in.Industry), nullable(in.Website), nullable(in.Phone), nullable(in.Email), nullable(in.Address), owner, health, in.AnnualRevenue, in.EmployeeCount, jsonValue(in.CustomFields), p.UserID, id, in.Version, nullable(in.CustomerCode))
 	if err != nil {
-		return Customer{}, s.customerCodeConflict(ctx, p, err, in.CustomerCode)
+		return Customer{}, s.customerCodeConflict(ctx, p, err, in.CustomerCode, before.HomeWorkspaceID)
 	}
 	if cmd.RowsAffected() == 0 {
 		return Customer{}, errors.New("customer was changed by another user")

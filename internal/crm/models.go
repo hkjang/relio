@@ -3,27 +3,28 @@ package crm
 import "time"
 
 type Customer struct {
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
-	RegistrationNo string         `json:"registrationNo,omitempty"`
-	CustomerCode   string         `json:"customerCode,omitempty"`
-	CustomerType   string         `json:"customerType"`
-	Grade          string         `json:"grade,omitempty"`
-	Industry       string         `json:"industry,omitempty"`
-	Website        string         `json:"website,omitempty"`
-	Phone          string         `json:"phone,omitempty"`
-	Email          string         `json:"email,omitempty"`
-	Address        string         `json:"address,omitempty"`
-	OwnerID        string         `json:"ownerId"`
-	OwnerName      string         `json:"ownerName,omitempty"`
-	OrganizationID string         `json:"organizationId,omitempty"`
-	Health         string         `json:"health"`
-	AnnualRevenue  float64        `json:"annualRevenue,omitempty"`
-	EmployeeCount  int            `json:"employeeCount,omitempty"`
-	CustomFields   map[string]any `json:"customFields"`
-	Version        int            `json:"version"`
-	CreatedAt      time.Time      `json:"createdAt"`
-	UpdatedAt      time.Time      `json:"updatedAt"`
+	ID              string         `json:"id"`
+	Name            string         `json:"name"`
+	RegistrationNo  string         `json:"registrationNo,omitempty"`
+	CustomerCode    string         `json:"customerCode,omitempty"`
+	HomeWorkspaceID string         `json:"homeWorkspaceId,omitempty"`
+	CustomerType    string         `json:"customerType"`
+	Grade           string         `json:"grade,omitempty"`
+	Industry        string         `json:"industry,omitempty"`
+	Website         string         `json:"website,omitempty"`
+	Phone           string         `json:"phone,omitempty"`
+	Email           string         `json:"email,omitempty"`
+	Address         string         `json:"address,omitempty"`
+	OwnerID         string         `json:"ownerId"`
+	OwnerName       string         `json:"ownerName,omitempty"`
+	OrganizationID  string         `json:"organizationId,omitempty"`
+	Health          string         `json:"health"`
+	AnnualRevenue   float64        `json:"annualRevenue,omitempty"`
+	EmployeeCount   int            `json:"employeeCount,omitempty"`
+	CustomFields    map[string]any `json:"customFields"`
+	Version         int            `json:"version"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	UpdatedAt       time.Time      `json:"updatedAt"`
 }
 type CustomerInput struct {
 	Name           string `json:"name"`

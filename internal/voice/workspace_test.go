@@ -46,6 +46,27 @@ func TestUnknownFieldsAreRefusedAndBlanksMeanAbsent(t *testing.T) {
 	}
 }
 
+func TestConfiguredDefaultIsValidatedAndStored(t *testing.T) {
+	defs := []Field{{Key: "dev_method", Label: "개발방식", Type: "Select", Phase: "INTAKE", Required: true,
+		Options: []string{"DIRECT", "UNKNOWN"}, OptionLabels: map[string]string{"DIRECT": "직접개발", "UNKNOWN": "미확인"}, DefaultValue: "UNKNOWN"}}
+	got, err := validateFieldValues(defs, "INTAKE", map[string]any{}, true)
+	if err != nil || got["dev_method"] != "UNKNOWN" {
+		t.Fatalf("configured default was not materialized: got=%v err=%v", got, err)
+	}
+	defs[0].DefaultValue = "INVENTED"
+	if _, err = validateFieldValues(defs, "INTAKE", map[string]any{}, true); err == nil || !strings.Contains(err.Error(), "기본값 설정") {
+		t.Fatalf("an invalid configured default must fail loudly: %v", err)
+	}
+}
+
+func TestSelectErrorNamesStableCodeAndDisplayName(t *testing.T) {
+	defs := []Field{{Key: "resolver", Label: "해결 주체", Type: "Select", Phase: "RESOLUTION", Options: []string{"OPS"}, OptionLabels: map[string]string{"OPS": "운영 조치"}}}
+	_, err := validateFieldValues(defs, "RESOLUTION", map[string]any{"resolver": "OTHER"}, false)
+	if err == nil || !strings.Contains(err.Error(), "OPS(운영 조치)") {
+		t.Fatalf("allowed code and label must be returned together: %v", err)
+	}
+}
+
 func TestResolutionFieldsAreCheckedWithoutReopeningIntake(t *testing.T) {
 	resolution := phaseFields(intakeFields, "RESOLUTION")
 	if len(resolution) != 1 || resolution[0].Key != "resolver" {
@@ -108,24 +129,13 @@ func TestWorkspaceValidation(t *testing.T) {
 
 func TestPresetMatchesTheRequest(t *testing.T) {
 	p := memberSupportPreset
-	if len(p.Categories) != 8 {
-		t.Fatalf("R-05 asks for 8 types, preset has %d", len(p.Categories))
-	}
-	if !p.Workspace.Isolated || !p.Workspace.KnowledgeGate || p.Workspace.CustomerCodePattern != `^[0-9]{12}$` {
+	if !p.Workspace.Isolated || !p.Workspace.KnowledgeGate {
 		t.Fatalf("workspace policy: %+v", p.Workspace)
 	}
-	keys := map[string]presetField{}
-	for _, f := range p.Fields {
-		keys[f.Key] = f
-	}
-	if !keys["service_type"].Required || keys["service_type"].Phase != "INTAKE" {
-		t.Fatal("서비스 구분 must be a required intake field (R-01)")
-	}
-	if !contains(keys["dev_method"].Options, "미확인") {
-		t.Fatal("개발방식 must offer 미확인 (R-01)")
-	}
-	if keys["resolver"].Phase != "RESOLUTION" {
-		t.Fatal("해결 주체 is recorded at resolution (R-02)")
+	// Operational codes, required flags, defaults and patterns belong to the
+	// department. The product preset must not invent them.
+	if p.Workspace.CustomerCodePattern != "" {
+		t.Fatalf("an unconfirmed member-code pattern was baked into the preset: %q", p.Workspace.CustomerCodePattern)
 	}
 	for _, r := range p.Roles {
 		review := contains(r.Permissions, "voice:knowledge-review")
@@ -135,6 +145,41 @@ func TestPresetMatchesTheRequest(t *testing.T) {
 		if r.DataScope != "DEPARTMENT" {
 			t.Fatalf("%s must be department scoped (R-08)", r.Code)
 		}
+	}
+}
+
+func validPresetApplication() PresetApplication {
+	categories := make([]PresetCategoryInput, 8)
+	for i := range categories {
+		categories[i] = PresetCategoryInput{Code: "TYPE_" + string(rune('A'+i)), Name: "유형", VoiceType: "COMPLAINT"}
+	}
+	return PresetApplication{
+		OrganizationID: "11111111-1111-1111-1111-111111111111", CustomerCodeUniqueScope: "GLOBAL", Categories: categories,
+		ServiceType:       PresetFieldInput{Values: []CodedValue{{Code: "SERVICE_A", Name: "서비스 A"}}},
+		DevelopmentMethod: PresetFieldInput{Values: []CodedValue{{Code: "DEV_A", Name: "개발 A"}}},
+		Resolver: PresetFieldInput{Values: []CodedValue{{Code: "OWNER_A", Name: "주체 A"}, {Code: "OWNER_B", Name: "주체 B"},
+			{Code: "OWNER_C", Name: "주체 C"}, {Code: "OWNER_D", Name: "주체 D"}}},
+	}
+}
+
+func TestPresetRequiresConfirmedDepartmentValues(t *testing.T) {
+	in := validPresetApplication()
+	if err := validatePresetApplication(in); err != nil {
+		t.Fatal(err)
+	}
+	in.Categories = in.Categories[:7]
+	if err := validatePresetApplication(in); err == nil || !strings.Contains(err.Error(), "8개") {
+		t.Fatalf("seven categories must be refused: %v", err)
+	}
+	in = validPresetApplication()
+	in.Resolver.Values = in.Resolver.Values[:3]
+	if err := validatePresetApplication(in); err == nil || !strings.Contains(err.Error(), "4개") {
+		t.Fatalf("three resolvers must be refused: %v", err)
+	}
+	in = validPresetApplication()
+	in.ServiceType.DefaultValue = "UNKNOWN"
+	if err := validatePresetApplication(in); err == nil || !strings.Contains(err.Error(), "기본값") {
+		t.Fatalf("an unknown default must be refused: %v", err)
 	}
 }
 

@@ -16,6 +16,7 @@ type AdminCategory = {
 }
 type Organization = { id: string; name: string; code: string; type?: string; orgType?: string }
 type Preset = { code: string; name: string; description: string }
+type AdminUser = { id: string; username: string; displayName: string; organizationId: string; organizationName: string; active: boolean }
 const voiceCategoryTypes = ['COMPLAINT', 'REQUEST', 'INQUIRY', 'DEFECT', 'CHURN_RISK', 'PRAISE']
 
 function useOrganizations() {
@@ -57,7 +58,7 @@ export function VoiceAdmin({ notify }: { notify: Notify }) {
           <td>{w.organizationName || '—'}</td>
           <td>{w.isolated ? <span className="workspace-flag on">부서 전용</span> : <span className="workspace-flag">공유</span>}</td>
           <td>{w.knowledgeGate ? <span className="workspace-flag on">사용</span> : '—'}</td>
-          <td>{w.customerCodeLabel ? <>{w.customerCodeLabel}<small className="table-sub">{w.customerCodePattern || '형식 제한 없음'}</small></> : '—'}</td>
+          <td>{w.customerCodeLabel ? <>{w.customerCodeLabel}<small className="table-sub">{w.customerCodePattern || '형식 제한 없음'} · {w.customerCodeUniqueScope === 'WORKSPACE' ? '영역별 중복 검사' : '전체 중복 검사'}</small></> : '—'}</td>
           <td>{w.categories.length}개 유형 · {w.fields.length}개 항목<small className="table-sub">{w.slaEnabled ? 'SLA 적용 유형 있음' : 'SLA 미적용'}</small></td>
           <td><Status value={w.active ? 'ACTIVE' : 'DISABLED'} /></td>
           <td><div className="row-menu"><button onClick={() => setEditWorkspace({ workspace: w })}>편집</button></div></td>
@@ -110,6 +111,7 @@ function WorkspaceModal({ workspace, onClose, onSaved, notify }: { workspace?: V
     e.preventDefault(); const f = new FormData(e.currentTarget); setBusy(true)
     const body = { code: f.get('code'), name: f.get('name'), description: f.get('description'), organizationId: f.get('organizationId'), isolated,
       knowledgeGate: f.get('knowledgeGate') === 'on', customerCodeLabel: f.get('customerCodeLabel'), customerCodePattern: f.get('customerCodePattern'),
+      customerCodeUniqueScope: f.get('customerCodeUniqueScope') || 'GLOBAL',
       active: editing ? f.get('active') === 'on' : true, displayOrder: Number(f.get('displayOrder') || 100) }
     try {
       await api(editing ? `/api/v1/admin/voice-workspaces/${workspace!.id}` : '/api/v1/admin/voice-workspaces', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(body) })
@@ -126,6 +128,7 @@ function WorkspaceModal({ workspace, onClose, onSaved, notify }: { workspace?: V
     <label className="check-label span-2"><input type="checkbox" name="knowledgeGate" defaultChecked={workspace?.knowledgeGate} /> 지식 게이트 — 해결 시 원인 근거를 필수로 받고, 검토자가 '반영'한 건만 에이전트 유사 사례 검색에 나옵니다</label>
     <label>고객 코드 이름<input name="customerCodeLabel" defaultValue={workspace?.customerCodeLabel || ''} placeholder="회원사코드" /><small>입력하면 간이 등록에서 필수가 됩니다.</small></label>
     <label>고객 코드 형식(정규식)<input name="customerCodePattern" defaultValue={workspace?.customerCodePattern || ''} placeholder="^[0-9]{12}$" /></label>
+    <label>고객 코드 중복 기준<select name="customerCodeUniqueScope" defaultValue={workspace?.customerCodeUniqueScope || 'GLOBAL'}><option value="GLOBAL">전체 고객 기준</option><option value="WORKSPACE">이 업무 영역 안에서만</option></select><small>고객이 등록된 뒤에는 변경할 수 없습니다.</small></label>
     {editing && <label className="check-label span-2"><input type="checkbox" name="active" defaultChecked={workspace!.active} /> 사용 중</label>}
   </div>
     {editing && isolated !== workspace!.isolated && <div className="alert"><b>격리 설정을 바꿉니다</b><span>저장하면 이 영역의 기존 요청과 등록 고객의 공개 범위도 즉시 함께 바뀝니다.</span></div>}
@@ -135,24 +138,48 @@ function WorkspaceModal({ workspace, onClose, onSaved, notify }: { workspace?: V
 
 function PresetModal({ preset, onClose, onApplied, notify }: { preset: Preset; onClose: () => void; onApplied: () => void; notify: Notify }) {
   const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<{ created: string[]; skipped: string[] } | null>(null)
+  const [result, setResult] = useState<{ created: string[]; skipped: string[]; pending: string[] } | null>(null)
+  const [users, setUsers] = useState<AdminUser[]>([])
+  useEffect(() => { api<{items: AdminUser[]}>('/api/v1/admin/users').then(v => setUsers(v.items.filter(x => x.active))).catch(() => {}) }, [])
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); const f = new FormData(e.currentTarget); setBusy(true)
+    const coded = (name: string) => String(f.get(name) || '').split('\n').map(x => x.trim()).filter(Boolean).map(x => {
+      const [code, ...labelParts] = x.split('|'); return { code: code.trim().toUpperCase(), name: labelParts.join('|').trim() }
+    })
+    const categories = String(f.get('categories') || '').split('\n').map(x => x.trim()).filter(Boolean).map(x => {
+      const [code, name, voiceType] = x.split('|').map(v => v.trim()); return { code: (code || '').toUpperCase(), name: name || '', voiceType: (voiceType || '').toUpperCase() }
+    })
+    const field = (name: string) => ({ values: coded(`${name}Values`), required: f.get(`${name}Required`) === 'on', defaultValue: f.get(`${name}Default`) || '' })
+    const body = { organizationId: f.get('organizationId'), customerCodePattern: f.get('customerCodePattern') || '', customerCodeUniqueScope: f.get('customerCodeUniqueScope'), categories,
+      serviceType: field('serviceType'), developmentMethod: field('developmentMethod'), resolver: field('resolver'),
+      errorCode: { values: [], required: f.get('errorCodeRequired') === 'on', defaultValue: f.get('errorCodeDefault') || '' },
+      agentUserIds: f.getAll('agentUserIds'), reviewerUserIds: f.getAll('reviewerUserIds') }
     try {
-      const r = await api<{ created: string[]; skipped: string[] }>(`/api/v1/admin/voice-presets/${preset.code}/apply`, { method: 'POST', body: JSON.stringify({ organizationId: f.get('organizationId') }) })
+      const r = await api<{ created: string[]; skipped: string[]; pending: string[] }>(`/api/v1/admin/voice-presets/${preset.code}/apply`, { method: 'POST', body: JSON.stringify(body) })
       setResult(r); notify(`템플릿을 적용했습니다. 새로 만든 항목 ${r.created.length}개.`)
     } catch (err) { notify(errorMessage(err), true) } finally { setBusy(false) }
   }
-  return <Modal title={`템플릿 적용 · ${preset.name}`} onClose={result ? onApplied : onClose}>
+  return <Modal title={`템플릿 적용 · ${preset.name}`} onClose={result ? onApplied : onClose} wide>
     {!result ? <form className="form" onSubmit={submit}>
       <p className="muted-copy">{preset.description}</p>
       <label>적용할 부서 *<OrganizationSelect name="organizationId" required /><small>업무 영역의 소유 부서가 되며, 만들어지는 Role은 부서 범위(DEPARTMENT)로 설정됩니다.</small></label>
-      <div className="alert"><b>이미 있는 항목은 건너뜁니다</b><span>다시 적용해도 편집한 내용은 바뀌지 않습니다. Role은 만든 뒤 사용자에게 직접 부여하세요.</span></div>
+      <div className="alert"><b>확정된 운영값만 입력하세요</b><span>예시 값은 자동으로 만들지 않습니다. 모든 코드와 명칭은 부서 확정본을 입력해야 하며, 다시 적용할 때 기존 편집값은 덮어쓰지 않습니다.</span></div>
+      <label>민원 유형 8종 *<textarea name="categories" rows={8} required placeholder={'TYPE_CODE | 유형 명칭 | COMPLAINT\nTYPE_CODE_2 | 유형 명칭 | DEFECT'} /><small>정확히 8줄 · 코드 | 명칭 | 구분(COMPLAINT, REQUEST, INQUIRY, DEFECT, CHURN_RISK, PRAISE)</small></label>
+      <label>서비스 구분 허용값 *<textarea name="serviceTypeValues" rows={4} required placeholder={'SERVICE_CODE | 서비스 명칭'} /></label>
+      <div className="form-grid"><label className="check-label"><input type="checkbox" name="serviceTypeRequired" /> 서비스 구분 필수</label><label>서비스 구분 기본 코드<input name="serviceTypeDefault" placeholder="선택" /></label></div>
+      <label>개발방식 허용값 *<textarea name="developmentMethodValues" rows={4} required placeholder={'DEV_CODE | 개발방식 명칭'} /></label>
+      <div className="form-grid"><label className="check-label"><input type="checkbox" name="developmentMethodRequired" /> 개발방식 필수</label><label>개발방식 기본 코드<input name="developmentMethodDefault" placeholder="선택" /></label></div>
+      <div className="form-grid"><label className="check-label"><input type="checkbox" name="errorCodeRequired" /> 오류코드 필수</label><label>오류코드 기본값<input name="errorCodeDefault" placeholder="선택" /></label></div>
+      <label>해결 주체 4종 *<textarea name="resolverValues" rows={4} required placeholder={'RESOLVER_CODE | 해결 주체 명칭'} /><small>정확히 4줄 · 허용되지 않은 코드는 해결 처리에서 거부됩니다.</small></label>
+      <div className="form-grid"><label className="check-label"><input type="checkbox" name="resolverRequired" /> 해결 주체 필수</label><label>해결 주체 기본 코드<input name="resolverDefault" placeholder="선택" /></label></div>
+      <div className="form-grid"><label>회원사코드 형식(정규식)<input name="customerCodePattern" placeholder="선택 · 예: ^[0-9]{12}$" /></label><label>회원사코드 중복 기준<select name="customerCodeUniqueScope" defaultValue="GLOBAL"><option value="GLOBAL">전체 고객 기준</option><option value="WORKSPACE">업무 영역별 기준</option></select></label></div>
+      <div className="form-grid"><label>담당자 계정<select name="agentUserIds" multiple size={6}>{users.map(u => <option key={u.id} value={u.id}>{u.displayName} ({u.username}) · {u.organizationName || '조직 없음'}</option>)}</select><small>미확정이면 비워 두고 나중에 사용자 화면에서 Role을 부여할 수 있습니다.</small></label>
+        <label>검토자 계정<select name="reviewerUserIds" multiple size={6}>{users.map(u => <option key={u.id} value={u.id}>{u.displayName} ({u.username}) · {u.organizationName || '조직 없음'}</option>)}</select><small>검토자 Role에만 지식 반영 판정 권한이 포함됩니다.</small></label></div>
       <div className="modal-actions"><button type="button" className="btn btn-ghost" onClick={onClose}>취소</button><button className="btn btn-primary" disabled={busy}>{busy ? '적용 중…' : '적용'}</button></div>
     </form> : <div className="form">
       <b>새로 만든 항목</b><ul className="preset-result">{result.created.map(x => <li key={x}>{x}</li>)}{!result.created.length && <li>없음</li>}</ul>
       {result.skipped.length > 0 && <><b>이미 있어 건너뛴 항목</b><ul className="preset-result muted">{result.skipped.map(x => <li key={x}>{x}</li>)}</ul></>}
-      <div className="alert"><b>다음 단계</b><span>사용자 · 조직 화면에서 담당자에게 '회원사 민원 담당', 검토자에게 '회원사 민원 검토자' Role을 부여하세요.</span></div>
+      {result.pending.length > 0 && <div className="alert"><b>남은 설정</b><span>{result.pending.join(' · ')}</span></div>}
       <div className="modal-actions"><button type="button" className="btn btn-primary" onClick={onApplied}>닫기</button></div>
     </div>}
   </Modal>

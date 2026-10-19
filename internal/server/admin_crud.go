@@ -526,20 +526,69 @@ func (s *Server) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 
 var allowedCustomFieldTypes = map[string]bool{"Text": true, "Textarea": true, "Number": true, "Money": true, "Percent": true, "Date": true, "Datetime": true, "Boolean": true, "Select": true, "Multi Select": true, "User": true, "Organization": true, "URL": true}
 
+func customFieldValues(fieldType string, options any, labels map[string]string, defaultValue any) ([]byte, []byte, any, error) {
+	raw, err := json.Marshal(options)
+	if err != nil {
+		return nil, nil, nil, errors.New("선택값 설정을 JSON으로 저장할 수 없습니다")
+	}
+	labelsRaw, err := json.Marshal(labels)
+	if err != nil {
+		return nil, nil, nil, errors.New("선택값 명칭 설정을 JSON으로 저장할 수 없습니다")
+	}
+	if labels == nil {
+		labelsRaw = []byte("{}")
+	}
+	if fieldType == "Select" || fieldType == "Multi Select" {
+		var values []string
+		if err = json.Unmarshal(raw, &values); err != nil || len(values) == 0 {
+			return nil, nil, nil, errors.New("선택형 항목에는 하나 이상의 허용 코드가 필요합니다")
+		}
+		allowed := map[string]bool{}
+		for _, value := range values {
+			clean := strings.TrimSpace(value)
+			if value != clean || clean == "" || allowed[clean] {
+				return nil, nil, nil, errors.New("선택값 코드는 비어 있거나 중복될 수 없습니다")
+			}
+			allowed[clean] = true
+		}
+		for code := range labels {
+			if !allowed[code] {
+				return nil, nil, nil, fmt.Errorf("선택값 명칭에 정의되지 않은 코드가 있습니다: %s", code)
+			}
+		}
+		if text, ok := defaultValue.(string); ok && strings.TrimSpace(text) != "" && !allowed[text] {
+			return nil, nil, nil, fmt.Errorf("기본값은 허용 코드 중 하나여야 합니다: %s", text)
+		}
+	}
+	if text, ok := defaultValue.(string); ok && strings.TrimSpace(text) == "" {
+		defaultValue = nil
+	}
+	if defaultValue == nil {
+		return raw, labelsRaw, nil, nil
+	}
+	defaultRaw, err := json.Marshal(defaultValue)
+	if err != nil {
+		return nil, nil, nil, errors.New("기본값을 JSON으로 저장할 수 없습니다")
+	}
+	return raw, labelsRaw, defaultRaw, nil
+}
+
 func (s *Server) updateCustomField(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.adminMutation(w, r)
 	if !ok {
 		return
 	}
 	var in struct {
-		Label        string `json:"label"`
-		Type         string `json:"type"`
-		Required     bool   `json:"required"`
-		Options      any    `json:"options"`
-		Active       *bool  `json:"active"`
-		DisplayOrder int    `json:"displayOrder"`
-		Phase        string `json:"phase"`
-		HelpText     string `json:"helpText"`
+		Label        string            `json:"label"`
+		Type         string            `json:"type"`
+		Required     bool              `json:"required"`
+		Options      any               `json:"options"`
+		OptionLabels map[string]string `json:"optionLabels"`
+		DefaultValue any               `json:"defaultValue"`
+		Active       *bool             `json:"active"`
+		DisplayOrder int               `json:"displayOrder"`
+		Phase        string            `json:"phase"`
+		HelpText     string            `json:"helpText"`
 	}
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
@@ -559,14 +608,18 @@ func (s *Server) updateCustomField(w http.ResponseWriter, r *http.Request) {
 	if in.Active != nil {
 		active = *in.Active
 	}
-	raw, _ := json.Marshal(in.Options)
+	raw, labelsRaw, defaultRaw, err := customFieldValues(in.Type, in.Options, in.OptionLabels, in.DefaultValue)
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
 	phase, err := customFieldPhase(entity, in.Phase)
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
 	}
-	_, err = s.DB.Exec(r.Context(), `UPDATE custom_field_definitions SET label=$2,field_type=$3,required=$4,options=$5,active=$6,display_order=$7,phase=$8,help_text=$9,updated_at=now() WHERE id=$1`,
-		id, strings.TrimSpace(in.Label), in.Type, in.Required, raw, active, in.DisplayOrder, phase, nullableID(in.HelpText))
+	_, err = s.DB.Exec(r.Context(), `UPDATE custom_field_definitions SET label=$2,field_type=$3,required=$4,options=$5,option_labels=$6,default_value=$7,active=$8,display_order=$9,phase=$10,help_text=$11,updated_at=now() WHERE id=$1`,
+		id, strings.TrimSpace(in.Label), in.Type, in.Required, raw, labelsRaw, defaultRaw, active, in.DisplayOrder, phase, nullableID(in.HelpText))
 	if err != nil {
 		s.serviceError(w, r, err)
 		return

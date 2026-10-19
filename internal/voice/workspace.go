@@ -23,20 +23,21 @@ import (
 // Requests outside any workspace (workspace_id NULL) behave as they always did.
 
 type Workspace struct {
-	ID                  string     `json:"id"`
-	Code                string     `json:"code"`
-	Name                string     `json:"name"`
-	Description         string     `json:"description,omitempty"`
-	OrganizationID      string     `json:"organizationId,omitempty"`
-	OrganizationName    string     `json:"organizationName,omitempty"`
-	Isolated            bool       `json:"isolated"`
-	KnowledgeGate       bool       `json:"knowledgeGate"`
-	CustomerCodeLabel   string     `json:"customerCodeLabel,omitempty"`
-	CustomerCodePattern string     `json:"customerCodePattern,omitempty"`
-	Active              bool       `json:"active"`
-	DisplayOrder        int        `json:"displayOrder"`
-	Fields              []Field    `json:"fields"`
-	Categories          []Category `json:"categories"`
+	ID                      string     `json:"id"`
+	Code                    string     `json:"code"`
+	Name                    string     `json:"name"`
+	Description             string     `json:"description,omitempty"`
+	OrganizationID          string     `json:"organizationId,omitempty"`
+	OrganizationName        string     `json:"organizationName,omitempty"`
+	Isolated                bool       `json:"isolated"`
+	KnowledgeGate           bool       `json:"knowledgeGate"`
+	CustomerCodeLabel       string     `json:"customerCodeLabel,omitempty"`
+	CustomerCodePattern     string     `json:"customerCodePattern,omitempty"`
+	CustomerCodeUniqueScope string     `json:"customerCodeUniqueScope"`
+	Active                  bool       `json:"active"`
+	DisplayOrder            int        `json:"displayOrder"`
+	Fields                  []Field    `json:"fields"`
+	Categories              []Category `json:"categories"`
 	// SLAEnabled is true when any of the workspace's types still keeps a
 	// deadline, so screens know whether deadline columns mean anything here.
 	SLAEnabled bool `json:"slaEnabled"`
@@ -44,16 +45,20 @@ type Workspace struct {
 
 // Field is a VOICE custom field definition, collected at intake or resolution.
 type Field struct {
-	ID           string   `json:"id"`
-	WorkspaceID  string   `json:"workspaceId,omitempty"`
-	Key          string   `json:"key"`
-	Label        string   `json:"label"`
-	Type         string   `json:"type"`
-	Required     bool     `json:"required"`
-	Options      []string `json:"options,omitempty"`
-	Phase        string   `json:"phase"`
-	HelpText     string   `json:"helpText,omitempty"`
-	DisplayOrder int      `json:"displayOrder"`
+	ID          string   `json:"id"`
+	WorkspaceID string   `json:"workspaceId,omitempty"`
+	Key         string   `json:"key"`
+	Label       string   `json:"label"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required"`
+	Options     []string `json:"options,omitempty"`
+	// OptionLabels maps the stable value stored in a case to the wording shown
+	// to a handler. An empty map keeps the legacy value-as-label behaviour.
+	OptionLabels map[string]string `json:"optionLabels,omitempty"`
+	DefaultValue any               `json:"defaultValue,omitempty"`
+	Phase        string            `json:"phase"`
+	HelpText     string            `json:"helpText,omitempty"`
+	DisplayOrder int               `json:"displayOrder"`
 }
 
 // Cause evidence levels and knowledge states. The labels are the words the
@@ -122,7 +127,7 @@ func (s *Service) Workspaces(ctx context.Context, p *auth.Principal, includeInac
 		return nil, err
 	}
 	rows, err := s.DB.Query(ctx, `SELECT w.id,w.code,w.name,COALESCE(w.description,''),COALESCE(w.organization_id::text,''),COALESCE(o.name,''),
-		w.isolated,w.knowledge_gate,COALESCE(w.customer_code_label,''),COALESCE(w.customer_code_pattern,''),w.active,w.display_order
+		w.isolated,w.knowledge_gate,COALESCE(w.customer_code_label,''),COALESCE(w.customer_code_pattern,''),w.customer_code_unique_scope,w.active,w.display_order
 		FROM voice_workspaces w LEFT JOIN organizations o ON o.id=w.organization_id
 		WHERE (w.active OR $4) AND `+workspaceAccessSQL(p)+` AND `+bindCaller+`
 		ORDER BY w.display_order,w.name`, p.DataScope, p.UserID, orgArg(p), includeInactive)
@@ -133,7 +138,7 @@ func (s *Service) Workspaces(ctx context.Context, p *auth.Principal, includeInac
 	for rows.Next() {
 		var w Workspace
 		if err = rows.Scan(&w.ID, &w.Code, &w.Name, &w.Description, &w.OrganizationID, &w.OrganizationName,
-			&w.Isolated, &w.KnowledgeGate, &w.CustomerCodeLabel, &w.CustomerCodePattern, &w.Active, &w.DisplayOrder); err != nil {
+			&w.Isolated, &w.KnowledgeGate, &w.CustomerCodeLabel, &w.CustomerCodePattern, &w.CustomerCodeUniqueScope, &w.Active, &w.DisplayOrder); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -180,7 +185,7 @@ func (s *Service) workspace(ctx context.Context, p *auth.Principal, id string) (
 // fields returns the VOICE field definitions for a workspace; an empty id
 // means the fields of requests that belong to no workspace.
 func (s *Service) fields(ctx context.Context, workspaceID string) ([]Field, error) {
-	rows, err := s.DB.Query(ctx, `SELECT id,COALESCE(workspace_id::text,''),field_key,label,field_type,required,options,COALESCE(phase,'INTAKE'),COALESCE(help_text,''),display_order
+	rows, err := s.DB.Query(ctx, `SELECT id,COALESCE(workspace_id::text,''),field_key,label,field_type,required,options,option_labels,default_value,COALESCE(phase,'INTAKE'),COALESCE(help_text,''),display_order
 		FROM custom_field_definitions
 		WHERE entity_type='VOICE' AND active AND COALESCE(workspace_id::text,'')=$1
 		ORDER BY display_order,label`, workspaceID)
@@ -191,11 +196,16 @@ func (s *Service) fields(ctx context.Context, workspaceID string) ([]Field, erro
 	out := []Field{}
 	for rows.Next() {
 		var f Field
-		var options []byte
-		if err = rows.Scan(&f.ID, &f.WorkspaceID, &f.Key, &f.Label, &f.Type, &f.Required, &options, &f.Phase, &f.HelpText, &f.DisplayOrder); err != nil {
+		var options, optionLabels []byte
+		var defaultValue []byte
+		if err = rows.Scan(&f.ID, &f.WorkspaceID, &f.Key, &f.Label, &f.Type, &f.Required, &options, &optionLabels, &defaultValue, &f.Phase, &f.HelpText, &f.DisplayOrder); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(options, &f.Options)
+		_ = json.Unmarshal(optionLabels, &f.OptionLabels)
+		if len(defaultValue) > 0 {
+			_ = json.Unmarshal(defaultValue, &f.DefaultValue)
+		}
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -214,6 +224,21 @@ func validateFieldValues(defs []Field, phase string, values map[string]any, enfo
 	}
 	out := map[string]any{}
 	problems := []string{}
+	if enforce {
+		for _, f := range defs {
+			if f.Phase != phase || f.DefaultValue == nil {
+				continue
+			}
+			value, problem := fieldValue(f, f.DefaultValue)
+			if problem != "" {
+				problems = append(problems, fmt.Sprintf("%s 기본값 설정이 올바르지 않습니다: %s", f.Label, problem))
+				continue
+			}
+			if value != nil {
+				out[f.Key] = value
+			}
+		}
+	}
 	for key, raw := range values {
 		f, ok := byKey[key]
 		if !ok {
@@ -273,7 +298,7 @@ func fieldValue(f Field, raw any) (any, string) {
 				return v, ""
 			}
 		}
-		return nil, fmt.Sprintf("%s은(는) 다음 중 하나여야 합니다: %s (받은 값: %s)", f.Label, strings.Join(f.Options, ", "), v)
+		return nil, fmt.Sprintf("%s은(는) 다음 중 하나여야 합니다: %s (받은 값: %s)", f.Label, strings.Join(fieldOptionNames(f), ", "), v)
 	case "Multi Select":
 		items, ok := raw.([]any)
 		if !ok {
@@ -345,4 +370,16 @@ func fieldValue(f Field, raw any) (any, string) {
 		}
 		return v, ""
 	}
+}
+
+func fieldOptionNames(f Field) []string {
+	out := make([]string, 0, len(f.Options))
+	for _, code := range f.Options {
+		if label := strings.TrimSpace(f.OptionLabels[code]); label != "" && label != code {
+			out = append(out, fmt.Sprintf("%s(%s)", code, label))
+		} else {
+			out = append(out, code)
+		}
+	}
+	return out
 }

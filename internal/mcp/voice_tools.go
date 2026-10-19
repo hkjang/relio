@@ -21,6 +21,10 @@ import (
 
 const confirmFirst = " 호출 전에 등록할 내용을 담당자에게 보여 주고 승인을 받은 뒤에만 실행하세요."
 
+var searchWorkspaceCustomersSchema = schema([]string{"workspaceId", "query"}, map[string]any{
+	"workspaceId": str("get_voice_categories가 반환한 업무 영역 ID"), "query": str("회원사명 또는 회원사코드"), "limit": integer("최대 결과 수(기본 20, 최대 100)"),
+})
+
 // voiceFields describes a workspace's fields as a JSON Schema object, with the
 // options of every select field as an enum, so an agent is told the exact
 // values instead of guessing them. Fields of workspaces the caller cannot use
@@ -48,6 +52,9 @@ func (s *Server) voiceFields(ctx context.Context, p *auth.Principal, phases ...s
 				switch f.Type {
 				case "Select":
 					property["enum"] = f.Options
+					if len(f.OptionLabels) > 0 {
+						property["description"] = description + " · 코드/명칭: " + strings.Join(optionDescriptions(f), ", ")
+					}
 				case "Multi Select":
 					property = map[string]any{"type": "array", "description": description, "items": map[string]any{"type": "string", "enum": f.Options}}
 				case "Number", "Money", "Percent":
@@ -55,12 +62,27 @@ func (s *Server) voiceFields(ctx context.Context, p *auth.Principal, phases ...s
 				case "Boolean":
 					property["type"] = "boolean"
 				}
+				if f.DefaultValue != nil {
+					property["default"] = f.DefaultValue
+				}
 				properties[f.Key] = property
 			}
 		}
 	}
 	return map[string]any{"type": "object", "description": "업무 영역의 추가 항목. 키와 허용값은 get_voice_categories에서도 확인할 수 있습니다.",
 		"properties": properties, "additionalProperties": false}, workspaces
+}
+
+func optionDescriptions(f voice.Field) []string {
+	out := make([]string, 0, len(f.Options))
+	for _, code := range f.Options {
+		if label := strings.TrimSpace(f.OptionLabels[code]); label != "" && label != code {
+			out = append(out, code+"="+label)
+		} else {
+			out = append(out, code)
+		}
+	}
+	return out
 }
 
 func contains(values []string, want string) bool {
@@ -102,14 +124,14 @@ func (s *Server) findCategory(ctx context.Context, p *auth.Principal, ref string
 }
 
 // customerRef resolves a customer from an id or a customer code.
-func (s *Server) customerRef(ctx context.Context, p *auth.Principal, id, code string) (string, error) {
+func (s *Server) customerRef(ctx context.Context, p *auth.Principal, id, code, workspaceID string) (string, error) {
 	if strings.TrimSpace(id) != "" {
 		return strings.TrimSpace(id), nil
 	}
 	if strings.TrimSpace(code) == "" {
 		return "", errors.New("customerId 또는 customerCode 중 하나가 필요합니다")
 	}
-	c, err := s.CRM.CustomerByCode(ctx, p, code)
+	c, err := s.CRM.CustomerByCodeIn(ctx, p, workspaceID, code)
 	if err != nil {
 		return "", fmt.Errorf("고객 코드 %s로 등록된 고객이 없습니다. register_workspace_customer로 먼저 등록하세요", strings.TrimSpace(code))
 	}
@@ -158,6 +180,9 @@ func (s *Server) addVoiceTools(ctx context.Context, p *auth.Principal, add func(
 			"customerCode": str("고객 코드(회원사코드)"), "customerId": str("고객 ID · customerCode와 둘 중 하나"),
 			"workspaceId": str("업무 영역 ID"), "limit": integer("최대 결과 수(기본 30, 최대 200)"),
 		}), true, false)
+	add("customer:read voice:read", "search_workspace_customers", "업무 영역 고객 검색",
+		"회원사명 또는 회원사코드로 선택한 업무 영역의 고객만 검색합니다. customerId·name·customerCode를 반환합니다. 이름 결과가 여러 건이면 사용자에게 후보를 보여 주고 선택을 받아야 하며 임의 선택하면 안 됩니다. 회원사코드 중복 확인에도 이 도구를 먼저 사용하세요.",
+		searchWorkspaceCustomersSchema, true, false)
 	add("customer:read customer:write voice:read voice:write", "register_workspace_customer", "회원사 간이 등록",
 		"고객사명과 고객 코드(회원사코드)만으로 업무 영역 고객을 등록합니다. 같은 코드가 이미 있으면 등록하지 않고 기존 고객을 알려 줍니다."+confirmFirst,
 		schema([]string{"workspaceId", "name", "customerCode"}, map[string]any{
@@ -178,19 +203,22 @@ func (s *Server) addVoiceTools(ctx context.Context, p *auth.Principal, add func(
 func (s *Server) callVoiceTool(ctx context.Context, p *auth.Principal, name string, a map[string]any, meta crm.RequestMeta) (any, bool, error) {
 	switch name {
 	case "file_customer_voice":
-		customerID, err := s.customerRef(ctx, p, strArg(a, "customerId"), strArg(a, "customerCode"))
-		if err != nil {
-			return nil, true, err
-		}
-		in := voice.Input{CustomerID: customerID, ContactID: strArg(a, "contactId"), VoiceType: strArg(a, "voiceType"),
+		in := voice.Input{ContactID: strArg(a, "contactId"), VoiceType: strArg(a, "voiceType"),
 			Channel: strArg(a, "channel"), Title: strArg(a, "title"), Body: strArg(a, "body"), Severity: strArg(a, "severity")}
+		workspaceID := ""
 		if ref := strArg(a, "category"); ref != "" {
 			c, err := s.findCategory(ctx, p, ref)
 			if err != nil {
 				return nil, true, err
 			}
 			in.CategoryID = c.ID
+			workspaceID = c.WorkspaceID
 		}
+		customerID, err := s.customerRef(ctx, p, strArg(a, "customerId"), strArg(a, "customerCode"), workspaceID)
+		if err != nil {
+			return nil, true, err
+		}
+		in.CustomerID = customerID
 		if fields, ok := a["fields"].(map[string]any); ok {
 			in.CustomFields = fields
 		}
@@ -219,10 +247,13 @@ func (s *Server) callVoiceTool(ctx context.Context, p *auth.Principal, name stri
 	case "get_customer_voice_history":
 		v, err := s.Voices.History(ctx, p, strArg(a, "customerId"), strArg(a, "customerCode"), strArg(a, "workspaceId"), intArg(a, "limit", 30))
 		return v, true, err
+	case "search_workspace_customers":
+		v, err := s.Voices.SearchWorkspaceCustomers(ctx, p, strArg(a, "workspaceId"), strArg(a, "query"), intArg(a, "limit", 20))
+		return map[string]any{"items": v, "count": len(v)}, true, err
 	case "register_workspace_customer":
 		v, err := s.Voices.QuickRegister(ctx, p, strArg(a, "workspaceId"), voice.QuickCustomerInput{Name: strArg(a, "name"), CustomerCode: strArg(a, "customerCode")}, meta)
 		if errors.Is(err, crm.ErrCustomerCodeTaken) {
-			if existing, lookupErr := s.CRM.CustomerByCode(ctx, p, strArg(a, "customerCode")); lookupErr == nil {
+			if existing, lookupErr := s.CRM.CustomerByCodeIn(ctx, p, strArg(a, "workspaceId"), strArg(a, "customerCode")); lookupErr == nil {
 				return map[string]any{"registered": false, "existing": existing, "message": "같은 고객 코드의 고객이 이미 있어 그 고객을 사용하면 됩니다."}, true, nil
 			}
 		}

@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -66,6 +65,15 @@ func (s *Server) voiceHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, 200, v)
+}
+
+func (s *Server) searchWorkspaceCustomers(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Voices.SearchWorkspaceCustomers(r.Context(), principal(r), r.PathValue("id"), r.URL.Query().Get("q"), httpx.IntQuery(r, "limit", 20, 1, 100))
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	httpx.JSON(w, 200, map[string]any{"items": items, "count": len(items)})
 }
 
 func (s *Server) quickRegisterCustomer(w http.ResponseWriter, r *http.Request) {
@@ -154,21 +162,15 @@ func (s *Server) applyVoicePreset(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in struct {
-		OrganizationID string `json:"organizationId"`
-	}
+	var in voice.PresetApplication
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
 	}
-	if strings.TrimSpace(in.OrganizationID) == "" {
-		s.serviceError(w, r, errors.New("구성을 적용할 부서(조직)를 선택해야 합니다"))
-		return
-	}
-	v, err := s.Voices.ApplyPreset(r.Context(), p, r.PathValue("code"), in.OrganizationID)
+	v, err := s.Voices.ApplyPreset(r.Context(), p, r.PathValue("code"), in)
 	if err != nil {
 		s.serviceError(w, r, err)
 		return
 	}
-	s.auditAdmin(r, p, "VOICE_PRESET_APPLY", "voice_workspace", v.WorkspaceID, nil, map[string]any{"preset": r.PathValue("code"), "organizationId": in.OrganizationID, "created": v.Created, "skipped": v.Skipped})
+	s.auditAdmin(r, p, "VOICE_PRESET_APPLY", "voice_workspace", v.WorkspaceID, nil, map[string]any{"preset": r.PathValue("code"), "organizationId": in.OrganizationID, "created": v.Created, "skipped": v.Skipped, "pending": v.Pending})
 	httpx.JSON(w, 200, v)
 }

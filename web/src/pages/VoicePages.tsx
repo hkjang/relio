@@ -266,9 +266,10 @@ function VoiceModal({ prefill, categories, workspaces, defaultWorkspace, canRegi
   </form></Modal>
 }
 
-function fieldText(value: unknown) {
+function fieldText(value: unknown, field?: VoiceField) {
   if (Array.isArray(value)) return value.join(', ')
   if (typeof value === 'boolean') return value ? '예' : '아니오'
+  if (typeof value === 'string' && field?.optionLabels?.[value]) return `${field.optionLabels[value]} (${value})`
   return value === undefined || value === null || value === '' ? '—' : String(value)
 }
 
@@ -320,6 +321,16 @@ function VoiceDrawer({ voice, workspaces, canWrite, canReview, onClose, onSaved,
     } catch (err) { notify(errorMessage(err), true) } finally { setBusy(false) }
   }
 
+  async function saveCustomFields(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); const f = new FormData(e.currentTarget); setBusy(true)
+    try {
+      await api(`/api/v1/voices/${v.id}`, { method: 'PUT', body: JSON.stringify({
+        customFields: { ...collectFields(f, fields, 'INTAKE'), ...collectFields(f, fields, 'RESOLUTION') }, version: v.version,
+      }) })
+      notify('접수·해결 항목을 저장했습니다.'); await refresh()
+    } catch (err) { notify(errorMessage(err), true) } finally { setBusy(false) }
+  }
+
   const intake = fields.filter(f => f.phase === 'INTAKE')
   const resolution = fields.filter(f => f.phase === 'RESOLUTION')
   return <div className="drawer-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
@@ -340,7 +351,7 @@ function VoiceDrawer({ voice, workspaces, canWrite, canReview, onClose, onSaved,
         <div className="info-list">
           <div><span>접수 경로</span><b>{label(v.channel)}</b></div>
           <div><span>{workspace ? '유형' : '세부 분류'}</span><b>{v.categoryName || '미지정'}</b></div>
-          {intake.map(f => <div key={f.key}><span>{f.label}</span><b>{fieldText(v.customFields?.[f.key])}</b></div>)}
+          {intake.map(f => <div key={f.key}><span>{f.label}</span><b>{fieldText(v.customFields?.[f.key], f)}</b></div>)}
           <div><span>접수 시각</span><b>{date(v.occurredAt)}</b></div>
           {v.slaApplied
             ? <><div><span>응답 기한</span><b>{v.firstRespondedAt ? `응답 완료 (${date(v.firstRespondedAt)})` : dueLabel(v.responseDueAt)}</b></div>
@@ -353,7 +364,7 @@ function VoiceDrawer({ voice, workspaces, canWrite, canReview, onClose, onSaved,
           <div className="info-list compact">
             {v.rootCause && <div><span>근본 원인</span><b>{v.rootCause}</b></div>}
             <div><span>원인 근거</span><b>{evidenceLabel(v.causeEvidence)}</b></div>
-            {resolution.map(f => <div key={f.key}><span>{f.label}</span><b>{fieldText(v.customFields?.[f.key])}</b></div>)}
+            {resolution.map(f => <div key={f.key}><span>{f.label}</span><b>{fieldText(v.customFields?.[f.key], f)}</b></div>)}
             {v.knowledgeReviewer && <div><span>지식 판정</span><b>{knowledgeLabels[v.knowledgeStatus]} · {v.knowledgeReviewer}{v.knowledgeReviewedAt ? ` · ${date(v.knowledgeReviewedAt)}` : ''}</b></div>}
           </div>
         </div>}
@@ -375,6 +386,14 @@ function VoiceDrawer({ voice, workspaces, canWrite, canReview, onClose, onSaved,
           </div>
           {closed && v.knowledgeStatus !== 'UNREVIEWED' && <small className="muted-copy">재처리하면 지식 반영 상태가 미검토로 돌아갑니다.</small>}
         </div>}
+
+        {canWrite && fields.length > 0 && <form className="drawer-section form" onSubmit={saveCustomFields}>
+          <h3>구조화 항목 편집</h3>
+          <p className="muted-copy">접수·해결 도구와 같은 필수값·허용 코드 검증 및 담당자 권한 검사를 적용합니다.</p>
+          <div className="form-grid"><FieldInputs fields={fields} phase="INTAKE" values={v.customFields} />
+            <FieldInputs fields={fields} phase="RESOLUTION" values={v.customFields} /></div>
+          <button className="btn btn-primary" disabled={busy}>항목 저장</button>
+        </form>}
 
         {canWrite && closed && <form className="drawer-section form" onSubmit={saveAnalysis}>
           <h3>원인 분석과 재발 방지</h3>

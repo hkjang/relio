@@ -4,6 +4,7 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import date
 
@@ -34,6 +35,47 @@ def request(path, method="GET", body=None, headers=None, expect_json=True):
 def expect_http_error(path, method="GET", body=None, headers=None, contains=None):
     try:
         request(path, method, body, headers)
+    except RuntimeError as exc:
+        if contains is not None:
+            assert contains in str(exc), str(exc)
+        return
+    raise AssertionError(f"{method} {path} unexpectedly succeeded")
+
+
+def authenticated_client(username, password, next_password):
+    """Create an isolated browser session and clear the first-login password gate."""
+    session_jar = http.cookiejar.CookieJar()
+    session_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(session_jar))
+
+    def call(path, method="GET", body=None, headers=None):
+        data = json.dumps(body).encode() if body is not None else None
+        request_headers = dict(headers or {})
+        if body is not None:
+            request_headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(base_url + path, data=data, headers=request_headers, method=method)
+        try:
+            with session_opener.open(req, timeout=15) as response:
+                content = response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")
+            raise RuntimeError(f"{method} {path} returned HTTP {exc.code}: {detail}") from exc
+        return json.loads(content)
+
+    signed_in = call("/api/v1/auth/login", "POST", {"username": username, "password": password})
+    session_headers = {"X-CSRF-Token": signed_in["user"]["csrfToken"]}
+    if signed_in["user"]["mustChangePassword"]:
+        call(
+            "/api/v1/me/password",
+            "POST",
+            {"currentPassword": password, "newPassword": next_password},
+            session_headers,
+        )
+    return call, session_headers
+
+
+def expect_client_error(call, path, method="GET", body=None, headers=None, contains=None):
+    try:
+        call(path, method, body, headers)
     except RuntimeError as exc:
         if contains is not None:
             assert contains in str(exc), str(exc)
@@ -631,6 +673,14 @@ blocked_tool = request(
     {**mcp_headers, "MCP-Protocol-Version": "2025-11-25"},
 )
 assert "error" in blocked_tool
+# Restore the default before later VOC MCP coverage. An empty allowlist means
+# every tool permitted by the key scopes is advertised.
+request(
+    "/api/v1/admin/settings/mcp/tool_allowlist",
+    "PUT",
+    {"value": [], "valueType": "json", "version": 2},
+    csrf_header,
+)
 rotated = request(
     f"/api/v1/me/keys/{key['key']['id']}/rotate",
     "POST",
@@ -965,36 +1015,186 @@ assert "locale" not in {item["key"] for item in request("/api/v1/admin/settings?
 # VOC workspaces: a department preset, its SLA-free types and fields, quick
 # member registration, the structured resolution and the knowledge gate.
 department = request("/api/v1/admin/organizations", "POST", {"name": "Offline 회원사 지원부", "code": "OFFLINE_MS", "type": "DEPARTMENT"}, csrf_header)
-preset = request("/api/v1/admin/voice-presets/MEMBER_SUPPORT/apply", "POST", {"organizationId": department["id"]}, csrf_header)
+voice_agent = request(
+    "/api/v1/admin/users",
+    "POST",
+    {
+        "username": "offline-voice-agent",
+        "displayName": "Offline 민원 담당자",
+        "email": "offline-voice-agent@relio.invalid",
+        "password": "Offline-Agent-Password-2026!",
+        "organizationId": department["id"],
+        "title": "담당자",
+        "roleIds": [],
+    },
+    csrf_header,
+)
+voice_reviewer = request(
+    "/api/v1/admin/users",
+    "POST",
+    {
+        "username": "offline-voice-reviewer",
+        "displayName": "Offline 민원 검토자",
+        "email": "offline-voice-reviewer@relio.invalid",
+        "password": "Offline-Reviewer-Password-2026!",
+        "organizationId": department["id"],
+        "title": "검토자",
+        "roleIds": [],
+    },
+    csrf_header,
+)
+preset_config = {
+    "organizationId": department["id"], "customerCodePattern": "^[0-9]{12}$", "customerCodeUniqueScope": "GLOBAL",
+    "categories": [
+        {"code": "MS_SERVICE_ERROR", "name": "서비스 오류 신고", "voiceType": "DEFECT"},
+        {"code": "MS_SMS_ISSUE", "name": "인증문자 이상", "voiceType": "DEFECT"},
+        {"code": "MS_INTEGRATION", "name": "연동·개발 문의", "voiceType": "INQUIRY"},
+        {"code": "MS_SETTING_CHANGE", "name": "설정·정보 변경 요청", "voiceType": "REQUEST"},
+        {"code": "MS_SECURITY_DOCS", "name": "위수탁·보안 자료 요청", "voiceType": "REQUEST"},
+        {"code": "MS_BILLING", "name": "요금·정산 문의", "voiceType": "INQUIRY"},
+        {"code": "MS_ADMIN_SITE", "name": "관리자 사이트 문의", "voiceType": "INQUIRY"},
+        {"code": "MS_OTHER", "name": "기타", "voiceType": "INQUIRY"},
+    ],
+    "serviceType": {"required": True, "defaultValue": "", "values": [{"code": "IPIN", "name": "아이핀"}, {"code": "PHONE", "name": "휴대폰본인확인"}]},
+    "developmentMethod": {"required": False, "defaultValue": "UNKNOWN", "values": [{"code": "DIRECT", "name": "직접개발"}, {"code": "UNKNOWN", "name": "미확인"}]},
+    "errorCode": {"required": False, "defaultValue": "", "values": []},
+    "resolver": {"required": False, "defaultValue": "", "values": [{"code": "MEMBER", "name": "회원사 조치"}, {"code": "OPS", "name": "운영 조치"}, {"code": "IT", "name": "IT 조치"}, {"code": "GUIDE", "name": "안내 종결"}]},
+    "agentUserIds": [], "reviewerUserIds": [],
+}
+preset = request("/api/v1/admin/voice-presets/MEMBER_SUPPORT/apply", "POST", preset_config, csrf_header)
 assert len(preset["created"]) == 15 and not preset["skipped"], preset
-again = request("/api/v1/admin/voice-presets/MEMBER_SUPPORT/apply", "POST", {"organizationId": department["id"]}, csrf_header)
-assert not again["created"] and len(again["skipped"]) == 15, again
+assert len(preset["pending"]) == 2, preset
+assigned_config = {
+    **preset_config,
+    "agentUserIds": [voice_agent["id"]],
+    "reviewerUserIds": [voice_reviewer["id"]],
+}
+again = request("/api/v1/admin/voice-presets/MEMBER_SUPPORT/apply", "POST", assigned_config, csrf_header)
+assert len(again["created"]) == 2 and len(again["skipped"]) == 15 and not again["pending"], again
 member_ws = next(w for w in request("/api/v1/voices/workspaces")["items"] if w["code"] == "MEMBER_SUPPORT")
 assert len(member_ws["categories"]) == 8 and not member_ws["slaEnabled"] and member_ws["isolated"] and member_ws["knowledgeGate"]
+agent_role = next(role for role in request("/api/v1/admin/roles")["items"] if role["code"] == "MEMBER_SUPPORT_AGENT")
+other_department = request("/api/v1/admin/organizations", "POST", {"name": "Offline 타 부서", "code": "OFFLINE_OTHER", "type": "DEPARTMENT"}, csrf_header)
+other_agent = request(
+    "/api/v1/admin/users",
+    "POST",
+    {
+        "username": "offline-other-agent",
+        "displayName": "Offline 타 부서 담당자",
+        "email": "offline-other-agent@relio.invalid",
+        "password": "Offline-Other-Password-2026!",
+        "organizationId": other_department["id"],
+        "title": "담당자",
+        "roleIds": [agent_role["id"]],
+    },
+    csrf_header,
+)
 expect_http_error(f"/api/v1/voices/workspaces/{member_ws['id']}/customers", "POST", {"name": "코드 오류", "customerCode": "123"}, csrf_header, contains="회원사코드")
 member = request(f"/api/v1/voices/workspaces/{member_ws['id']}/customers", "POST", {"name": "Offline 회원사", "customerCode": "100000000001"}, csrf_header)
 assert member["customerCode"] == "100000000001"
+member_search = request(f"/api/v1/voices/workspaces/{member_ws['id']}/customers?q=100000000001&limit=20")["items"]
+assert member_search == [{"id": member["id"], "customerId": member["id"], "name": "Offline 회원사", "customerCode": "100000000001"}], member_search
 expect_http_error(f"/api/v1/voices/workspaces/{member_ws['id']}/customers", "POST", {"name": "중복", "customerCode": "100000000001"}, csrf_header, contains="Offline 회원사")
+same_name_member = request(f"/api/v1/voices/workspaces/{member_ws['id']}/customers", "POST", {"name": "Offline 회원사", "customerCode": "100000000009"}, csrf_header)
+name_matches = request(f"/api/v1/voices/workspaces/{member_ws['id']}/customers?q={urllib.parse.quote('Offline 회원사')}&limit=20")["items"]
+assert {item["customerId"] for item in name_matches} == {member["id"], same_name_member["id"]}, name_matches
 error_type = next(c for c in member_ws["categories"] if c["code"] == "MS_SERVICE_ERROR")
-intake = {"customerId": member["id"], "categoryId": error_type["id"], "title": "Offline E1003", "body": "E1003 발생", "severity": "CRITICAL"}
+intake = {"customerId": member["id"], "categoryId": error_type["id"], "title": "Offline B124", "body": "B124 발생", "severity": "CRITICAL"}
+general_customer = request("/api/v1/customers", "POST", {"name": "영역 밖 고객"}, csrf_header)
+expect_http_error("/api/v1/voices", "POST", {**intake, "customerId": general_customer["id"], "customFields": {"service_type": "IPIN"}}, csrf_header, contains="업무 영역에 등록된 고객")
 expect_http_error("/api/v1/voices", "POST", {**intake, "customFields": {}}, csrf_header, contains="서비스 구분")
-case = request("/api/v1/voices", "POST", {**intake, "customFields": {"service_type": "아이핀", "dev_method": "미확인", "error_code": "E1003"}}, csrf_header)
+case = request("/api/v1/voices", "POST", {**intake, "customFields": {"service_type": "IPIN", "dev_method": "UNKNOWN", "error_code": "B124"}}, csrf_header)
 assert case["slaApplied"] is False and not case.get("responseDueAt") and case["knowledgeStatus"] == "UNREVIEWED"
+other_call, other_headers = authenticated_client(
+    "offline-other-agent",
+    "Offline-Other-Password-2026!",
+    "Offline-Other-Changed-Password-2026!",
+)
+assert member_ws["id"] not in {w["id"] for w in other_call("/api/v1/voices/workspaces")["items"]}
+expect_client_error(other_call, f"/api/v1/voices/{case['id']}")
+expect_client_error(other_call, f"/api/v1/customers/{member['id']}")
+expect_client_error(other_call, f"/api/v1/voices/workspaces/{member_ws['id']}/customers?q=100000000001")
 case = request(f"/api/v1/voices/{case['id']}", "PUT", {"status": "IN_PROGRESS", "version": case["version"]}, csrf_header)
 expect_http_error(f"/api/v1/voices/{case['id']}", "PUT", {"status": "RESOLVED", "resolution": "안내", "version": case["version"]}, csrf_header, contains="원인 근거")
-case = request(f"/api/v1/voices/{case['id']}", "PUT", {"status": "RESOLVED", "resolution": "리턴 URL 재등록", "causeEvidence": "CONFIRMED", "customFields": {"resolver": "회원사 조치"}, "version": case["version"]}, csrf_header)
+expect_http_error(f"/api/v1/voices/{case['id']}", "PUT", {"status": "RESOLVED", "resolution": "안내", "causeEvidence": "CONFIRMED", "customFields": {"resolver": "OUTSIDE"}, "version": case["version"]}, csrf_header, contains="해결 주체")
+case = request(f"/api/v1/voices/{case['id']}", "PUT", {"status": "RESOLVED", "resolution": "리턴 URL 재등록", "causeEvidence": "CONFIRMED", "customFields": {"resolver": "MEMBER"}, "version": case["version"]}, csrf_header)
 assert case["status"] == "RESOLVED" and case["causeEvidence"] == "CONFIRMED"
-assert request("/api/v1/voices/knowledge?q=E1003")["items"] == []
+assert request("/api/v1/voices/knowledge?q=B124")["items"] == []
 assert request(f"/api/v1/voices/summary?workspaceId={member_ws['id']}")["knowledgePending"] == 1
-case = request(f"/api/v1/voices/{case['id']}/knowledge", "PUT", {"knowledgeStatus": "APPROVED", "note": "offline"}, csrf_header)
+agent_call, agent_headers = authenticated_client(
+    "offline-voice-agent",
+    "Offline-Agent-Password-2026!",
+    "Offline-Agent-Changed-Password-2026!",
+)
+assert agent_call(f"/api/v1/voices/{case['id']}")["voice"]["id"] == case["id"]
+try:
+    agent_call(
+        f"/api/v1/voices/{case['id']}/knowledge",
+        "PUT",
+        {"knowledgeStatus": "APPROVED", "note": "담당자 직접 API 시도"},
+        agent_headers,
+    )
+except RuntimeError as exc:
+    assert "voice:knowledge-review" in str(exc), str(exc)
+else:
+    raise AssertionError("a regular voice agent changed the knowledge review status")
+reviewer_call, reviewer_headers = authenticated_client(
+    "offline-voice-reviewer",
+    "Offline-Reviewer-Password-2026!",
+    "Offline-Reviewer-Changed-Password-2026!",
+)
+case = reviewer_call(
+    f"/api/v1/voices/{case['id']}/knowledge",
+    "PUT",
+    {"knowledgeStatus": "APPROVED", "note": "offline reviewer"},
+    reviewer_headers,
+)
 assert case["knowledgeStatus"] == "APPROVED"
-found = request("/api/v1/voices/knowledge?q=E1003")["items"]
-assert [x["voiceNo"] for x in found] == [case["voiceNo"]] and found[0]["fields"]["resolver"] == "회원사 조치"
+found = request("/api/v1/voices/knowledge?q=B124")["items"]
+assert [x["voiceNo"] for x in found] == [case["voiceNo"]] and found[0]["fields"]["resolver"] == "MEMBER"
+field_filter = urllib.parse.quote(json.dumps({"error_code": "B124"}, separators=(",", ":")))
+found_by_field = request(f"/api/v1/voices/knowledge?workspaceId={member_ws['id']}&fieldFilters={field_filter}")["items"]
+assert [x["voiceNo"] for x in found_by_field] == [case["voiceNo"]], found_by_field
 assert len(request("/api/v1/voices/history?customerCode=100000000001")["items"]) == 1
 reopened = request(f"/api/v1/voices/{case['id']}", "PUT", {"status": "IN_PROGRESS", "version": case["version"]}, csrf_header)
-assert reopened["knowledgeStatus"] == "UNREVIEWED" and request("/api/v1/voices/knowledge?q=E1003")["items"] == []
+assert reopened["knowledgeStatus"] == "UNREVIEWED" and request("/api/v1/voices/knowledge?q=B124")["items"] == []
 imported = request(f"/api/v1/voices/workspaces/{member_ws['id']}/customers/import", "POST", {"rows": [{"name": "일괄 1", "customerCode": "100000000002"}, {"name": "기존", "customerCode": "100000000001"}, {"name": "오류", "customerCode": "x"}]}, csrf_header)
 assert (imported["created"], imported["unchanged"], imported["failed"]) == (1, 1, 1), imported
+
+# The same workflow through MCP proves strict schemas remain parseable by
+# Qwen/OpenCode-style JSON-RPC clients and that the advertised customerId can
+# be passed directly to intake. The values below are the approved preview.
+voice_key = request(
+    "/api/v1/me/keys", "POST",
+    {"name": "Offline VOC MCP", "scopes": ["mcp:use", "customer:read", "customer:write", "voice:read", "voice:write"], "channels": ["MCP"]},
+    csrf_header,
+)
+voice_mcp_headers = {
+    "Authorization": "Bearer " + voice_key["secret"],
+    "Accept": "application/json, text/event-stream", "Content-Type": "application/json", "MCP-Protocol-Version": "2025-11-25",
+}
+voice_tools = request("/mcp", "POST", {"jsonrpc": "2.0", "id": 80, "method": "tools/list", "params": {}}, voice_mcp_headers)
+voice_tool_map = {tool["name"]: tool for tool in voice_tools["result"]["tools"]}
+assert {"search_workspace_customers", "file_customer_voice", "record_voice_response", "resolve_customer_voice"}.issubset(voice_tool_map)
+assert voice_tool_map["file_customer_voice"]["annotations"]["readOnlyHint"] is False
+searched = request("/mcp", "POST", {"jsonrpc": "2.0", "id": 81, "method": "tools/call", "params": {
+    "name": "search_workspace_customers", "arguments": {"workspaceId": member_ws["id"], "query": "100000000001"},
+}}, voice_mcp_headers)["result"]
+assert searched["isError"] is False and searched["structuredContent"]["items"][0]["customerId"] == member["id"], searched
+mcp_case_result = request("/mcp", "POST", {"jsonrpc": "2.0", "id": 82, "method": "tools/call", "params": {
+    "name": "file_customer_voice", "arguments": {"customerId": member["id"], "category": "MS_SERVICE_ERROR", "title": "MCP B124", "body": "B124 재현", "fields": {"service_type": "IPIN", "error_code": "B124"}},
+}}, voice_mcp_headers)["result"]
+assert mcp_case_result["isError"] is False, mcp_case_result
+mcp_case = mcp_case_result["structuredContent"]
+assert mcp_case["customFields"]["dev_method"] == "UNKNOWN" and not mcp_case.get("responseDueAt"), mcp_case
+recorded = request("/mcp", "POST", {"jsonrpc": "2.0", "id": 83, "method": "tools/call", "params": {
+    "name": "record_voice_response", "arguments": {"id": mcp_case["id"], "eventType": "CUSTOMER_CONTACT", "note": "담당자 승인 응대"},
+}}, voice_mcp_headers)["result"]
+assert recorded["isError"] is False, recorded
+resolved = request("/mcp", "POST", {"jsonrpc": "2.0", "id": 84, "method": "tools/call", "params": {
+    "name": "resolve_customer_voice", "arguments": {"id": mcp_case["id"], "resolution": "설정 재적용", "causeEvidence": "UNIDENTIFIED", "fields": {"resolver": "MEMBER"}, "note": "담당자 승인 해결"},
+}}, voice_mcp_headers)["result"]
+assert resolved["isError"] is False and resolved["structuredContent"]["status"] == "RESOLVED", resolved
 # An isolated workspace's requests and members never feed the sales signals.
 request("/api/v1/intelligence/run", "POST", {}, csrf_header)
 assert not request(f"/api/v1/customers/{member['id']}/intelligence").get("signals")

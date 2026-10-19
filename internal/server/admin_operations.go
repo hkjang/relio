@@ -409,7 +409,7 @@ func (s *Server) customFields(w http.ResponseWriter, r *http.Request) {
 		s.serviceError(w, r, err)
 		return
 	}
-	rows, err := s.DB.Query(r.Context(), `SELECT f.id,f.entity_type,f.field_key,f.label,f.field_type,f.required,f.options,f.active,f.display_order,f.updated_at,
+	rows, err := s.DB.Query(r.Context(), `SELECT f.id,f.entity_type,f.field_key,f.label,f.field_type,f.required,f.options,f.option_labels,f.default_value,f.active,f.display_order,f.updated_at,
 		COALESCE(f.workspace_id::text,''),COALESCE(w.name,''),COALESCE(f.phase,''),COALESCE(f.help_text,'')
 		FROM custom_field_definitions f LEFT JOIN voice_workspaces w ON w.id=f.workspace_id ORDER BY f.entity_type,f.display_order,f.label`)
 	if err != nil {
@@ -421,17 +421,23 @@ func (s *Server) customFields(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, entity, key, label, typ, workspaceID, workspaceName, phase, help string
 		var required, active bool
-		var options []byte
+		var options, optionLabels, defaultValue []byte
 		var order int
 		var updated time.Time
-		if err = rows.Scan(&id, &entity, &key, &label, &typ, &required, &options, &active, &order, &updated, &workspaceID, &workspaceName, &phase, &help); err != nil {
+		if err = rows.Scan(&id, &entity, &key, &label, &typ, &required, &options, &optionLabels, &defaultValue, &active, &order, &updated, &workspaceID, &workspaceName, &phase, &help); err != nil {
 			s.serviceError(w, r, err)
 			return
 		}
 		var opts any
+		var labels map[string]string
+		var defaultVal any
 		_ = json.Unmarshal(options, &opts)
+		_ = json.Unmarshal(optionLabels, &labels)
+		if len(defaultValue) > 0 {
+			_ = json.Unmarshal(defaultValue, &defaultVal)
+		}
 		items = append(items, map[string]any{"id": id, "entityType": entity, "key": key, "label": label, "type": typ, "required": required, "options": opts, "active": active, "displayOrder": order, "updatedAt": updated,
-			"workspaceId": workspaceID, "workspaceName": workspaceName, "phase": phase, "helpText": help})
+			"optionLabels": labels, "defaultValue": defaultVal, "workspaceId": workspaceID, "workspaceName": workspaceName, "phase": phase, "helpText": help})
 	}
 	if err = rows.Err(); err != nil {
 		s.serviceError(w, r, err)
@@ -446,16 +452,18 @@ func (s *Server) createCustomField(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		EntityType   string `json:"entityType"`
-		Key          string `json:"key"`
-		Label        string `json:"label"`
-		Type         string `json:"type"`
-		Required     bool   `json:"required"`
-		Options      any    `json:"options"`
-		DisplayOrder int    `json:"displayOrder"`
-		WorkspaceID  string `json:"workspaceId"`
-		Phase        string `json:"phase"`
-		HelpText     string `json:"helpText"`
+		EntityType   string            `json:"entityType"`
+		Key          string            `json:"key"`
+		Label        string            `json:"label"`
+		Type         string            `json:"type"`
+		Required     bool              `json:"required"`
+		Options      any               `json:"options"`
+		OptionLabels map[string]string `json:"optionLabels"`
+		DefaultValue any               `json:"defaultValue"`
+		DisplayOrder int               `json:"displayOrder"`
+		WorkspaceID  string            `json:"workspaceId"`
+		Phase        string            `json:"phase"`
+		HelpText     string            `json:"helpText"`
 	}
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
@@ -471,8 +479,12 @@ func (s *Server) createCustomField(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := ids.New()
-	raw, _ := json.Marshal(in.Options)
-	_, err = s.DB.Exec(r.Context(), `INSERT INTO custom_field_definitions(id,entity_type,field_key,label,field_type,required,options,display_order,created_by,workspace_id,phase,help_text) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, id, strings.ToUpper(in.EntityType), strings.ToLower(in.Key), in.Label, in.Type, in.Required, raw, in.DisplayOrder, p.UserID, nullableID(in.WorkspaceID), phase, nullableID(in.HelpText))
+	raw, labelsRaw, defaultRaw, err := customFieldValues(in.Type, in.Options, in.OptionLabels, in.DefaultValue)
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
+	_, err = s.DB.Exec(r.Context(), `INSERT INTO custom_field_definitions(id,entity_type,field_key,label,field_type,required,options,option_labels,default_value,display_order,created_by,workspace_id,phase,help_text) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, id, strings.ToUpper(in.EntityType), strings.ToLower(in.Key), in.Label, in.Type, in.Required, raw, labelsRaw, defaultRaw, in.DisplayOrder, p.UserID, nullableID(in.WorkspaceID), phase, nullableID(in.HelpText))
 	if err != nil {
 		s.serviceError(w, r, err)
 		return

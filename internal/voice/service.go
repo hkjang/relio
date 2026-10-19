@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -300,6 +301,22 @@ func (s *Service) List(ctx context.Context, p *auth.Principal, q Query) ([]Voice
 	if q.Limit < 1 || q.Limit > 200 {
 		q.Limit = 50
 	}
+	if strings.TrimSpace(q.WorkspaceID) != "" {
+		w, err := s.workspace(ctx, p, q.WorkspaceID)
+		if err != nil {
+			return nil, err
+		}
+		q.WorkspaceID = w.ID
+	}
+	if strings.TrimSpace(q.CustomerID) != "" {
+		customer, err := s.CRM.GetCustomer(ctx, p, q.CustomerID)
+		if err != nil {
+			return nil, err
+		}
+		if q.WorkspaceID != "" && customer.HomeWorkspaceID != q.WorkspaceID {
+			return nil, errors.New("선택한 고객은 이 업무 영역에 등록된 고객이 아닙니다")
+		}
+	}
 	query := `SELECT ` + voiceColumns + ` ` + voiceJoins + ` WHERE ` + VisibleSQL(p, "v") + `
 		AND ($4='' OR v.customer_id::text=$4)
 		AND ($5='' OR v.status=$5)
@@ -510,6 +527,13 @@ func (s *Service) Create(ctx context.Context, p *auth.Principal, in Input, m crm
 	if err != nil {
 		return Voice{}, err
 	}
+	if intake.workspace != nil {
+		if customer.HomeWorkspaceID != intake.workspace.ID {
+			return Voice{}, errors.New("선택한 고객은 이 업무 영역에 등록된 고객이 아닙니다. 업무 영역 고객 검색 결과의 customerId를 사용하세요")
+		}
+	} else if customer.HomeWorkspaceID != "" {
+		return Voice{}, errors.New("부서 전용 고객은 해당 업무 영역의 요청 유형으로만 접수할 수 있습니다")
+	}
 	owner := in.OwnerID
 	if owner == "" || (!p.IsBootstrap && !p.Has("voice:manage")) {
 		owner = p.UserID
@@ -642,27 +666,49 @@ func (s *Service) Update(ctx context.Context, p *auth.Principal, id string, in U
 		return Voice{}, err
 	}
 	fieldPatch := map[string]any{}
+	mergedFields := map[string]any{}
+	for k, v := range before.CustomFields {
+		mergedFields[k] = v
+	}
 	if len(in.CustomFields) > 0 {
 		if len(intake.fields) == 0 && before.WorkspaceID == "" {
 			fieldPatch = in.CustomFields
 		} else if fieldPatch, err = validateFieldValues(intake.fields, "", in.CustomFields, false); err != nil {
 			return Voice{}, err
 		}
+		for k, v := range fieldPatch {
+			mergedFields[k] = v
+		}
+		patchedPhases := map[string]bool{}
+		for key := range in.CustomFields {
+			for _, definition := range intake.fields {
+				if definition.Key == key {
+					patchedPhases[definition.Phase] = true
+				}
+			}
+		}
+		for phase := range patchedPhases {
+			defaults, requiredErr := requiredFieldDefaults(intake.fields, phase, mergedFields)
+			if requiredErr != nil {
+				return Voice{}, requiredErr
+			}
+			for k, v := range defaults {
+				fieldPatch[k] = v
+				mergedFields[k] = v
+			}
+		}
 	}
 	resolving := status == "RESOLVED" && before.Status != "RESOLVED"
 	if resolving {
-		merged := map[string]any{}
-		for k, v := range before.CustomFields {
-			merged[k] = v
-		}
-		for k, v := range fieldPatch {
-			merged[k] = v
-		}
 		// Required resolution fields are checked on the values the case will
 		// hold, so a value recorded earlier still counts.
 		resolutionFields := phaseFields(intake.fields, "RESOLUTION")
-		if _, err = validateFieldValues(resolutionFields, "RESOLUTION", onlyDefined(resolutionFields, merged), true); err != nil {
-			return Voice{}, err
+		validatedResolution, validationErr := validateFieldValues(resolutionFields, "RESOLUTION", onlyDefined(resolutionFields, mergedFields), true)
+		if validationErr != nil {
+			return Voice{}, validationErr
+		}
+		for k, v := range validatedResolution {
+			fieldPatch[k] = v
 		}
 		if intake.workspace != nil && intake.workspace.KnowledgeGate && coalesce(evidence, before.CauseEvidence) == "" {
 			return Voice{}, errors.New("원인 근거(확인·추정·미특정)를 선택해야 해결로 변경할 수 있습니다")
@@ -800,6 +846,45 @@ func onlyDefined(defs []Field, values map[string]any) map[string]any {
 	return out
 }
 
+// requiredFieldDefaults checks presence without re-validating stored legacy
+// choices. A department may retire an intake option after old cases used it;
+// editing a resolution field must not make those cases impossible to close.
+// Submitted values are still validated by validateFieldValues before this.
+func requiredFieldDefaults(defs []Field, phase string, values map[string]any) (map[string]any, error) {
+	defaults := map[string]any{}
+	missing := []string{}
+	for _, f := range defs {
+		if f.Phase != phase {
+			continue
+		}
+		value, present := values[f.Key]
+		if text, ok := value.(string); ok && strings.TrimSpace(text) == "" {
+			present = false
+		}
+		if present && value != nil {
+			continue
+		}
+		if f.DefaultValue != nil {
+			clean, problem := fieldValue(f, f.DefaultValue)
+			if problem != "" {
+				return nil, fmt.Errorf("%s 기본값 설정이 올바르지 않습니다: %s", f.Label, problem)
+			}
+			if clean != nil {
+				defaults[f.Key] = clean
+				continue
+			}
+		}
+		if f.Required {
+			missing = append(missing, fmt.Sprintf("%s을(를) 입력해야 합니다", f.Label))
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, errors.New(strings.Join(missing, " / "))
+	}
+	return defaults, nil
+}
+
 func coalesce(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
@@ -870,6 +955,22 @@ type Bucket struct {
 func (s *Service) Summary(ctx context.Context, p *auth.Principal, customerID, workspaceID string) (Summary, error) {
 	if err := auth.Require(p, "voice:read"); err != nil {
 		return Summary{}, err
+	}
+	if strings.TrimSpace(workspaceID) != "" {
+		w, err := s.workspace(ctx, p, workspaceID)
+		if err != nil {
+			return Summary{}, err
+		}
+		workspaceID = w.ID
+	}
+	if strings.TrimSpace(customerID) != "" {
+		customer, err := s.CRM.GetCustomer(ctx, p, customerID)
+		if err != nil {
+			return Summary{}, err
+		}
+		if workspaceID != "" && customer.HomeWorkspaceID != workspaceID {
+			return Summary{}, errors.New("선택한 고객은 이 업무 영역에 등록된 고객이 아닙니다")
+		}
 	}
 	var out Summary
 	err := s.DB.QueryRow(ctx, `SELECT

@@ -11,7 +11,8 @@ import { parseMemberList } from '../memberList'
 
 export type VoiceField = {
   id: string; key: string; label: string; type: string; required: boolean
-  options?: string[]; phase: 'INTAKE' | 'RESOLUTION'; helpText?: string
+  options?: string[]; optionLabels?: Record<string, string>; defaultValue?: unknown
+  phase: 'INTAKE' | 'RESOLUTION'; helpText?: string
 }
 export type VoiceCategory = {
   id: string; code: string; name: string; voiceType: string
@@ -21,6 +22,7 @@ export type VoiceWorkspace = {
   id: string; code: string; name: string; description?: string
   isolated: boolean; knowledgeGate: boolean; slaEnabled: boolean
   customerCodeLabel?: string; customerCodePattern?: string
+  customerCodeUniqueScope: 'GLOBAL' | 'WORKSPACE'
   organizationId?: string; organizationName?: string; active: boolean; displayOrder: number
   fields: VoiceField[]; categories: VoiceCategory[]
 }
@@ -46,14 +48,14 @@ export function FieldInputs({ fields, phase, values }: { fields: VoiceField[]; p
   const list = fields.filter(f => f.phase === phase)
   if (!list.length) return null
   return <>{list.map(f => {
-    const current = values?.[f.key]
+    const current = values && Object.prototype.hasOwnProperty.call(values, f.key) ? values[f.key] : f.defaultValue
     const name = `field.${f.key}`
     const title = <>{f.label}{f.required ? ' *' : ''}</>
     let input
     if (f.type === 'Select') {
       input = <select name={name} required={f.required} defaultValue={typeof current === 'string' ? current : ''}>
         <option value="">{f.required ? '선택하세요' : '선택 안 함'}</option>
-        {(f.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+        {(f.options || []).map(o => <option key={o} value={o}>{f.optionLabels?.[o] || o}{f.optionLabels?.[o] && f.optionLabels[o] !== o ? ` (${o})` : ''}</option>)}
       </select>
     } else if (f.type === 'Textarea') {
       input = <textarea name={name} rows={3} required={f.required} defaultValue={typeof current === 'string' ? current : ''} />
@@ -104,11 +106,15 @@ export function CustomerPicker({ workspace, value, onChange, notify, canRegister
     if (!open) return
     const mine = ++seq.current
     const timer = setTimeout(() => {
-      api<{ items: Customer[] }>('/api/v1/customers?limit=20' + (q ? '&q=' + encodeURIComponent(q) : ''))
+	  if (!q) { setResults([]); return }
+	  const endpoint = workspace
+		? `/api/v1/voices/workspaces/${workspace.id}/customers?limit=20&q=${encodeURIComponent(q)}`
+		: `/api/v1/customers?limit=20&q=${encodeURIComponent(q)}`
+      api<{ items: Customer[] }>(endpoint)
         .then(v => { if (mine === seq.current) setResults(v.items) }).catch(() => {})
     }, q ? 200 : 0)
     return () => clearTimeout(timer)
-  }, [query, open])
+  }, [query, open, workspace?.id])
 
   // The picker lives inside the intake form, and a form cannot contain
   // another form: the browser drops the inner one and "register" would submit

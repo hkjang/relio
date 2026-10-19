@@ -269,6 +269,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/voices/workspaces", s.requireAuth(http.HandlerFunc(s.voiceWorkspaces), false))
 	mux.Handle("GET /api/v1/voices/knowledge", s.requireAuth(http.HandlerFunc(s.searchVoiceKnowledge), false))
 	mux.Handle("GET /api/v1/voices/history", s.requireAuth(http.HandlerFunc(s.voiceHistory), false))
+	mux.Handle("GET /api/v1/voices/workspaces/{id}/customers", s.requireAuth(http.HandlerFunc(s.searchWorkspaceCustomers), false))
 	mux.Handle("POST /api/v1/voices/workspaces/{id}/customers", s.requireAuth(http.HandlerFunc(s.quickRegisterCustomer), false))
 	mux.Handle("POST /api/v1/voices/workspaces/{id}/customers/import", s.requireAuth(http.HandlerFunc(s.importWorkspaceCustomers), false))
 	mux.Handle("GET /api/v1/reports", s.requireAuth(http.HandlerFunc(s.reports), false))

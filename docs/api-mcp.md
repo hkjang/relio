@@ -92,6 +92,7 @@ OAuth 로 연결한 에이전트의 도구 범위는 **사용자 Role 권한 ∩
 |---|---|---|
 | `search_voice_knowledge` | `query` | 해결·종결 건에서 오류코드·증상을 찾습니다. 기본은 `knowledgeStatus=APPROVED`(반영) 건만. `includeUnreviewed: true` 면 미검토·검토중도 포함하며 '제외' 건은 어떤 경우에도 반환하지 않습니다. `fields`(항목값 일치), `causeEvidence` 로 좁힙니다. 결과: `title`, `customerSaid`(원문), `rootCause`, `resolution`, `causeEvidence`, `knowledgeStatus`, `fields`(해결 주체 포함) |
 | `get_customer_voice_history` | `customerCode` 또는 `customerId` | 그 고객의 종결 건 전체(해결·종결·반려), 최신순, `limit` 최대 200. 지식 게이트 미적용, 상태 필드는 포함 |
+| `search_workspace_customers` | `workspaceId`, `query` | 선택한 업무 영역 안에서 회원사명·회원사코드를 검색하고 `customerId`, `name`, `customerCode`를 반환. 이름이 여러 건이면 모든 후보를 반환하며 임의 선택 금지 |
 | `file_customer_voice` | `title` | 접수. `customerCode` 로 고객 지정, `category` 에 유형 이름·코드·ID, `fields` 에 접수 항목 |
 | `record_voice_response` | `id`, `note` | 처리 이력 추가(append-only). `eventType`: `CUSTOMER_CONTACT`(고객 응대) · `COMMENT`(내부 메모, 회고 요약) · `ESCALATED`(상위 보고) |
 | `resolve_customer_voice` | `id`, `resolution` | 해결 처리. `causeEvidence`(지식 게이트 영역은 필수), `rootCause`, `fields`(해결 항목). 접수 상태면 처리 중을 거쳐 해결로 바꾸며 두 단계 모두 이력에 남습니다 |
@@ -101,7 +102,7 @@ OAuth 로 연결한 에이전트의 도구 범위는 **사용자 Role 권한 ∩
 
 **지식 반영 상태를 바꾸는 도구는 없습니다.** REST `PUT /api/v1/voices/{id}/knowledge` 도 `voice:knowledge-review` 권한과 **화면 세션** 을 요구하며, 개인 연동 키·OAuth 토큰으로는 거부됩니다.
 
-REST: `GET /api/v1/voices/workspaces`, `GET /api/v1/voices/knowledge`(`q`, `fieldFilters` JSON, `causeEvidence`, `includeUnreviewed`), `GET /api/v1/voices/history`, `POST /api/v1/voices/workspaces/{id}/customers`, `POST /api/v1/voices/workspaces/{id}/customers/import`. 목록 `GET /api/v1/voices` 는 `workspaceId`, `categoryId`, `knowledgeStatus`, `reviewPending`, `minAgeDays` 필터를 받습니다.
+REST: `GET /api/v1/voices/workspaces`, `GET /api/v1/voices/knowledge`(`q`, `fieldFilters` JSON, `causeEvidence`, `includeUnreviewed`), `GET /api/v1/voices/history`, `GET /api/v1/voices/workspaces/{id}/customers?q=...`, `POST /api/v1/voices/workspaces/{id}/customers`, `POST /api/v1/voices/workspaces/{id}/customers/import`. 목록 `GET /api/v1/voices` 는 `workspaceId`, `categoryId`, `knowledgeStatus`, `reviewPending`, `minAgeDays` 필터를 받습니다.
 
 ---
 

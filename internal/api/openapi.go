@@ -104,7 +104,7 @@ func apiPaths() map[string]any {
 		"/voices/workspaces":                             get("사용 가능한 업무 영역과 유형·항목 정의", "voice:read"),
 		"/voices/knowledge":                              get("유사 사례 검색(기본: 지식 반영 건만)", "voice:read"),
 		"/voices/history":                                get("고객(회원사)별 종결 요청 이력", "voice:read"),
-		"/voices/workspaces/{id}/customers":              map[string]any{"post": operation("업무 영역 고객 간이 등록(고객사명·고객 코드)", "voice:write")},
+		"/voices/workspaces/{id}/customers":              methods("업무 영역 고객명·고객 코드 검색 및 간이 등록", "customer:read + voice:read", "customer:write + voice:write"),
 		"/voices/workspaces/{id}/customers/import":       map[string]any{"post": operation("업무 영역 고객 일괄 등록", "voice:write")},
 		"/admin/voice-categories":                        methods("요청 유형 조회 및 생성", "admin:read", "admin:write"),
 		"/admin/voice-workspaces":                        methods("VOC 업무 영역 조회 및 생성", "admin:read", "admin:write"),

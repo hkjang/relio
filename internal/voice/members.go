@@ -22,6 +22,63 @@ type QuickCustomerInput struct {
 	CustomerCode string `json:"customerCode"`
 }
 
+// WorkspaceCustomer is intentionally small: an agent needs the stable ID it
+// can pass to intake, and the two values a handler uses to disambiguate it.
+type WorkspaceCustomer struct {
+	ID           string `json:"id"`
+	CustomerID   string `json:"customerId"`
+	Name         string `json:"name"`
+	CustomerCode string `json:"customerCode"`
+}
+
+func memberCodeScope(w Workspace) string {
+	if w.CustomerCodeUniqueScope == "WORKSPACE" {
+		return w.ID
+	}
+	return "GLOBAL"
+}
+
+// SearchWorkspaceCustomers searches only customers registered in the chosen
+// workspace. It returns every matching name (up to the explicit limit), so a
+// caller can never silently choose the first of multiple same-name members.
+func (s *Service) SearchWorkspaceCustomers(ctx context.Context, p *auth.Principal, workspaceID, query string, limit int) ([]WorkspaceCustomer, error) {
+	if err := auth.Require(p, "customer:read"); err != nil {
+		return nil, err
+	}
+	w, err := s.workspace(ctx, p, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	workspaceID = w.ID
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, errors.New("회원사명 또는 회원사코드를 입력해야 합니다")
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	pattern := crm.SearchPattern(query)
+	rows, err := s.DB.Query(ctx, `SELECT c.id,c.name,COALESCE(c.customer_code,'') FROM customers c
+		WHERE c.home_workspace_id=$4 AND c.active AND c.merged_into_id IS NULL AND `+crm.CustomerScopeSQL(p, "c")+`
+		AND (lower(c.name) LIKE $5 ESCAPE '\' OR lower(COALESCE(c.customer_code,'')) LIKE $5 ESCAPE '\')
+		ORDER BY (lower(COALESCE(c.customer_code,''))=lower($6)) DESC,(lower(c.name)=lower($6)) DESC,c.name,c.id LIMIT $7`,
+		p.DataScope, p.UserID, orgArg(p), workspaceID, pattern, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []WorkspaceCustomer{}
+	for rows.Next() {
+		var item WorkspaceCustomer
+		if err = rows.Scan(&item.ID, &item.Name, &item.CustomerCode); err != nil {
+			return nil, err
+		}
+		item.CustomerID = item.ID
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 // codeRule returns the label and compiled pattern a workspace uses for the
 // customer code; a nil pattern means any code is accepted.
 func codeRule(w Workspace) (string, *regexp.Regexp, error) {
@@ -73,7 +130,12 @@ func (s *Service) QuickRegister(ctx context.Context, p *auth.Principal, workspac
 	if err != nil {
 		return crm.Customer{}, err
 	}
-	return s.CRM.CreateCustomerIn(ctx, p, crm.CustomerInput{Name: in.Name, CustomerCode: in.CustomerCode, CustomerType: "CUSTOMER"}, w.OrganizationID, w.ID, m)
+	if in.CustomerCode != "" {
+		if existing, lookupErr := s.CRM.CustomerByCodeIn(ctx, p, w.ID, in.CustomerCode); lookupErr == nil {
+			return crm.Customer{}, fmt.Errorf("%w: 고객 코드 %s는 이미 '%s' 고객에 등록되어 있습니다", crm.ErrCustomerCodeTaken, in.CustomerCode, existing.Name)
+		}
+	}
+	return s.CRM.CreateCustomerIn(ctx, p, crm.CustomerInput{Name: in.Name, CustomerCode: in.CustomerCode, CustomerType: "CUSTOMER"}, w.OrganizationID, w.ID, memberCodeScope(w), m)
 }
 
 type ImportRow struct {
@@ -145,7 +207,7 @@ func (s *Service) ImportCustomers(ctx context.Context, p *auth.Principal, worksp
 				continue
 			}
 			seen[clean.CustomerCode] = line
-			if existing, err := s.CRM.CustomerByCode(ctx, p, clean.CustomerCode); err == nil {
+			if existing, err := s.CRM.CustomerByCodeIn(ctx, p, w.ID, clean.CustomerCode); err == nil {
 				item.CustomerID = existing.ID
 				if updateNames && existing.Name != clean.Name {
 					in := crm.CustomerInput{Name: clean.Name, RegistrationNo: existing.RegistrationNo, CustomerCode: existing.CustomerCode,
@@ -167,7 +229,7 @@ func (s *Service) ImportCustomers(ctx context.Context, p *auth.Principal, worksp
 				continue
 			}
 		}
-		created, err := s.CRM.CreateCustomerIn(ctx, p, crm.CustomerInput{Name: clean.Name, CustomerCode: clean.CustomerCode, CustomerType: "CUSTOMER"}, w.OrganizationID, w.ID, m)
+		created, err := s.CRM.CreateCustomerIn(ctx, p, crm.CustomerInput{Name: clean.Name, CustomerCode: clean.CustomerCode, CustomerType: "CUSTOMER"}, w.OrganizationID, w.ID, memberCodeScope(w), m)
 		if err != nil {
 			if errors.Is(err, crm.ErrCustomerCodeTaken) {
 				// Taken by a customer this user cannot see: another department's.

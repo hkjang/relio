@@ -124,6 +124,23 @@ func (s *Service) SearchKnowledge(ctx context.Context, p *auth.Principal, q Know
 	if q.Limit < 1 || q.Limit > 50 {
 		q.Limit = 10
 	}
+	filterDefinitions := []Field{}
+	if strings.TrimSpace(q.WorkspaceID) != "" {
+		w, err := s.workspace(ctx, p, q.WorkspaceID)
+		if err != nil {
+			return nil, err
+		}
+		q.WorkspaceID = w.ID
+		filterDefinitions = w.Fields
+	} else if len(q.Fields) > 0 {
+		workspaces, err := s.Workspaces(ctx, p, false)
+		if err != nil {
+			return nil, err
+		}
+		for _, w := range workspaces {
+			filterDefinitions = append(filterDefinitions, w.Fields...)
+		}
+	}
 	states := []string{"APPROVED"}
 	if q.IncludeUnreviewed {
 		states = []string{"APPROVED", "IN_REVIEW", "UNREVIEWED"}
@@ -134,15 +151,40 @@ func (s *Service) SearchKnowledge(ctx context.Context, p *auth.Principal, q Know
 	}
 	filters := map[string]string{}
 	for k, v := range q.Fields {
-		if strings.TrimSpace(v) != "" {
-			filters[k] = strings.TrimSpace(v)
+		value := strings.TrimSpace(v)
+		if value == "" {
+			continue
 		}
+		known, valid := false, false
+		problems := []string{}
+		for _, definition := range filterDefinitions {
+			if definition.Key != k {
+				continue
+			}
+			known = true
+			if _, problem := fieldValue(definition, value); problem == "" {
+				valid = true
+				break
+			} else {
+				problems = append(problems, problem)
+			}
+		}
+		if !known {
+			return nil, fmt.Errorf("검색 조건에 정의되지 않은 항목이 있습니다: %s", k)
+		}
+		if !valid {
+			return nil, errors.New(strings.Join(problems, " / "))
+		}
+		filters[k] = value
 	}
 	fieldFilter, _ := json.Marshal(filters)
 	args := []any{p.DataScope, p.UserID, orgArg(p), states, q.WorkspaceID, evidence, string(fieldFilter)}
 	// Every term must appear somewhere; where it appears decides the order.
 	// An error code usually lives in a field or the title, so those weigh most.
-	match, score := []string{}, []string{"0"}
+	// PostgreSQL reads a bare ORDER BY 0 as a result-column position. Cast the
+	// baseline score so a field-only search (no free-text terms) orders by a
+	// numeric constant instead of failing with "position 0".
+	match, score := []string{}, []string{"0::integer"}
 	for i, term := range strings.Fields(q.Query) {
 		if i == 8 {
 			break
@@ -243,11 +285,18 @@ func (s *Service) History(ctx context.Context, p *auth.Principal, customerID, cu
 	if limit < 1 || limit > 200 {
 		limit = 30
 	}
+	if strings.TrimSpace(workspaceID) != "" {
+		w, err := s.workspace(ctx, p, workspaceID)
+		if err != nil {
+			return CustomerHistory{}, err
+		}
+		workspaceID = w.ID
+	}
 	var customer crm.Customer
 	var err error
 	switch {
 	case strings.TrimSpace(customerCode) != "":
-		customer, err = s.CRM.CustomerByCode(ctx, p, customerCode)
+		customer, err = s.CRM.CustomerByCodeIn(ctx, p, workspaceID, customerCode)
 	case strings.TrimSpace(customerID) != "":
 		customer, err = s.CRM.GetCustomer(ctx, p, customerID)
 	default:
@@ -255,6 +304,9 @@ func (s *Service) History(ctx context.Context, p *auth.Principal, customerID, cu
 	}
 	if err != nil {
 		return CustomerHistory{}, err
+	}
+	if workspaceID != "" && customer.HomeWorkspaceID != workspaceID {
+		return CustomerHistory{}, errors.New("선택한 고객은 이 업무 영역에 등록된 고객이 아닙니다")
 	}
 	rows, err := s.DB.Query(ctx, `SELECT v.id,v.voice_no,v.occurred_at,v.title,COALESCE(cat.name,''),v.status,
 		COALESCE(v.root_cause,''),COALESCE(v.cause_evidence,''),v.knowledge_status,v.custom_fields,v.resolved_at
