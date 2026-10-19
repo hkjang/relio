@@ -33,6 +33,7 @@ jobs:
           npm --prefix web ci
           npm --prefix web audit --audit-level=high
           npm --prefix web run typecheck
+          npm --prefix web test
           npm --prefix web run build
           go test ./...
           go vet ./...

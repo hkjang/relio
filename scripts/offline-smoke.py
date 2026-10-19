@@ -1105,6 +1105,15 @@ expect_http_error("/api/v1/voices", "POST", {**intake, "customerId": general_cus
 expect_http_error("/api/v1/voices", "POST", {**intake, "customFields": {}}, csrf_header, contains="서비스 구분")
 case = request("/api/v1/voices", "POST", {**intake, "customFields": {"service_type": "IPIN", "dev_method": "UNKNOWN", "error_code": "B124"}}, csrf_header)
 assert case["slaApplied"] is False and not case.get("responseDueAt") and case["knowledgeStatus"] == "UNREVIEWED"
+# Manual phase-specific editing: optional fields clear, defaults are not
+# silently restored, required fields cannot be cleared, and reload agrees.
+case = request(f"/api/v1/voices/{case['id']}", "PUT", {"customFields": {"error_code": None, "dev_method": None}, "version": case["version"]}, csrf_header)
+assert case["customFields"].get("error_code") is None and case["customFields"].get("dev_method") is None, case
+reloaded = request(f"/api/v1/voices/{case['id']}")["voice"]
+assert reloaded["customFields"].get("error_code") is None and reloaded["customFields"].get("dev_method") is None, reloaded
+expect_http_error(f"/api/v1/voices/{case['id']}", "PUT", {"customFields": {"service_type": None}, "version": case["version"]}, csrf_header, contains="서비스 구분")
+case = request(f"/api/v1/voices/{case['id']}", "PUT", {"customFields": {"error_code": "B124"}, "version": case["version"]}, csrf_header)
+assert case["customFields"]["service_type"] == "IPIN" and case["customFields"].get("dev_method") is None, case
 other_call, other_headers = authenticated_client(
     "offline-other-agent",
     "Offline-Other-Password-2026!",

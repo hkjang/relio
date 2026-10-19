@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { DataTable } from '../components/DataTable'
+import { timestamp } from '../table'
 import { api, date, relative } from '../api'
 import { User, Version } from '../types'
 import Layout, { Empty, Spinner, Status, navigate, rowProps } from '../components/Layout'
@@ -76,33 +78,23 @@ function IntelligenceCenter(props: Props) {
 
     {tab === 'risks'
       ? (!risks ? <Spinner /> : risks.length
-        ? <section className="panel table-panel"><table className="intel-table"><thead><tr>
-          <th className="col-score">점수</th><th className="col-severity">심각도</th><th>위험</th>
-          <th className="col-account">고객</th><th className="col-type">유형</th><th className="col-when">감지</th>
-        </tr></thead><tbody>
-          {risks.map(risk => <tr key={risk.id} {...rowProps(() => navigate('/app/customers/' + risk.accountId))}>
+        ? <section className="panel table-panel"><DataTable rows={risks} label="고객 위험" loadedLimit={200} searchValue={r=>[r.title,r.accountName,r.description].join(' ')} columns={[{key:'score',label:'점수',value:r=>r.riskScore,align:'right',initialDirection:'desc'},{key:'severity',label:'심각도',value:r=>['LOW','MEDIUM','HIGH','CRITICAL'].indexOf(r.severity),initialDirection:'desc'},{key:'title',label:'위험',value:r=>r.title},{key:'account',label:'고객',value:r=>r.accountName},{key:'type',label:'유형',value:r=>label(r.riskType)},{key:'date',label:'감지',value:r=>timestamp(r.detectedAt),initialDirection:'desc'}]} renderRow={risk => <tr key={risk.id} {...rowProps(() => navigate('/app/customers/' + risk.accountId))}>
             <td><span className={`score-pill tone-${severityTone(risk.severity)}`}>{risk.riskScore}</span></td>
             <td><Status value={risk.severity} /></td>
             <td className="intel-cell"><b>{risk.title}</b><small>{risk.description}</small></td>
             <td>{risk.accountName}</td>
             <td><Status value={risk.riskType} /></td>
             <td>{relative(risk.detectedAt)}</td>
-          </tr>)}
-        </tbody></table></section>
+          </tr>} /></section>
         : <Empty icon="◇" title="감지된 위험이 없습니다" description={status ? '현재 담당 범위의 모든 고객이 정상 범위입니다.' : '아직 분석이 실행되지 않았습니다.'} />)
       : (!signals ? <Spinner /> : signals.length
-        ? <section className="panel table-panel"><table className="intel-table"><thead><tr>
-          <th className="col-severity">심각도</th><th>신호</th><th className="col-account">고객</th>
-          <th className="col-type">유형</th><th className="col-when">감지</th>
-        </tr></thead><tbody>
-          {signals.map(signal => <tr key={signal.id} {...rowProps(() => navigate('/app/customers/' + signal.accountId))}>
+        ? <section className="panel table-panel"><DataTable rows={signals} label="고객 신호" loadedLimit={200} searchValue={s=>[s.title,s.accountName,s.description].join(' ')} columns={[{key:'severity',label:'심각도',value:s=>['LOW','MEDIUM','HIGH','CRITICAL'].indexOf(s.severity),initialDirection:'desc'},{key:'title',label:'신호',value:s=>s.title},{key:'account',label:'고객',value:s=>s.accountName},{key:'type',label:'유형',value:s=>label(s.signalType)},{key:'date',label:'감지',value:s=>timestamp(s.detectedAt),initialDirection:'desc'}]} renderRow={signal => <tr key={signal.id} {...rowProps(() => navigate('/app/customers/' + signal.accountId))}>
             <td><Status value={signal.severity} /></td>
             <td className="intel-cell"><b>{signal.title}</b><small>{signal.description}</small></td>
             <td>{signal.accountName}</td>
             <td><Status value={signal.signalType} /></td>
             <td>{relative(signal.detectedAt)}</td>
-          </tr>)}
-        </tbody></table></section>
+          </tr>} /></section>
         : <Empty icon="◇" title="감지된 신호가 없습니다" description="접촉 공백, 단계 정체, 계약 만료 신호가 모두 정상 범위입니다." />)}
   </Layout>
 }

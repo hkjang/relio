@@ -1,4 +1,4 @@
-import React, { Fragment, ReactNode, useEffect, useRef, useState } from 'react'
+import React, { Fragment, ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { initials, label } from '../labels'
 import { User, Version } from '../types'
@@ -14,6 +14,15 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
   const [profileOpen, setProfileOpen] = useState(false)
   const [quickOpen, setQuickOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [mobile, setMobile] = useState(false)
+  const closeMenu = useCallback(() => setMenuOpen(false), [])
+  const menuSurface = useDialog(closeMenu, mobile && menuOpen)
+  useEffect(() => {
+    const media = window.matchMedia('(max-width:760px)')
+    const update = () => { setMobile(media.matches); if (!media.matches) setMenuOpen(false) }
+    update(); media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
   const [adminQuery, setAdminQuery] = useState('')
   const [paletteOpen, setPaletteOpen] = useState(false)
   const profileRef = useRef<HTMLDivElement>(null)
@@ -32,10 +41,11 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
   const nav = area === 'app' ? [...appNav, ...(approvalEnabled ? [{to:'/app/approvals',key:'approvals',label:'검토 · 승인',group:'고객 관리'}] : [])] : area === 'me' ? meNav : adminNav
   const filteredNav = area !== 'admin' || !adminQuery.trim() ? nav : nav.filter(item => `${item.label} ${item.group || ''} ${item.keywords || ''}`.toLowerCase().includes(adminQuery.trim().toLowerCase()))
   const adminSearch = (value:string) => setAdminQuery(value)
+  const menuLabel = area === 'admin' ? '관리 메뉴' : area === 'me' ? '개인 메뉴' : '업무 메뉴'
   return <div className={`shell shell-${area}`}>
-    {area === 'admin' && menuOpen && <button className="sidebar-scrim" aria-label="관리 메뉴 닫기" onClick={() => setMenuOpen(false)}/>}
-    <aside className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`} aria-label={area === 'admin' ? '관리자 메뉴' : '주 메뉴'}>
-      <div className="sidebar-mobile-head"><b>관리 메뉴</b><button className="icon-btn" aria-label="관리 메뉴 닫기" onClick={() => setMenuOpen(false)}>×</button></div>
+    {menuOpen && <button className="sidebar-scrim" aria-label={`${menuLabel} 닫기`} onClick={() => setMenuOpen(false)}/>}
+    <aside ref={menuSurface} className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`} inert={mobile && !menuOpen} role={mobile ? 'dialog' : undefined} aria-modal={mobile && menuOpen ? true : undefined} aria-label={menuLabel}>
+      <div className="sidebar-mobile-head"><b>{menuLabel}</b><button className="icon-btn" aria-label={`${menuLabel} 닫기`} onClick={() => setMenuOpen(false)}>×</button></div>
       <Link to={area === 'app' ? '/app/dashboard' : area === 'me' ? '/me/profile' : '/admin/overview'} className="brand"><span className="brand-mark">R</span><span><b>Relio</b><small>{area === 'admin' ? 'Admin Console' : area === 'me' ? 'Personal' : 'Sales CRM'}</small></span></Link>
       {area === 'admin' && <label className="admin-nav-search"><span>⌕</span><input value={adminQuery} onChange={e=>adminSearch(e.target.value)} placeholder="설정 메뉴 찾기" aria-label="관리자 메뉴 검색"/></label>}
       <nav className="side-nav" onClick={() => setMenuOpen(false)}>
@@ -49,7 +59,7 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
     </aside>
     <main className="main">
       <header className="topbar">
-        {area === 'admin' && <button className="mobile-menu-btn" onClick={() => setMenuOpen(true)} aria-expanded={menuOpen} aria-label="관리 메뉴 열기"><span>☰</span> 관리 메뉴</button>}
+        <button className="mobile-menu-btn" onClick={() => setMenuOpen(true)} aria-expanded={menuOpen} aria-label={`${menuLabel} 열기`}><span>☰</span> {menuLabel}</button>
         <button type="button" className="global-search" onClick={() => setPaletteOpen(true)} aria-haspopup="dialog" aria-label="빠른 이동 열기">
           <span aria-hidden="true">⌕</span>
           <span className="global-search-copy">메뉴, 고객, 담당자, 영업기회로 바로 이동</span>
@@ -141,9 +151,10 @@ function lockPageScroll() {
  *  user tabs straight out of the dialog into the page behind it. It also freezes
  *  the page underneath, so a scroll gesture moves the dialog and not the list
  *  the user is about to come back to. */
-export function useDialog(onClose: () => void) {
+export function useDialog(onClose: () => void, active = true) {
   const surface = useRef<HTMLDivElement>(null)
   useEffect(() => {
+    if (!active) return
     const unlock = lockPageScroll()
     const opener = document.activeElement as HTMLElement | null
     const focusable = () => Array.from(
@@ -161,7 +172,7 @@ export function useDialog(onClose: () => void) {
     }
     document.addEventListener('keydown', onKey, true)
     return () => { document.removeEventListener('keydown', onKey, true); unlock(); opener?.focus?.() }
-  }, [onClose])
+  }, [onClose, active])
   return surface
 }
 
@@ -171,9 +182,13 @@ export function rowProps(activate: () => void) {
   return {
     tabIndex: 0,
     role: 'button' as const,
-    onClick: activate,
+    onClick: (e: React.MouseEvent) => {
+      // A button/link inside the row owns its click, including clicks on its icon.
+      const control = (e.target as HTMLElement).closest('button,a,input,select,textarea,label,[role="button"]')
+      if (!control || control === e.currentTarget) activate()
+    },
     onKeyDown: (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') {
+      if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
         // Space scrolls the page by default, which loses the user's place.
         e.preventDefault()
         activate()

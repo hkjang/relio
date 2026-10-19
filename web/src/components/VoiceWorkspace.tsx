@@ -4,6 +4,8 @@ import { errorMessage } from '../App'
 import { Customer } from '../types'
 import { Modal } from './Layout'
 import { parseMemberList } from '../memberList'
+import { collectFields } from '../voiceFields'
+export { collectFields } from '../voiceFields'
 
 // A VOC workspace is one department's intake on the shared engine: its own
 // request types, fields collected at intake and at resolution, its customer
@@ -44,23 +46,29 @@ export function KnowledgeBadge({ status }: { status: string }) {
 }
 
 /** FieldInputs renders a phase's fields; values are read back with collectFields. */
-export function FieldInputs({ fields, phase, values }: { fields: VoiceField[]; phase: VoiceField['phase']; values?: Record<string, unknown> }) {
+export function FieldInputs({ fields, phase, values, editing = false }: { fields: VoiceField[]; phase: VoiceField['phase']; values?: Record<string, unknown>; editing?: boolean }) {
   const list = fields.filter(f => f.phase === phase)
   if (!list.length) return null
   return <>{list.map(f => {
-    const current = values && Object.prototype.hasOwnProperty.call(values, f.key) ? values[f.key] : f.defaultValue
+    const current = editing ? values?.[f.key] : values && Object.prototype.hasOwnProperty.call(values, f.key) ? values[f.key] : f.defaultValue
     const name = `field.${f.key}`
     const title = <>{f.label}{f.required ? ' *' : ''}</>
     let input
     if (f.type === 'Select') {
       input = <select name={name} required={f.required} defaultValue={typeof current === 'string' ? current : ''}>
         <option value="">{f.required ? '선택하세요' : '선택 안 함'}</option>
+        {typeof current === 'string' && current && !f.options?.includes(current) && <option value={current}>{current} · 기존 값</option>}
         {(f.options || []).map(o => <option key={o} value={o}>{f.optionLabels?.[o] || o}{f.optionLabels?.[o] && f.optionLabels[o] !== o ? ` (${o})` : ''}</option>)}
+      </select>
+    } else if (f.type === 'Multi Select') {
+      const selected = Array.isArray(current) ? current.map(String) : []
+      input = <select name={name} multiple required={f.required} defaultValue={selected}>
+        {[...new Set([...(f.options || []), ...selected])].map(o => <option key={o} value={o}>{f.optionLabels?.[o] || o}{!f.options?.includes(o) ? ' · 기존 값' : ''}</option>)}
       </select>
     } else if (f.type === 'Textarea') {
       input = <textarea name={name} rows={3} required={f.required} defaultValue={typeof current === 'string' ? current : ''} />
     } else if (f.type === 'Number' || f.type === 'Money' || f.type === 'Percent') {
-      input = <input name={name} type="number" required={f.required} defaultValue={typeof current === 'number' ? current : ''} />
+      input = <input name={name} type="number" step="any" required={f.required} defaultValue={typeof current === 'number' ? current : ''} />
     } else if (f.type === 'Date') {
       input = <input name={name} type="date" required={f.required} defaultValue={typeof current === 'string' ? current : ''} />
     } else if (f.type === 'Boolean') {
@@ -70,18 +78,6 @@ export function FieldInputs({ fields, phase, values }: { fields: VoiceField[]; p
     }
     return <label key={f.key} className={f.type === 'Textarea' ? 'span-2' : ''}>{title}{input}{f.helpText && <small>{f.helpText}</small>}</label>
   })}</>
-}
-
-export function collectFields(form: FormData, fields: VoiceField[], phase: VoiceField['phase']) {
-  const out: Record<string, unknown> = {}
-  for (const f of fields.filter(x => x.phase === phase)) {
-    const raw = form.get(`field.${f.key}`)
-    if (f.type === 'Boolean') { out[f.key] = raw === 'on'; continue }
-    const text = String(raw ?? '').trim()
-    if (!text) continue
-    out[f.key] = f.type === 'Number' || f.type === 'Money' || f.type === 'Percent' ? Number(text) : text
-  }
-  return out
 }
 
 /**

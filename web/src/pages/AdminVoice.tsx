@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
+import { DataTable } from '../components/DataTable'
 import { api } from '../api'
 import { errorMessage } from '../App'
 import { label } from '../labels'
@@ -52,8 +53,7 @@ export function VoiceAdmin({ notify }: { notify: Notify }) {
       <div className="settings-title"><span>▦</span><div><h2>업무 영역</h2><p>부서별로 유형·항목·고객 코드를 따로 두고, 필요하면 다른 부서와 영업 지표에서 분리합니다.</p></div>
         <div className="heading-actions">{presets.map(p => <button key={p.code} className="btn btn-secondary" onClick={() => setApplyPreset(p)}>템플릿: {p.name}</button>)}
           <button className="btn btn-primary" onClick={() => setEditWorkspace({})}>＋ 업무 영역</button></div></div>
-      {workspaces.length ? <div className="table-panel"><table><thead><tr><th>업무 영역</th><th>소유 부서</th><th>격리</th><th>지식 게이트</th><th>고객 코드</th><th>유형 · 항목</th><th>상태</th><th /></tr></thead>
-        <tbody>{workspaces.map(w => <tr key={w.id}>
+      {workspaces.length ? <div className="table-panel"><DataTable rows={workspaces} label="업무 영역" searchValue={w=>[w.name,w.code,w.organizationName].join(' ')} columns={[{key:'name',label:'업무 영역',value:w=>w.name}, {key:'org',label:'소유 부서',value:w=>w.organizationName}, {key:'isolated',label:'격리',value:w=>w.isolated}, {key:'gate',label:'지식 게이트',value:w=>w.knowledgeGate}, {key:'code',label:'고객 코드',value:w=>w.customerCodeLabel}, {key:'count',label:'유형 · 항목',value:w=>w.categories.length,initialDirection:'desc'}, {key:'active',label:'상태',value:w=>w.active,initialDirection:'desc'}, {key:'actions',label:'관리'}]} renderRow={w => <tr key={w.id}>
           <td><b>{w.name}</b><code className="table-sub">{w.code}</code></td>
           <td>{w.organizationName || '—'}</td>
           <td>{w.isolated ? <span className="workspace-flag on">부서 전용</span> : <span className="workspace-flag">공유</span>}</td>
@@ -62,7 +62,7 @@ export function VoiceAdmin({ notify }: { notify: Notify }) {
           <td>{w.categories.length}개 유형 · {w.fields.length}개 항목<small className="table-sub">{w.slaEnabled ? 'SLA 적용 유형 있음' : 'SLA 미적용'}</small></td>
           <td><Status value={w.active ? 'ACTIVE' : 'DISABLED'} /></td>
           <td><div className="row-menu"><button onClick={() => setEditWorkspace({ workspace: w })}>편집</button></div></td>
-        </tr>)}</tbody></table></div>
+        </tr>} /></div>
         : <Empty title="업무 영역이 없습니다" description="모든 요청이 일반 고객 요청으로 처리됩니다. 부서 전용 민원 접수가 필요하면 템플릿으로 시작하세요." />}
     </section>
 
@@ -74,8 +74,7 @@ export function VoiceAdmin({ notify }: { notify: Notify }) {
         if (!rows.length && g.id) return null
         return <div key={g.id || 'general'} className="category-group">
           <h3>{g.name}{g.isolated && <span className="workspace-flag on">부서 전용</span>}</h3>
-          <div className="table-panel"><table><thead><tr><th>유형명 · 코드</th><th>구분</th><th>SLA</th><th>응답 목표</th><th>해결 목표</th><th>접수 건수</th><th>상태</th><th /></tr></thead>
-            <tbody>{rows.map(x => <tr key={x.id}>
+          <div className="table-panel"><DataTable rows={rows} label="요청 유형" searchValue={x=>[x.name,x.code,label(x.voiceType)].join(' ')} columns={[{key:'name',label:'유형명 · 코드',value:x=>x.name}, {key:'type',label:'구분',value:x=>label(x.voiceType)}, {key:'sla',label:'SLA',value:x=>x.slaEnabled}, {key:'response',label:'응답 목표',value:x=>x.slaEnabled?x.responseHours:null,align:'right'}, {key:'resolution',label:'해결 목표',value:x=>x.slaEnabled?x.resolutionHours:null,align:'right'}, {key:'count',label:'접수 건수',value:x=>x.usedCount,align:'right',initialDirection:'desc'}, {key:'active',label:'상태',value:x=>x.active,initialDirection:'desc'}, {key:'actions',label:'관리'}]} renderRow={x => <tr key={x.id}>
               <td><b>{x.name}</b><code className="table-sub">{x.code}</code></td>
               <td><Status value={x.voiceType} /></td>
               <td>{x.slaEnabled ? '적용' : <span className="muted-copy">미적용</span>}</td>
@@ -84,7 +83,7 @@ export function VoiceAdmin({ notify }: { notify: Notify }) {
               <td>{x.usedCount}건</td>
               <td><Status value={x.active ? 'ACTIVE' : 'DISABLED'} /></td>
               <td><div className="row-menu"><button onClick={() => setEditCategory({ category: x })}>편집</button><button className="danger" onClick={() => setRemove(x)}>삭제</button></div></td>
-            </tr>)}</tbody></table></div>
+            </tr>} /></div>
         </div>
       })}
     </section>

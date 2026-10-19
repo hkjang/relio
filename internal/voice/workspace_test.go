@@ -59,6 +59,40 @@ func TestConfiguredDefaultIsValidatedAndStored(t *testing.T) {
 	}
 }
 
+func TestFieldPatchClearsOptionalValuesWithoutRestoringDefaults(t *testing.T) {
+	defs := []Field{
+		{Key: "optional", Label: "선택값", Type: "Text", Phase: "INTAKE", DefaultValue: "DEFAULT"},
+		{Key: "required", Label: "필수값", Type: "Text", Phase: "INTAKE", Required: true, DefaultValue: "DEFAULT"},
+		{Key: "resolver", Label: "해결 주체", Type: "Select", Phase: "RESOLUTION", Required: true, Options: []string{"OPS"}},
+	}
+	for _, blank := range []any{nil, "", "  "} {
+		patch, err := validateFieldValues(defs, "", map[string]any{"optional": blank}, false)
+		if err != nil || len(patch) != 1 || patch["optional"] != nil {
+			t.Fatalf("explicit clear was lost: %#v %v", patch, err)
+		}
+		defaults, err := requiredFieldDefaults(defs, "INTAKE", map[string]any{"required": "stored", "optional": patch["optional"]})
+		if err != nil || len(defaults) != 0 {
+			t.Fatalf("clearing optional value restored default or required resolution: %#v %v", defaults, err)
+		}
+		if _, err := requiredFieldDefaults(defs, "INTAKE", map[string]any{"required": blank}); err == nil || !strings.Contains(err.Error(), "필수값") {
+			t.Fatalf("required value may not be cleared even with a default: %v", err)
+		}
+	}
+	// Omission can use a configured default; explicit empty values cannot.
+	got, err := validateFieldValues(defs, "INTAKE", map[string]any{"optional": nil}, true)
+	if err != nil || got["required"] != "DEFAULT" || got["optional"] != nil {
+		t.Fatalf("default/explicit-empty distinction: %#v %v", got, err)
+	}
+	if _, err := validateFieldValues(defs, "INTAKE", map[string]any{"required": nil}, true); err == nil {
+		t.Fatal("an explicitly cleared required field must fail, not silently default")
+	}
+	for _, empty := range []any{[]any{}, []string{}} {
+		if _, err := requiredFieldDefaults(defs, "INTAKE", map[string]any{"required": empty}); err == nil {
+			t.Fatal("an empty collection cannot satisfy a required field")
+		}
+	}
+}
+
 func TestSelectErrorNamesStableCodeAndDisplayName(t *testing.T) {
 	defs := []Field{{Key: "resolver", Label: "해결 주체", Type: "Select", Phase: "RESOLUTION", Options: []string{"OPS"}, OptionLabels: map[string]string{"OPS": "운영 조치"}}}
 	_, err := validateFieldValues(defs, "RESOLUTION", map[string]any{"resolver": "OTHER"}, false)

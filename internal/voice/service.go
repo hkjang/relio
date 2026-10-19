@@ -858,13 +858,21 @@ func requiredFieldDefaults(defs []Field, phase string, values map[string]any) (m
 			continue
 		}
 		value, present := values[f.Key]
+		hasValue := present && value != nil
 		if text, ok := value.(string); ok && strings.TrimSpace(text) == "" {
-			present = false
+			hasValue = false
 		}
-		if present && value != nil {
+		if list, ok := value.([]any); ok && len(list) == 0 {
+			hasValue = false
+		}
+		if list, ok := value.([]string); ok && len(list) == 0 {
+			hasValue = false
+		}
+		if hasValue {
 			continue
 		}
-		if f.DefaultValue != nil {
+		// An explicit clear must not silently restore a configured default.
+		if !present && f.DefaultValue != nil {
 			clean, problem := fieldValue(f, f.DefaultValue)
 			if problem != "" {
 				return nil, fmt.Errorf("%s 기본값 설정이 올바르지 않습니다: %s", f.Label, problem)

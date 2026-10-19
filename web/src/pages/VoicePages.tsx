@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { api, date, relative } from '../api'
 import { Customer, User, Version } from '../types'
 import Layout, { Empty, Modal, Spinner, Status, navigate, rowProps, useDialog } from '../components/Layout'
@@ -6,6 +6,9 @@ import { initials, label } from '../labels'
 import { errorMessage } from '../App'
 import { SavedViews } from '../components/SavedViews'
 import { ContactSelect, useContacts } from '../components/Contacts'
+import { DataTable, TableColumn } from '../components/DataTable'
+import { timestamp } from '../table'
+import { changedFields } from '../voiceFields'
 import { CustomerPicker, FieldInputs, KnowledgeBadge, MemberImportModal, ResolveModal, ReviewPanel, VoiceField, VoiceWorkspace, collectFields, evidenceLabel, knowledgeLabels } from '../components/VoiceWorkspace'
 
 type Props = { path: string; user: User; version: Version; approvalEnabled: boolean; onLogout: () => void; notify: (m: string, e?: boolean) => void }
@@ -83,6 +86,9 @@ export default function VoicePages(props: Props) {
   const [modal, setModal] = useState(new URLSearchParams(location.search).has('new'))
   const [importing, setImporting] = useState(false)
   const [selected, setSelected] = useState<Voice | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const request = useRef(0)
   const permissions = props.user.permissions || []
   const has = (p: string) => props.user.isBootstrap || permissions.includes('admin:*') || permissions.includes(p)
   const canWrite = has('voice:write')
@@ -92,11 +98,19 @@ export default function VoicePages(props: Props) {
   const noSla = Boolean(workspace && !workspace.slaEnabled)
   const gate = Boolean(workspace?.knowledgeGate)
 
-  const load = (next = filter) => Promise.all([
-    api<{ items: Voice[] }>('/api/v1/voices?' + listQuery(next, '100')),
-    api<VoiceSummary>('/api/v1/voices/summary' + (next.workspace ? '?workspaceId=' + next.workspace : '')),
-  ]).then(([list, sum]) => { setItems(list.items); setSummary(sum) })
-    .catch(e => props.notify(errorMessage(e), true))
+  const load = async (next = filter) => {
+    const current = ++request.current
+    setRefreshing(true); setLoadError('')
+    try {
+      const [list, sum] = await Promise.all([
+        api<{ items: Voice[] }>('/api/v1/voices?' + listQuery(next, '100')),
+        api<VoiceSummary>('/api/v1/voices/summary' + (next.workspace ? '?workspaceId=' + next.workspace : '')),
+      ])
+      if (current === request.current) { setItems(list.items); setSummary(sum) }
+    } catch (e) {
+      if (current === request.current) setLoadError(errorMessage(e))
+    } finally { if (current === request.current) setRefreshing(false) }
+  }
   useEffect(() => {
     api<{ items: Category[] }>('/api/v1/voices/categories').then(v => setCategories(v.items)).catch(() => {})
     // A department member lands on their own workspace; everyone else on all.
@@ -108,6 +122,18 @@ export default function VoicePages(props: Props) {
   }, [])
   const change = (patch: Partial<Filter>) => { const next = { ...filter, ...patch }; setFilter(next); void load(next) }
   const switchWorkspace = (id: string) => { const next = emptyFilter(id); setFilter(next); void load(next) }
+  const columns: TableColumn<Voice>[] = [
+    { key: 'title', label: '접수번호 · 제목', value: v => v.title },
+    { key: 'customer', label: '고객', value: v => v.customerName },
+    { key: 'type', label: '유형', value: v => workspace ? v.categoryName : label(v.voiceType) },
+    { key: 'severity', label: '심각도', value: v => severityTypes.indexOf(v.severity), initialDirection: 'desc' },
+    { key: 'status', label: '상태', value: v => ['RECEIVED', 'IN_REVIEW', 'IN_PROGRESS', 'PENDING_CUSTOMER', 'RESOLVED', 'CLOSED', 'REJECTED'].indexOf(v.status) },
+    ...(noSla ? [{ key: 'age', label: '경과', value: (v: Voice) => v.openDays, align: 'right' as const, initialDirection: 'desc' as const }]
+      : [{ key: 'response', label: '응답 기한', value: (v: Voice) => v.slaApplied && !v.firstRespondedAt ? timestamp(v.responseDueAt) : null },
+        { key: 'resolution', label: '해결 기한', value: (v: Voice) => timestamp(v.resolvedAt || (v.slaApplied ? v.resolutionDueAt : null)) }]),
+    ...(gate ? [{ key: 'knowledge', label: '지식 반영', value: (v: Voice) => knowledgeLabels[v.knowledgeStatus] }] : []),
+    { key: 'owner', label: '담당', value: v => v.ownerName },
+  ]
 
   return <Layout area="app" {...props} title={workspace ? workspace.name : '고객의 목소리'}
     subtitle={workspace ? (workspace.description || '업무 영역의 접수·처리 이력입니다.') : '불만, 요청, 문의와 이탈 징후를 접수부터 해결·만족도까지 추적합니다.'}
@@ -116,7 +142,8 @@ export default function VoicePages(props: Props) {
       <a className="btn btn-secondary" href={'/api/v1/voices/export?' + listQuery(filter, '200')} download>CSV 내보내기</a>
       {canWrite && <button className="btn btn-primary" onClick={() => setModal(true)}>＋ 요청 접수</button>}
     </>}>
-    {!items || !summary || !workspaces ? <Spinner /> : <>
+    {loadError && <div className="list-load-error" role="alert"><span>목록을 불러오지 못했습니다. {loadError}</span><button className="btn btn-secondary btn-sm" onClick={() => void load()}>다시 시도</button></div>}
+    {!items || !summary || !workspaces ? !loadError && <Spinner /> : <>
       {workspaces.length > 0 && <div className="segmented workspace-tabs" role="tablist" aria-label="업무 영역">
         <button role="tab" aria-selected={!filter.workspace} className={!filter.workspace ? 'active' : ''} onClick={() => switchWorkspace('')}>전체</button>
         {workspaces.map(w => <button key={w.id} role="tab" aria-selected={filter.workspace === w.id} className={filter.workspace === w.id ? 'active' : ''} onClick={() => switchWorkspace(w.id)}>
@@ -164,17 +191,15 @@ export default function VoicePages(props: Props) {
           <option value="">지식 반영 전체</option><option value="PENDING">검토 대기(종결·미검토)</option>
           {Object.entries(knowledgeLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>}
-        {(filter.voiceType || filter.severity || filter.view !== 'open' || filter.minAge || filter.knowledge) &&
+        {(filter.voiceType || filter.severity || filter.status || filter.view !== 'open' || filter.minAge || filter.knowledge) &&
           <button className="btn btn-ghost" onClick={() => change({ ...emptyFilter(filter.workspace) })}>필터 초기화</button>}
-        <span className="toolbar-count">{items.length}건</span>
+        <span className="toolbar-count" role="status">{refreshing ? '목록 갱신 중…' : `불러온 요청 ${items.length}건`}</span>
       </div>
 
-      <section className="panel table-panel">
-        {items.length ? <table><thead><tr>
-          <th>접수번호 · 제목</th><th>고객</th><th>유형</th><th>심각도</th><th>상태</th>
-          {noSla ? <th>경과</th> : <><th>응답 기한</th><th>해결 기한</th></>}
-          {gate && <th>지식 반영</th>}<th>담당</th>
-        </tr></thead><tbody>{items.map(v => <tr key={v.id} {...rowProps(() => setSelected(v))} aria-label={`${v.title} 처리 상세 열기`} className={v.resolutionOverdue ? 'row-danger' : ''}>
+      <section className="panel table-panel" aria-busy={refreshing}>
+        {items.length ? <DataTable rows={items} columns={columns} label="고객의 목소리" loadedLimit={100}
+          searchValue={v => [v.voiceNo, v.title, v.customerName, v.customerCode, v.categoryName, v.ownerName, ...Object.values(v.customFields || {})].join(' ')}
+          renderRow={v => <tr key={v.id} {...rowProps(() => { if (!refreshing) setSelected(v) })} aria-label={`${v.title} 처리 상세 열기`} className={v.resolutionOverdue ? 'row-danger' : ''}>
           <td><b>{v.title}</b><small className="table-sub">{v.voiceNo} · {relative(v.occurredAt)} 접수{v.openDays > 0 ? ` · ${v.openDays}일 경과` : ''}</small></td>
           <td><div className="entity-cell"><span className="customer-logo">{initials(v.customerName)}</span><span><b>{v.customerName}</b><small>{v.customerCode ? `${workspace?.customerCodeLabel || '코드'} ${v.customerCode}` : v.contactName || '담당자 미지정'}</small></span></div></td>
           <td>{workspace ? <b className="category-cell">{v.categoryName || '—'}</b> : <><Status value={v.voiceType} /><small className="table-sub">{v.categoryName || label(v.channel)}</small></>}</td>
@@ -186,7 +211,7 @@ export default function VoicePages(props: Props) {
               <td className={v.resolutionOverdue ? 'danger-text' : ''}>{v.resolvedAt ? date(v.resolvedAt) : !v.slaApplied ? '미적용' : dueLabel(v.resolutionDueAt)}</td></>}
           {gate && <td>{v.status === 'RESOLVED' || v.status === 'CLOSED' || v.knowledgeStatus !== 'UNREVIEWED' ? <KnowledgeBadge status={v.knowledgeStatus} /> : <span className="muted-copy">—</span>}</td>}
           <td>{v.ownerName}</td>
-        </tr>)}</tbody></table>
+        </tr>} />
           : <Empty icon="◷" title={filter.knowledge === 'PENDING' ? '검토할 종결 건이 없습니다' : filter.view === 'open' ? '처리 중인 요청이 없습니다' : '조건에 맞는 요청이 없습니다'}
             description={noSla ? '이 업무 영역은 응답·해결 기한을 적용하지 않습니다. 경과일로 묵은 건을 관리합니다.' : '고객이 제기한 불만, 요청, 문의를 접수하면 응답·해결 기한이 자동으로 계산됩니다.'}
             action={canWrite ? <button className="btn btn-primary" onClick={() => setModal(true)}>첫 요청 접수</button> : undefined} />}
@@ -195,7 +220,7 @@ export default function VoicePages(props: Props) {
     {modal && workspaces && <VoiceModal prefill={prefill} categories={categories} workspaces={workspaces} defaultWorkspace={filter.workspace}
       canRegister={has('customer:write')} onClose={() => setModal(false)} onSaved={() => { setModal(false); void load() }} notify={props.notify} />}
     {importing && workspace && <MemberImportModal workspace={workspace} onClose={() => setImporting(false)} notify={props.notify} />}
-    {selected && <VoiceDrawer voice={selected} workspaces={workspaces || []} canWrite={canWrite} canReview={canReview}
+    {selected && <VoiceDrawer key={selected.id} voice={selected} workspaces={workspaces || []} canWrite={canWrite} canReview={canReview} canManage={has('voice:manage')} userId={props.user.id}
       onClose={() => setSelected(null)} onSaved={() => void load()} notify={props.notify} />}
   </Layout>
 }
@@ -237,10 +262,10 @@ function VoiceModal({ prefill, categories, workspaces, defaultWorkspace, canRegi
   }
   return <Modal title="고객 요청 접수" onClose={onClose} wide><form className="form" onSubmit={submit}>
     <div className="form-grid">
-      {workspaces.length > 0 && <label className="span-2">업무 영역<select value={workspaceId} onChange={e => setWorkspaceId(e.target.value)}>
+      {workspaces.length > 0 && <label className="span-2">업무 영역<select value={workspaceId} onChange={e => { setWorkspaceId(e.target.value); setCustomer(null); setContactId('') }}>
         <option value="">일반 고객 요청</option>{workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label>}
       <div className="span-2 field-block"><span className="field-title">{workspace?.customerCodeLabel ? '회원사' : '고객'} *</span>
-        <CustomerPicker workspace={workspace} value={customer} onChange={setCustomer} notify={notify} canRegister={canRegister && Boolean(workspace)} /></div>
+        <CustomerPicker key={workspaceId} workspace={workspace} value={customer} onChange={setCustomer} notify={notify} canRegister={canRegister && Boolean(workspace)} /></div>
       <ContactSelect label="요청 담당자" name="contactId" customerId={customer?.id || ''} contacts={contacts}
         value={contactId} onChange={setContactId} disabled={!customer} disabledHint="고객을 먼저 선택하세요"
         placeholder="미지정" notify={notify} />
@@ -257,7 +282,7 @@ function VoiceModal({ prefill, categories, workspaces, defaultWorkspace, canRegi
       <label>접수 경로<select name="channel">{channelTypes.map(x => <option key={x} value={x}>{label(x)}</option>)}</select></label>
       <label>심각도<select name="severity" defaultValue="NORMAL">{severityTypes.map(x => <option key={x} value={x}>{label(x)}</option>)}</select>
         {!(chosen && !chosen.slaEnabled) && !workspace && <small>긴급·높음은 기한이 더 짧게 적용됩니다.</small>}</label>
-      <FieldInputs fields={fields} phase="INTAKE" />
+      <FieldInputs key={workspaceId} fields={fields} phase="INTAKE" />
       <label className="span-2">제목 *<input name="title" required defaultValue={prefill?.title || ''} placeholder={workspace ? '예: 휴대폰본인확인 팝업 E1003 오류' : '예: 3차 납품 지연으로 생산 라인 중단'} /></label>
       <label className="span-2">고객이 말한 내용<textarea name="body" rows={4} defaultValue={prefill?.body || ''} placeholder="고객의 표현을 그대로 남기면 이후 원인 분석에 도움이 됩니다." /></label>
     </div>
@@ -273,8 +298,8 @@ function fieldText(value: unknown, field?: VoiceField) {
   return value === undefined || value === null || value === '' ? '—' : String(value)
 }
 
-function VoiceDrawer({ voice, workspaces, canWrite, canReview, onClose, onSaved, notify }: {
-  voice: Voice; workspaces: VoiceWorkspace[]; canWrite: boolean; canReview: boolean; onClose: () => void; onSaved: () => void; notify: Props['notify']
+function VoiceDrawer({ voice, workspaces, canWrite, canReview, canManage, userId, onClose, onSaved, notify }: {
+  voice: Voice; workspaces: VoiceWorkspace[]; canWrite: boolean; canReview: boolean; canManage: boolean; userId: string; onClose: () => void; onSaved: () => void; notify: Props['notify']
 }) {
   const surface = useDialog(onClose)
   const [detail, setDetail] = useState<{ voice: Voice; events: VoiceEvent[] } | null>(null)
@@ -284,6 +309,7 @@ function VoiceDrawer({ voice, workspaces, canWrite, canReview, onClose, onSaved,
   const load = () => api<{ voice: Voice; events: VoiceEvent[] }>(`/api/v1/voices/${voice.id}`).then(setDetail).catch(e => notify(errorMessage(e), true))
   useEffect(() => { void load() }, [voice.id])
   const v = detail?.voice ?? voice
+  const canEdit = canWrite && (canManage || v.ownerId === userId)
   const workspace = workspaces.find(w => w.id === v.workspaceId)
   const fields = workspace?.fields || []
   const closed = v.status === 'RESOLVED' || v.status === 'CLOSED'
@@ -321,11 +347,14 @@ function VoiceDrawer({ voice, workspaces, canWrite, canReview, onClose, onSaved,
     } catch (err) { notify(errorMessage(err), true) } finally { setBusy(false) }
   }
 
-  async function saveCustomFields(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault(); const f = new FormData(e.currentTarget); setBusy(true)
+  async function saveCustomFields(e: FormEvent<HTMLFormElement>, phase: VoiceField['phase']) {
+    e.preventDefault(); const f = new FormData(e.currentTarget)
+    const customFields = changedFields(collectFields(f, fields, phase, true), v.customFields)
+    if (!Object.keys(customFields).length) { notify('변경된 항목이 없습니다.'); return }
+    setBusy(true)
     try {
       await api(`/api/v1/voices/${v.id}`, { method: 'PUT', body: JSON.stringify({
-        customFields: { ...collectFields(f, fields, 'INTAKE'), ...collectFields(f, fields, 'RESOLUTION') }, version: v.version,
+        customFields, version: v.version,
       }) })
       notify('접수·해결 항목을 저장했습니다.'); await refresh()
     } catch (err) { notify(errorMessage(err), true) } finally { setBusy(false) }
@@ -380,22 +409,23 @@ function VoiceDrawer({ voice, workspaces, canWrite, canReview, onClose, onSaved,
             <button className="btn btn-ghost" disabled={busy} onClick={() => addEvent('COMMENT')}>내부 메모</button>
             <button className="btn btn-ghost" disabled={busy} onClick={() => addEvent('ESCALATED')}>상위 보고</button>
           </div>
-          <div className="voice-actions">
+          {canEdit && <div className="voice-actions">
             {(nextStatuses[v.status] || []).map(s => <button key={s} className={s === 'RESOLVED' ? 'btn btn-primary' : 'btn btn-secondary'}
               disabled={busy} onClick={() => transition(s)}>{label(s)}로 변경</button>)}
-          </div>
+          </div>}
+          {!canEdit && <small className="muted-copy">상태와 접수·해결 정보는 담당자 또는 민원 관리자만 변경할 수 있습니다.</small>}
           {closed && v.knowledgeStatus !== 'UNREVIEWED' && <small className="muted-copy">재처리하면 지식 반영 상태가 미검토로 돌아갑니다.</small>}
         </div>}
 
-        {canWrite && fields.length > 0 && <form className="drawer-section form" onSubmit={saveCustomFields}>
-          <h3>구조화 항목 편집</h3>
-          <p className="muted-copy">접수·해결 도구와 같은 필수값·허용 코드 검증 및 담당자 권한 검사를 적용합니다.</p>
-          <div className="form-grid"><FieldInputs fields={fields} phase="INTAKE" values={v.customFields} />
-            <FieldInputs fields={fields} phase="RESOLUTION" values={v.customFields} /></div>
-          <button className="btn btn-primary" disabled={busy}>항목 저장</button>
-        </form>}
+        {canEdit && (['INTAKE', 'RESOLUTION'] as const).filter(phase => fields.some(f => f.phase === phase) && (phase === 'INTAKE' || closed)).map(phase =>
+          <form key={`${v.id}-${v.version}-${phase}`} className="drawer-section form" onSubmit={e => void saveCustomFields(e, phase)}>
+            <h3>{phase === 'INTAKE' ? '접수' : '해결'} 항목 편집</h3>
+            <p className="muted-copy">변경한 항목만 저장합니다. 선택 항목을 비우면 기존 값이 삭제됩니다.</p>
+            <div className="form-grid"><FieldInputs fields={fields} phase={phase} values={v.customFields} editing /></div>
+            <button className="btn btn-primary" disabled={busy}>{busy ? '저장 중…' : '항목 저장'}</button>
+          </form>)}
 
-        {canWrite && closed && <form className="drawer-section form" onSubmit={saveAnalysis}>
+        {canEdit && closed && <form key={`${v.id}-${v.version}-analysis`} className="drawer-section form" onSubmit={saveAnalysis}>
           <h3>원인 분석과 재발 방지</h3>
           <div className="form-grid">
             <label className="span-2">근본 원인<textarea name="rootCause" rows={2} defaultValue={v.rootCause || ''} placeholder="왜 발생했는지 사실 기준으로 기록합니다." /></label>

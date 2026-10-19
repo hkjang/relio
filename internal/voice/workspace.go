@@ -229,6 +229,9 @@ func validateFieldValues(defs []Field, phase string, values map[string]any, enfo
 			if f.Phase != phase || f.DefaultValue == nil {
 				continue
 			}
+			if _, supplied := values[f.Key]; supplied {
+				continue
+			}
 			value, problem := fieldValue(f, f.DefaultValue)
 			if problem != "" {
 				problems = append(problems, fmt.Sprintf("%s 기본값 설정이 올바르지 않습니다: %s", f.Label, problem))
@@ -246,6 +249,9 @@ func validateFieldValues(defs []Field, phase string, values map[string]any, enfo
 			continue
 		}
 		if raw == nil {
+			if !enforce {
+				out[key] = nil
+			}
 			continue
 		}
 		value, problem := fieldValue(f, raw)
@@ -253,7 +259,7 @@ func validateFieldValues(defs []Field, phase string, values map[string]any, enfo
 			problems = append(problems, problem)
 			continue
 		}
-		if value != nil {
+		if value != nil || !enforce {
 			out[key] = value
 		}
 	}

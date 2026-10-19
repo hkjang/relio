@@ -31,46 +31,62 @@ var searchWorkspaceCustomersSchema = schema([]string{"workspaceId", "query"}, ma
 // never appear.
 func (s *Server) voiceFields(ctx context.Context, p *auth.Principal, phases ...string) (map[string]any, []voice.Workspace) {
 	workspaces, err := s.Voices.Workspaces(ctx, p, false)
+	if err != nil {
+		workspaces = nil
+	}
+	return workspaceFieldSchema(workspaces, phases...), workspaces
+}
+
+func workspaceFieldSchema(workspaces []voice.Workspace, phases ...string) map[string]any {
 	properties := map[string]any{}
-	if err == nil {
-		for _, w := range workspaces {
-			for _, f := range w.Fields {
-				if len(phases) > 0 && !contains(phases, f.Phase) {
-					continue
+	for _, w := range workspaces {
+		for _, f := range w.Fields {
+			if len(phases) > 0 && !contains(phases, f.Phase) {
+				continue
+			}
+			description := f.Label
+			if f.Required {
+				description += " · 필수"
+			}
+			if f.HelpText != "" {
+				description += " · " + f.HelpText
+			}
+			if len(workspaces) > 1 {
+				description += " · 업무 영역: " + w.Name
+			}
+			property := map[string]any{"type": "string", "description": description}
+			switch f.Type {
+			case "Select":
+				property["enum"] = f.Options
+				if len(f.OptionLabels) > 0 {
+					property["description"] = description + " · 코드/명칭: " + strings.Join(optionDescriptions(f), ", ")
 				}
-				description := f.Label
-				if f.Required {
-					description += " · 필수"
+			case "Multi Select":
+				property = map[string]any{"type": "array", "description": description, "items": map[string]any{"type": "string", "enum": f.Options}}
+			case "Number", "Money", "Percent":
+				property["type"] = "number"
+			case "Boolean":
+				property["type"] = "boolean"
+			}
+			if f.DefaultValue != nil {
+				property["default"] = f.DefaultValue
+			}
+			// Semantic keys may be shared by accessible workspaces, each with
+			// different types/options. Never let the last workspace replace the
+			// earlier schema. The selected workspace is validated by the service.
+			if previous, ok := properties[f.Key].(map[string]any); ok {
+				if choices, union := previous["anyOf"].([]any); union {
+					previous["anyOf"] = append(choices, property)
+				} else {
+					properties[f.Key] = map[string]any{"anyOf": []any{previous, property}, "description": f.Label + " · 해당 업무 영역의 허용값을 get_voice_categories에서 확인하세요."}
 				}
-				if f.HelpText != "" {
-					description += " · " + f.HelpText
-				}
-				if len(workspaces) > 1 {
-					description += " · 업무 영역: " + w.Name
-				}
-				property := map[string]any{"type": "string", "description": description}
-				switch f.Type {
-				case "Select":
-					property["enum"] = f.Options
-					if len(f.OptionLabels) > 0 {
-						property["description"] = description + " · 코드/명칭: " + strings.Join(optionDescriptions(f), ", ")
-					}
-				case "Multi Select":
-					property = map[string]any{"type": "array", "description": description, "items": map[string]any{"type": "string", "enum": f.Options}}
-				case "Number", "Money", "Percent":
-					property["type"] = "number"
-				case "Boolean":
-					property["type"] = "boolean"
-				}
-				if f.DefaultValue != nil {
-					property["default"] = f.DefaultValue
-				}
+			} else {
 				properties[f.Key] = property
 			}
 		}
 	}
 	return map[string]any{"type": "object", "description": "업무 영역의 추가 항목. 키와 허용값은 get_voice_categories에서도 확인할 수 있습니다.",
-		"properties": properties, "additionalProperties": false}, workspaces
+		"properties": properties, "additionalProperties": false}
 }
 
 func optionDescriptions(f voice.Field) []string {
