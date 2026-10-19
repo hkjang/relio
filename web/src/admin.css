@@ -1,0 +1,108 @@
+/* Admin console: shared navigation, safe editors, and dense operational data. */
+/* Notifications contain no controls. Never intercept a click on a save action. */
+.toast { top: 80px; bottom: auto; max-width: min(520px, calc(100vw - 28px)); align-items: flex-start; line-height: 1.65; overflow-wrap: anywhere; pointer-events: none; }
+.toast > span { flex-shrink: 0; margin-top: 2px; }
+.shell-admin .page { max-width: 1720px; margin: 0 auto; width: 100%; min-width: 0; }
+.admin-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: #778699; font-size: 12px; margin-bottom: 16px; }
+.admin-breadcrumb a { color: #436177; text-decoration: none; }
+.admin-breadcrumb [aria-current] { color: #263b4d; }
+.shell-admin .page-heading { margin-bottom: 24px; }
+.admin-nav-search input { min-width: 0; }
+.admin-nav-search button { flex: 0 0 24px; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 20px; }
+.admin-nav-count { margin: -2px 18px 8px; font-size: 11px; color: #8596a6; }
+.admin-directory { margin-top: 24px; padding: 24px; }
+.admin-directory .panel-head { margin-bottom: 18px; }
+.admin-directory .eyebrow { margin-bottom: 6px; color: #167c77; }
+.admin-directory-controls { display: flex; flex-direction: column; gap: 14px; margin-bottom: 22px; }
+.admin-directory-search { display: flex; align-items: center; gap: 10px; padding: 0 14px; border: 1px solid #ccd9e3; border-radius: 10px; max-width: 540px; background: #f8fafc; }
+.admin-directory-search input { border: 0; background: transparent; width: 100%; padding: 13px 0; min-width: 0; outline: none; }
+.admin-directory-search:focus-within { outline: 2px solid #168b83; outline-offset: 2px; }
+.admin-group-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.admin-group-filters button { padding: 7px 13px; border: 1px solid #dce5ec; border-radius: 20px; background: white; color: #52667b; cursor: pointer; }
+.admin-group-filters button[aria-pressed=true] { background: #e4f5f2; border-color: #85c9c0; color: #106e66; font-weight: 700; }
+.admin-menu-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.admin-menu-card { display: flex; align-items: flex-start; gap: 12px; padding: 18px; border: 1px solid #e0e8ee; border-radius: 12px; text-decoration: none; color: #283c50; background: #fff; transition: border-color .15s, background .15s; min-width: 0; }
+.admin-menu-card:hover { border-color: #7fb9b3; background: #f4fbf9; }
+.admin-menu-icon { background: #edf4f8; color: #42677c; border-radius: 9px; width: 36px; height: 36px; display: grid; place-items: center; flex-shrink: 0; font-size: 20px; }
+.admin-menu-card > span:nth-child(2) { flex: 1; min-width: 0; }
+.admin-menu-card small { display: block; color: #708196; font-size: 11px; margin-bottom: 6px; }
+.admin-menu-card b { display: block; font-size: 14px; line-height: 1.5; word-break: keep-all; overflow-wrap: anywhere; }
+.admin-menu-card p { color: #627589; font-size: 12px; line-height: 1.7; margin: 8px 0 0; word-break: keep-all; overflow-wrap: anywhere; }
+.admin-menu-card > span:last-child { color: #8fa5b4; font-size: 16px; }
+.settings-fields { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+.settings-fields:disabled { opacity: .8; }
+.settings-fields input:disabled, .settings-fields select:disabled, .settings-fields textarea:disabled { color: #52677b; -webkit-text-fill-color: #52677b; }
+.settings-save-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+.shell-admin .sticky-save { gap: 16px; z-index: 20; padding: 16px 20px; box-shadow: 0 -5px 24px #16334b0a; border: 1px solid #dbe5ec; border-radius: 12px; }
+.shell-admin .sticky-save > span { line-height: 1.6; font-size: 12px; }
+.shell-admin .sticky-save.dirty { border-color: #83c6bc; background: #f3fcf9; }
+.settings-failure span { white-space: pre-wrap; overflow-wrap: anywhere; }
+.admin-readonly { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 14px 18px; border: 1px solid #d6e4ee; border-radius: 10px; background: #f0f6fb; color: #365971; margin-bottom: 20px; font-size: 13px; line-height: 1.6; }
+.shell-admin .settings-title { gap: 14px; margin-bottom: 22px; }
+.shell-admin .settings-title p, .shell-admin .panel-head p { line-height: 1.7; margin-top: 7px; }
+.shell-admin .settings-title > div { min-width: 0; }
+.shell-admin .settings-section label small { line-height: 1.7; }
+.shell-admin .role-policy-grid b, .shell-admin .permission-grid b { display: block; margin-bottom: 5px; }
+.shell-admin .role-policy-grid small, .shell-admin .permission-grid small { display: block; line-height: 1.65; }
+.admin-role-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px 18px; margin: 20px 0; }
+.admin-role-filter input { flex: 1; min-width: 160px; }
+.admin-role-filter input, .admin-role-filter select { min-height: 40px; padding: 9px 12px; border: 1px solid #d8e1e9; border-radius: 8px; background: #f8fafc; color: #30475c; font-size: 14px; }
+.admin-role-filter input:focus, .admin-role-filter select:focus { outline: 2px solid #168b83; outline-offset: 2px; }
+.shell-admin .role-card header > .status { width: auto; height: auto; align-self: flex-start; padding: 5px 9px; line-height: 1.4; }
+.admin-role-filter > span { color: #63768b; font-size: 13px; }
+.role-card details { margin: 14px 0; }
+.role-card summary { cursor: pointer; color: #446176; font-size: 12px; }
+.permission-picker-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 16px 0; }
+.permission-picker-controls input[type=search] { flex: 1; min-width: 160px; }
+.permission-group h4 { margin-bottom: 14px; }
+.permission-group h4 small { margin-left: 10px; font-weight: 400; color: #617589; }
+.shell-admin .table-panel > .panel-head { padding: 20px 24px 8px; }
+.shell-admin .row-menu { flex-wrap: wrap; gap: 6px; }
+.shell-admin .row-menu button { white-space: nowrap; min-height: 30px; }
+.shell-admin .mapping-row input, .shell-admin .mapping-row select { min-width: 0; }
+.shell-admin .audit-meta code, .shell-admin .info-list code { overflow-wrap: anywhere; }
+.shell-admin .status { white-space: nowrap; flex-shrink: 0; }
+.shell-admin .diagnostic-preview button > span:nth-child(2) { min-width: 0; flex: 1; }
+.shell-admin .diagnostic-preview button { min-width: 0; }
+.shell-admin .operations-grid > *, .shell-admin .builder-content { min-width: 0; }
+.shell-admin .runtime-contract p { min-width: 0; overflow-wrap: anywhere; }
+.shell-admin .runtime-contract > div > span { flex-shrink: 0; }
+@media (max-width: 1200px) { .admin-menu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .toast { top: 76px; right: 14px; }
+  .shell .sidebar:not(.sidebar-open) { box-shadow: none; }
+  .shell-admin .page { padding: 20px 14px 28px; }
+  .admin-breadcrumb { font-size: 11px; gap: 6px; margin-bottom: 14px; }
+  .admin-directory { padding: 18px 14px; }
+  .admin-menu-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .admin-menu-card { padding: 16px; }
+  .shell-admin .settings-title { flex-wrap: wrap; gap: 12px; }
+  .shell-admin .settings-title > div { flex: 1; }
+  .shell-admin .settings-title > .switch { flex-basis: 100%; margin: 0; }
+  .shell-admin .sticky-save { position: static; padding: 14px; align-items: stretch; flex-direction: column; }
+  .settings-save-actions { justify-content: stretch; }
+  .settings-save-actions .btn { flex: 1; white-space: normal; }
+  .shell-admin .settings-section { padding: 18px 14px; }
+  .shell-admin .setting-badges { grid-template-columns: minmax(0, 1fr); }
+  .shell-admin .permission-equation { flex-wrap: wrap; gap: 8px; line-height: 1.8; }
+  .shell-admin .role-grid { grid-template-columns: minmax(0, 1fr); }
+  .shell-admin .role-card { padding: 18px 14px; min-width: 0; }
+  .shell-admin .stage-config > div { display: flex; flex-wrap: wrap; gap: 12px; }
+  .shell-admin .stage-config > div > b { flex: 1; min-width: 100px; }
+  .shell-admin .stage-config .row-menu { width: 100%; justify-content: flex-end; }
+  .shell-admin .mapping-row { flex-wrap: wrap; }
+  .shell-admin .mapping-row input, .shell-admin .mapping-row select { width: 100%; flex-basis: calc(100% - 40px); }
+  .shell-admin .security-list > div { flex-wrap: wrap; gap: 10px; }
+  .shell-admin .security-list p { overflow-wrap: anywhere; }
+  .shell-admin .sales-builder { grid-template-columns: minmax(0, 1fr); }
+  .shell-admin .stage-selector { display: flex; gap: 6px; overflow-x: auto; max-height: none; scroll-snap-type: x proximity; }
+  .shell-admin .stage-selector button { min-width: 145px; width: 145px; flex-shrink: 0; scroll-snap-align: start; }
+  .shell-admin .health-rule-list { overflow: visible; }
+  .shell-admin .health-rule-admin { min-width: 0; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 12px; padding: 14px; }
+  .shell-admin .health-rule-admin > input, .shell-admin .health-rule-admin > label:not(.switch), .shell-admin .health-rule-admin > button { grid-column: 1 / -1; width: 100%; }
+  .shell-admin .health-rule-admin code { white-space: normal; overflow-wrap: anywhere; }
+  .shell-admin .health-rule-admin > label:not(.switch) { justify-content: space-between; }
+  .shell-admin .builder-row, .shell-admin .builder-row.criteria { grid-template-columns: minmax(0, 1fr); padding: 12px; gap: 10px; }
+  .shell-admin .info-list > div { flex-wrap: wrap; gap: 6px; }
+  .shell-admin .info-list > div > * { max-width: 100%; overflow-wrap: anywhere; }
+}

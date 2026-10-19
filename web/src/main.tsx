@@ -10,5 +10,6 @@ import './contacts.css'
 import './intelligence.css'
 import './keys.css'
 import './tables.css'
+import './admin.css'
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)

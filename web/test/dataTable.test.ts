@@ -9,11 +9,29 @@ import { renderToStaticMarkup } from 'react-dom/server'
 const directory = await mkdtemp(fileURLToPath(new URL('./.table-test-', import.meta.url)))
 after(() => rm(directory, { recursive: true, force: true }))
 await build({
-  entryPoints: ['DataTable', 'Layout'].map(name => fileURLToPath(new URL(`../src/components/${name}.tsx`, import.meta.url))),
+  entryPoints: ['DataTable', 'Layout', 'AdminSettings'].map(name => fileURLToPath(new URL(`../src/components/${name}.tsx`, import.meta.url))),
   outdir: directory, outExtension: { '.js': '.mjs' }, bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', loader: { '.css': 'empty' },
 })
 const { DataTable } = await import(pathToFileURL(`${directory}/DataTable.mjs`).href)
 const { rowProps } = await import(pathToFileURL(`${directory}/Layout.mjs`).href)
+const { SettingsForm, AdminLoadState, canManageSettings } = await import(pathToFileURL(`${directory}/AdminSettings.mjs`).href)
+
+test('read-only settings disable native inputs and writes, not the reload action', () => {
+  const html = renderToStaticMarkup(h(SettingsForm, { user: { permissions: ['admin:read'] }, onSave: async () => {}, onReload: async () => {} }, h('input', { name: 'setting', defaultValue: 'saved' })))
+  assert.ok(html.includes('<fieldset class="settings-fields" disabled=""'))
+  assert.ok(html.includes('조회 전용'))
+  assert.ok(html.includes('class="btn btn-ghost">다시 불러오기'))
+  assert.ok(html.includes('class="btn btn-primary" disabled=""'))
+  assert.equal(canManageSettings({ permissions: null }), false)
+  assert.equal(canManageSettings({ permissions: ['admin:write'] }), true)
+  assert.equal(canManageSettings({ isBootstrap: true }), true)
+})
+
+test('failed settings loads expose recovery, not editable defaults or a permanent spinner', () => {
+  const html = renderToStaticMarkup(h(AdminLoadState, { error: 'Unavailable', retry: async () => {} }))
+  assert.ok(html.includes('role="alert"') && html.includes('다시 불러오기'))
+  assert.ok(!html.includes('<input') && !html.includes('spinner-wrap'))
+})
 
 test('table pagination limits DOM rows and numeric cell alignment survives conditional fragments', () => {
   const html = renderToStaticMarkup(h(DataTable, {

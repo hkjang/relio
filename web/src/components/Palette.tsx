@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { User } from '../types'
-import { NavItem, adminNav, appNav, meNav, navIcon, quickActions } from '../nav'
+import { NavItem, adminNav, appNav, meNav, matchesNav, navIcon, quickActions } from '../nav'
 import { initials } from '../labels'
 
 // The topbar search box used to be a dead end: in the sales area it ignored what
@@ -116,7 +116,7 @@ export default function Palette({ user, approvalEnabled, onClose }: {
     const hit = (entry: Entry) => matches(`${entry.label} ${entry.hint || ''}`, query)
     const navHit = destinations.filter(d => {
       const source = [...appNav, ...meNav, ...adminNav].find(n => n.to === d.to)
-      return matches(`${d.label} ${d.hint || ''} ${source?.keywords || ''}`, query)
+      return source ? matchesNav(source, query) : matches(`${d.label} ${d.hint || ''}`, query)
     })
     return [...navHit, ...records, ...actions.filter(hit)]
   }, [query, destinations, actions, records])
@@ -130,6 +130,7 @@ export default function Palette({ user, approvalEnabled, onClose }: {
   function choose(entry?: Entry) {
     const target = entry || entries[cursor]
     if (!target) return
+    if (!window.dispatchEvent(new Event('relio:navigate', { cancelable: true }))) return
     if (target.group !== '실행') rememberRecent(target)
     onClose()
     // Navigation is the caller's job so the palette does not depend on Layout.

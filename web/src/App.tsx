@@ -103,7 +103,7 @@ export default function App() {
   else if (path === '/app/intelligence-center' || path === '/app/recommendations') page = <IntelligencePages {...common} />
   else if (path.startsWith('/me')) page = <MePages {...common} onPasswordChanged={async () => { const me=await api<{user:User}>('/api/v1/auth/me');const currentUser=normalizeUser(me.user);setUser(currentUser);setCSRF(currentUser.csrfToken);navigate(takeReturn()) }} />
   else page = <AppPages {...common} />
-  return <>{page}{toast && <div className={`toast ${toast.error?'toast-error':''}`}><span>{toast.error?'!':'✓'}</span>{toast.message}</div>}</>
+  return <>{page}{toast && <div className={`toast ${toast.error?'toast-error':''}`} role={toast.error?'alert':'status'} aria-atomic="true"><span aria-hidden="true">{toast.error?'!':'✓'}</span>{toast.message}</div>}</>
 }
 
 function NoAccess({ user, version, onLogout }: { user: User; version: Version; onLogout: () => void }) {

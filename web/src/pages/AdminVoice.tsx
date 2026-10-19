@@ -5,6 +5,7 @@ import { errorMessage } from '../App'
 import { label } from '../labels'
 import { Confirm, Empty, Modal, Spinner, Status } from '../components/Layout'
 import { VoiceWorkspace } from '../components/VoiceWorkspace'
+import { AdminLoadState } from '../components/AdminSettings'
 
 // Administrator side of VOC workspaces: the workspaces themselves, the preset
 // that sets one up for a department in a click, and the request types with
@@ -26,7 +27,8 @@ function useOrganizations() {
   return items
 }
 
-export function VoiceAdmin({ notify }: { notify: Notify }) {
+export function VoiceAdmin({ notify, canWrite }: { notify: Notify; canWrite: boolean }) {
+  const [error, setError] = useState('')
   const [workspaces, setWorkspaces] = useState<VoiceWorkspace[] | null>(null)
   const [presets, setPresets] = useState<Preset[]>([])
   const [categories, setCategories] = useState<AdminCategory[] | null>(null)
@@ -35,10 +37,10 @@ export function VoiceAdmin({ notify }: { notify: Notify }) {
   const [editCategory, setEditCategory] = useState<null | { category?: AdminCategory }>(null)
   const [remove, setRemove] = useState<AdminCategory | null>(null)
   const [busy, setBusy] = useState(false)
-  const load = () => Promise.all([
+  const load = () => { setError(''); return Promise.all([
     api<{ items: VoiceWorkspace[]; presets: Preset[] }>('/api/v1/admin/voice-workspaces').then(v => { setWorkspaces(v.items); setPresets(v.presets) }),
     api<{ items: AdminCategory[] }>('/api/v1/admin/voice-categories').then(v => setCategories(v.items)),
-  ]).catch(e => notify(errorMessage(e), true))
+  ]).catch(e => { setError(errorMessage(e)); notify(errorMessage(e), true) }) }
   useEffect(() => { void load() }, [])
   async function confirmRemove() {
     if (!remove) return
@@ -46,13 +48,13 @@ export function VoiceAdmin({ notify }: { notify: Notify }) {
     try { const r = await api<any>(`/api/v1/admin/voice-categories/${remove.id}`, { method: 'DELETE' }); notify(r?.note || '요청 유형을 삭제했습니다.'); setRemove(null); await load() }
     catch (e) { notify(errorMessage(e), true) } finally { setBusy(false) }
   }
-  if (!workspaces || !categories) return <Spinner />
+  if (!workspaces || !categories || error) return <AdminLoadState error={error} retry={load} />
   const groups = [{ id: '', name: '일반 고객 요청', isolated: false }, ...workspaces.map(w => ({ id: w.id, name: w.name, isolated: w.isolated }))]
   return <div className="settings-stack">
     <section className="panel settings-section">
       <div className="settings-title"><span>▦</span><div><h2>업무 영역</h2><p>부서별로 유형·항목·고객 코드를 따로 두고, 필요하면 다른 부서와 영업 지표에서 분리합니다.</p></div>
-        <div className="heading-actions">{presets.map(p => <button key={p.code} className="btn btn-secondary" onClick={() => setApplyPreset(p)}>템플릿: {p.name}</button>)}
-          <button className="btn btn-primary" onClick={() => setEditWorkspace({})}>＋ 업무 영역</button></div></div>
+        <div className="heading-actions">{presets.map(p => <button key={p.code} className="btn btn-secondary" disabled={!canWrite} onClick={() => setApplyPreset(p)}>템플릿: {p.name}</button>)}
+          <button className="btn btn-primary" disabled={!canWrite} onClick={() => setEditWorkspace({})}>＋ 업무 영역</button></div></div>
       {workspaces.length ? <div className="table-panel"><DataTable rows={workspaces} label="업무 영역" searchValue={w=>[w.name,w.code,w.organizationName].join(' ')} columns={[{key:'name',label:'업무 영역',value:w=>w.name}, {key:'org',label:'소유 부서',value:w=>w.organizationName}, {key:'isolated',label:'격리',value:w=>w.isolated}, {key:'gate',label:'지식 게이트',value:w=>w.knowledgeGate}, {key:'code',label:'고객 코드',value:w=>w.customerCodeLabel}, {key:'count',label:'유형 · 항목',value:w=>w.categories.length,initialDirection:'desc'}, {key:'active',label:'상태',value:w=>w.active,initialDirection:'desc'}, {key:'actions',label:'관리'}]} renderRow={w => <tr key={w.id}>
           <td><b>{w.name}</b><code className="table-sub">{w.code}</code></td>
           <td>{w.organizationName || '—'}</td>
@@ -61,14 +63,14 @@ export function VoiceAdmin({ notify }: { notify: Notify }) {
           <td>{w.customerCodeLabel ? <>{w.customerCodeLabel}<small className="table-sub">{w.customerCodePattern || '형식 제한 없음'} · {w.customerCodeUniqueScope === 'WORKSPACE' ? '영역별 중복 검사' : '전체 중복 검사'}</small></> : '—'}</td>
           <td>{w.categories.length}개 유형 · {w.fields.length}개 항목<small className="table-sub">{w.slaEnabled ? 'SLA 적용 유형 있음' : 'SLA 미적용'}</small></td>
           <td><Status value={w.active ? 'ACTIVE' : 'DISABLED'} /></td>
-          <td><div className="row-menu"><button onClick={() => setEditWorkspace({ workspace: w })}>편집</button></div></td>
+          <td><div className="row-menu"><button disabled={!canWrite} onClick={() => setEditWorkspace({ workspace: w })}>편집</button></div></td>
         </tr>} /></div>
         : <Empty title="업무 영역이 없습니다" description="모든 요청이 일반 고객 요청으로 처리됩니다. 부서 전용 민원 접수가 필요하면 템플릿으로 시작하세요." />}
     </section>
 
     <section className="panel settings-section">
       <div className="settings-title"><span>◷</span><div><h2>요청 유형 · SLA</h2><p>유형별로 응답·해결 목표를 두거나, SLA를 끄면 기한을 계산하지도 표시하지도 않습니다.</p></div>
-        <div className="heading-actions"><button className="btn btn-primary" onClick={() => setEditCategory({})}>＋ 유형 추가</button></div></div>
+        <div className="heading-actions"><button className="btn btn-primary" disabled={!canWrite} onClick={() => setEditCategory({})}>＋ 유형 추가</button></div></div>
       {groups.map(g => {
         const rows = categories.filter(c => (c.workspaceId || '') === g.id)
         if (!rows.length && g.id) return null
@@ -82,7 +84,7 @@ export function VoiceAdmin({ notify }: { notify: Notify }) {
               <td>{x.slaEnabled ? (x.resolutionHours >= 24 ? `${Math.round(x.resolutionHours / 24)}일` : `${x.resolutionHours}시간`) : '—'}</td>
               <td>{x.usedCount}건</td>
               <td><Status value={x.active ? 'ACTIVE' : 'DISABLED'} /></td>
-              <td><div className="row-menu"><button onClick={() => setEditCategory({ category: x })}>편집</button><button className="danger" onClick={() => setRemove(x)}>삭제</button></div></td>
+              <td><div className="row-menu"><button disabled={!canWrite} onClick={() => setEditCategory({ category: x })}>편집</button><button className="danger" disabled={!canWrite} onClick={() => setRemove(x)}>삭제</button></div></td>
             </tr>} /></div>
         </div>
       })}

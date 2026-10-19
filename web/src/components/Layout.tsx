@@ -2,11 +2,11 @@ import React, { Fragment, ReactNode, useCallback, useEffect, useRef, useState } 
 import { api } from '../api'
 import { initials, label } from '../labels'
 import { User, Version } from '../types'
-import { NavItem, adminNav, appNav, meNav, navIcon as icon } from '../nav'
+import { NavItem, adminNav, appNav, meNav, matchesNav, navIcon as icon } from '../nav'
 import Palette from './Palette'
 
-export function navigate(path: string) { history.pushState({}, '', path); window.dispatchEvent(new PopStateEvent('popstate')) }
-export function Link({ to, children, className = '', onClick }: { to: string; children: ReactNode; className?: string; onClick?: () => void }) { return <a href={to} className={className} onClick={e => { e.preventDefault(); onClick?.(); navigate(to) }}>{children}</a> }
+export function navigate(path: string) { if (!window.dispatchEvent(new Event('relio:navigate', { cancelable: true }))) return; history.pushState({}, '', path); window.dispatchEvent(new PopStateEvent('popstate')) }
+export function Link({ to, children, className = '', onClick, current }: { to: string; children: ReactNode; className?: string; onClick?: () => void; current?: boolean }) { return <a href={to} className={className} aria-current={current ? 'page' : undefined} onClick={e => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); onClick?.(); navigate(to) }}>{children}</a> }
 
 type LayoutProps = { area: 'app'|'me'|'admin'; path: string; user: User; version: Version; approvalEnabled: boolean; onLogout: () => void; children: ReactNode; title: string; subtitle?: string; actions?: ReactNode }
 
@@ -39,7 +39,8 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
   const permissions = user.permissions || []
   const canAdmin = user.isBootstrap || permissions.includes('admin:*') || permissions.includes('admin:read')
   const nav = area === 'app' ? [...appNav, ...(approvalEnabled ? [{to:'/app/approvals',key:'approvals',label:'검토 · 승인',group:'고객 관리'}] : [])] : area === 'me' ? meNav : adminNav
-  const filteredNav = area !== 'admin' || !adminQuery.trim() ? nav : nav.filter(item => `${item.label} ${item.group || ''} ${item.keywords || ''}`.toLowerCase().includes(adminQuery.trim().toLowerCase()))
+  const filteredNav = area !== 'admin' ? nav : nav.filter(item => matchesNav(item, adminQuery))
+  const activeAdmin = area === 'admin' ? adminNav.find(item => item.to === path) : undefined
   const adminSearch = (value:string) => setAdminQuery(value)
   const menuLabel = area === 'admin' ? '관리 메뉴' : area === 'me' ? '개인 메뉴' : '업무 메뉴'
   return <div className={`shell shell-${area}`}>
@@ -47,9 +48,9 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
     <aside ref={menuSurface} className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`} inert={mobile && !menuOpen} role={mobile ? 'dialog' : undefined} aria-modal={mobile && menuOpen ? true : undefined} aria-label={menuLabel}>
       <div className="sidebar-mobile-head"><b>{menuLabel}</b><button className="icon-btn" aria-label={`${menuLabel} 닫기`} onClick={() => setMenuOpen(false)}>×</button></div>
       <Link to={area === 'app' ? '/app/dashboard' : area === 'me' ? '/me/profile' : '/admin/overview'} className="brand"><span className="brand-mark">R</span><span><b>Relio</b><small>{area === 'admin' ? 'Admin Console' : area === 'me' ? 'Personal' : 'Sales CRM'}</small></span></Link>
-      {area === 'admin' && <label className="admin-nav-search"><span>⌕</span><input value={adminQuery} onChange={e=>adminSearch(e.target.value)} placeholder="설정 메뉴 찾기" aria-label="관리자 메뉴 검색"/></label>}
+      {area === 'admin' && <><div className="admin-nav-search"><span aria-hidden="true">⌕</span><input type="search" value={adminQuery} onChange={e=>adminSearch(e.target.value)} placeholder="설정 메뉴 찾기" aria-label="관리자 메뉴 검색"/>{adminQuery && <button type="button" aria-label="관리 메뉴 검색 초기화" onClick={()=>adminSearch('')}>×</button>}</div>{adminQuery && <p className="admin-nav-count" role="status">{filteredNav.length}개 메뉴 검색됨</p>}</>}
       <nav className="side-nav" onClick={() => setMenuOpen(false)}>
-        {filteredNav.map((item,index) => <Fragment key={item.to}>{item.group && item.group !== filteredNav[index-1]?.group && <p className="nav-group">{item.group}</p>}<Link to={item.to} className={path === item.to || path.startsWith(item.to + '/') ? 'active' : ''}><span className="nav-icon">{icon[item.key]}</span><span>{item.label}</span></Link></Fragment>)}
+        {filteredNav.map((item,index) => <Fragment key={item.to}>{item.group && item.group !== filteredNav[index-1]?.group && <p className="nav-group">{item.group}</p>}<Link to={item.to} current={path === item.to || path.startsWith(item.to + '/')} className={path === item.to || path.startsWith(item.to + '/') ? 'active' : ''}><span className="nav-icon" aria-hidden="true">{icon[item.key]}</span><span>{item.label}</span></Link></Fragment>)}
         {area === 'admin' && filteredNav.length === 0 && <p className="nav-empty">일치하는 설정 메뉴가 없습니다.</p>}
       </nav>
       <div className="side-footer">
@@ -73,6 +74,7 @@ export default function Layout({ area, path, user, version, approvalEnabled, onL
       </header>
       {paletteOpen && <Palette user={user} approvalEnabled={approvalEnabled} onClose={() => setPaletteOpen(false)} />}
       <section className="page">
+        {activeAdmin && <nav className="admin-breadcrumb" aria-label="현재 위치"><Link to="/admin/overview">관리자 콘솔</Link><span aria-hidden="true">/</span><span>{activeAdmin.group}</span><span aria-hidden="true">/</span><span aria-current="page">{activeAdmin.label}</span></nav>}
         <div className="page-heading"><div><p className="eyebrow">{area === 'admin' ? '관리자 콘솔' : area === 'me' ? '개인 업무' : '영업 업무'}</p><h1>{title}</h1>{subtitle && <p className="subtitle">{subtitle}</p>}</div>{actions && <div className="heading-actions">{actions}</div>}</div>
         {children}
       </section>
