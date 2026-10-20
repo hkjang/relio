@@ -133,11 +133,12 @@ func (s *Service) SearchKnowledge(ctx context.Context, p *auth.Principal, q Know
 		q.WorkspaceID = w.ID
 		filterDefinitions = w.Fields
 	} else if len(q.Fields) > 0 {
-		workspaces, err := s.Workspaces(ctx, p, false)
+		catalog, err := s.FieldCatalog(ctx, p)
 		if err != nil {
 			return nil, err
 		}
-		for _, w := range workspaces {
+		filterDefinitions = append(filterDefinitions, catalog.Fields...)
+		for _, w := range catalog.Workspaces {
 			filterDefinitions = append(filterDefinitions, w.Fields...)
 		}
 	}

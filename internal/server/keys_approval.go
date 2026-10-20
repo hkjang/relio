@@ -15,10 +15,15 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 		s.serviceError(w, r, err)
 		return
 	}
+	catalog, err := s.MCP.ToolCatalog(r.Context(), principal(r))
+	if err != nil {
+		s.serviceError(w, r, err)
+		return
+	}
 	httpx.JSON(w, 200, map[string]any{
 		"items":         v,
 		"allowedScopes": apikey.AllowedScopesFor(principal(r)),
-		"mcpTools":      s.MCP.ToolCatalog(r.Context(), principal(r)),
+		"mcpTools":      catalog,
 		// The MCP guide shows organisation-account sign-in only when the
 		// server will actually accept it.
 		"mcpOAuth": s.publicMCPOAuth(r.Context()),

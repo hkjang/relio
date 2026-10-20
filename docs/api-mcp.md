@@ -86,7 +86,7 @@ OAuth 로 연결한 에이전트의 도구 범위는 **사용자 Role 권한 ∩
 
 ### 2.5 고객 요청 업무 영역 (부서 VOC) 도구
 
-부서 업무 영역(예: 회원사 민원)을 쓰는 사용자에게 보이는 도구입니다. `fields` 인자의 스키마는 호출자가 쓸 수 있는 업무 영역의 항목 정의로 **요청마다 생성** 되며, 선택형 항목은 허용값이 `enum` 으로 들어갑니다. 쓰기 도구는 `readOnlyHint: false` 이고 설명에 "담당자 승인 후 실행" 을 명시합니다.
+기본 민원과 부서 업무 영역(예: 회원사 민원)을 위한 도구입니다. `fields` 인자의 스키마는 **업무 영역 없는 기본 민원의 활성 항목 + 호출자가 접근 가능한 업무 영역의 활성 항목**으로 요청마다 생성되며, 선택형 항목은 허용값이 `enum`으로 들어갑니다. 접수 도구에는 `INTAKE`, 해결 도구에는 `RESOLUTION`, 유사 사례 검색에는 두 단계의 항목을 제공합니다. 같은 키의 정의가 여러 영역에 있으면 `anyOf`로 표현하고 실제 저장 시 선택한 유형의 정의로 검증합니다. 기본 민원의 필드를 부서 업무 영역에 상속하거나 권한을 넓히지 않습니다. 쓰기 도구는 `readOnlyHint: false`이고 설명에 "담당자 승인 후 실행"을 명시합니다.
 
 | 도구 | 필수 인자 | 동작 |
 |---|---|---|
@@ -98,7 +98,30 @@ OAuth 로 연결한 에이전트의 도구 범위는 **사용자 Role 권한 ∩
 | `resolve_customer_voice` | `id`, `resolution` | 해결 처리. `causeEvidence`(지식 게이트 영역은 필수), `rootCause`, `fields`(해결 항목). 접수 상태면 처리 중을 거쳐 해결로 바꾸며 두 단계 모두 이력에 남습니다 |
 | `register_workspace_customer` | `workspaceId`, `name`, `customerCode` | 간이 등록. 같은 코드가 있으면 등록하지 않고 `existing` 으로 기존 고객을 돌려줍니다 |
 | `import_workspace_customers` | `workspaceId`, `items` | 일괄 등록(최대 5000행). 행마다 `CREATED`·`UPDATED`·`UNCHANGED`·`ERROR` |
-| `get_voice_categories` | — | 유형 목록과 업무 영역, 영역별 항목 정의·허용값, SLA 적용 여부 |
+| `get_voice_categories` | — | 유형 목록과 `fields`(업무 영역 없는 기본 민원), `workspaces[].fields`(접근 가능한 업무 영역), 항목 정의·허용값, SLA 적용 여부 |
+
+#### `fields.<키>: Expected never` 복구 및 키 사용 기준
+
+v1.15.2까지는 기본 민원에만 정의된 커스텀 필드가 MCP 스키마에서 빠져 `properties: {}`, `additionalProperties: false`가 반환될 수 있었습니다. REST는 값을 받아도 스키마를 검사하는 게이트웨이는 전송 전에 모든 키를 거부하는 문제이며, v1.15.3에서 수정했습니다.
+
+1. 서버를 수정 버전으로 교체한 뒤 **실제 접수에 사용하는 인증으로** `tools/list`를 다시 조회합니다.
+2. `file_customer_voice.inputSchema.properties.fields.properties`에 필요한 키가 포함되어 있는지 확인합니다.
+3. MCP 게이트웨이·챗봇의 기존 도구 스키마 캐시도 갱신합니다. 클라이언트에 재탐색 기능이 없으면 Relio MCP 연결을 끊고 다시 연결하거나 클라이언트를 재시작합니다. Relio는 `notifications/tools/list_changed`를 전송하지 않으므로 기존 연결의 캐시가 자동으로 바뀐다고 가정하지 마세요.
+4. `get_voice_categories`에서 **선택한 유형에 맞는 항목의 `key`와 허용값**을 그대로 사용합니다. `service_type`을 `serviceType`이나 필드 ID(UUID)로 바꾸지 않습니다.
+
+예를 들어 아래 키와 코드가 실제 활성 정의에 있는 환경에서는 다음 값을 전달할 수 있습니다. 예시는 운영 설정을 새로 생성하거나 허용값을 강제하지 않습니다.
+
+```json
+{
+  "fields": {
+    "service_type": "PHONE",
+    "dev_method": "POPUP_MOD",
+    "error_code": "R3001"
+  }
+}
+```
+
+필드 정의 조회 실패 시에는 빈 스키마를 성공으로 반환하지 않고 `tools/list`에 JSON-RPC 오류(`-32603`)와 재조회 안내를 반환합니다. HTTP 응답은 `Cache-Control: no-store`입니다. 필수값 누락·미등록 키·허용값 위반·고객/민원 접근 범위에 대한 서버 검증은 유지됩니다. 정상 조회 후에도 키가 없다면 필드의 활성 여부, 접수/해결 단계, 업무 영역 연결 및 해당 인증 계정의 접근 권한을 확인하세요.
 
 **지식 반영 상태를 바꾸는 도구는 없습니다.** REST `PUT /api/v1/voices/{id}/knowledge` 도 `voice:knowledge-review` 권한과 **화면 세션** 을 요구하며, 개인 연동 키·OAuth 토큰으로는 거부됩니다.
 

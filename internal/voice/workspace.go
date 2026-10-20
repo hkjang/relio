@@ -61,6 +61,26 @@ type Field struct {
 	DisplayOrder int               `json:"displayOrder"`
 }
 
+// FieldCatalog includes the default (workspace-less) request fields as well
+// as the caller's accessible workspaces. Global fields are not inherited by
+// workspaces: intakeFor selects exactly one of these definition sets.
+type FieldCatalog struct {
+	Fields     []Field     `json:"fields"`
+	Workspaces []Workspace `json:"workspaces"`
+}
+
+func (s *Service) FieldCatalog(ctx context.Context, p *auth.Principal) (FieldCatalog, error) {
+	workspaces, err := s.Workspaces(ctx, p, false)
+	if err != nil {
+		return FieldCatalog{}, err
+	}
+	fields, err := s.fields(ctx, "")
+	if err != nil {
+		return FieldCatalog{}, err
+	}
+	return FieldCatalog{Fields: fields, Workspaces: workspaces}, nil
+}
+
 // Cause evidence levels and knowledge states. The labels are the words the
 // requirement uses, so screens, exports and agents say the same thing.
 //

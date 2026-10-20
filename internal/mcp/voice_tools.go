@@ -25,16 +25,17 @@ var searchWorkspaceCustomersSchema = schema([]string{"workspaceId", "query"}, ma
 	"workspaceId": str("get_voice_categories가 반환한 업무 영역 ID"), "query": str("회원사명 또는 회원사코드"), "limit": integer("최대 결과 수(기본 20, 최대 100)"),
 })
 
-// voiceFields describes a workspace's fields as a JSON Schema object, with the
-// options of every select field as an enum, so an agent is told the exact
-// values instead of guessing them. Fields of workspaces the caller cannot use
-// never appear.
-func (s *Server) voiceFields(ctx context.Context, p *auth.Principal, phases ...string) (map[string]any, []voice.Workspace) {
-	workspaces, err := s.Voices.Workspaces(ctx, p, false)
-	if err != nil {
-		workspaces = nil
+// catalogFieldSchema includes the same default definitions REST intake uses.
+// Previously only named workspaces were included, so a default-only setup
+// published properties:{} with additionalProperties:false, rejecting every
+// custom field in schema-validating gateways before the server saw the call.
+func catalogFieldSchema(catalog voice.FieldCatalog, phases ...string) map[string]any {
+	groups := make([]voice.Workspace, 0, len(catalog.Workspaces)+1)
+	if len(catalog.Fields) > 0 {
+		groups = append(groups, voice.Workspace{Name: "기본 민원(업무 영역 없음)", Fields: catalog.Fields})
 	}
-	return workspaceFieldSchema(workspaces, phases...), workspaces
+	groups = append(groups, catalog.Workspaces...)
+	return workspaceFieldSchema(groups, phases...)
 }
 
 func workspaceFieldSchema(workspaces []voice.Workspace, phases ...string) map[string]any {
@@ -85,7 +86,7 @@ func workspaceFieldSchema(workspaces []voice.Workspace, phases ...string) map[st
 			}
 		}
 	}
-	return map[string]any{"type": "object", "description": "업무 영역의 추가 항목. 키와 허용값은 get_voice_categories에서도 확인할 수 있습니다.",
+	return map[string]any{"type": "object", "description": "민원 추가 항목. get_voice_categories의 fields(기본 민원) 또는 workspaces[].fields(업무 영역)에서 반환한 key와 허용값을 그대로 사용하세요. 필드 ID나 임의의 camelCase 별칭은 사용하지 마세요. 필수값은 선택한 유형의 서버 검증을 따릅니다.",
 		"properties": properties, "additionalProperties": false}
 }
 
@@ -156,13 +157,19 @@ func (s *Server) customerRef(ctx context.Context, p *auth.Principal, id, code, w
 
 // addVoiceTools registers the department VOC tools. It is called from tools()
 // so the same permission and allowlist rules apply.
-func (s *Server) addVoiceTools(ctx context.Context, p *auth.Principal, add func(permission, name, title, description string, input map[string]any, readOnly, dangerous bool)) {
+func (s *Server) addVoiceTools(ctx context.Context, p *auth.Principal, add func(permission, name, title, description string, input map[string]any, readOnly, dangerous bool)) error {
 	if !p.Has("voice:read") {
-		return
+		return nil
 	}
-	intakeFields, _ := s.voiceFields(ctx, p, "INTAKE")
-	resolutionFields, _ := s.voiceFields(ctx, p, "RESOLUTION")
-	filterFields, _ := s.voiceFields(ctx, p)
+	// Load once for all three schemas, and never turn a failed lookup into a
+	// successful empty/closed schema that a gateway could cache indefinitely.
+	catalog, err := s.Voices.FieldCatalog(ctx, p)
+	if err != nil {
+		return fmt.Errorf("민원 필드 정의를 조회하지 못했습니다. 도구 목록을 다시 불러오세요: %w", err)
+	}
+	intakeFields := catalogFieldSchema(catalog, "INTAKE")
+	resolutionFields := catalogFieldSchema(catalog, "RESOLUTION")
+	filterFields := catalogFieldSchema(catalog)
 	evidence := map[string]any{"type": "string", "enum": voice.CauseEvidenceLevels,
 		"description": "원인 근거: CONFIRMED=확인(테스트·로그 등 객관 근거), PRESUMED=추정(정황상 판단), UNIDENTIFIED=미특정(원인 미특정, 증상은 해소). 실제 근거 수준 그대로 기록합니다."}
 
@@ -213,6 +220,7 @@ func (s *Server) addVoiceTools(ctx context.Context, p *auth.Principal, add func(
 				"required": []string{"name", "customerCode"}, "additionalProperties": false}},
 			"updateNames": boolean("true면 이미 있는 코드의 고객사명을 이 목록 값으로 바꿉니다"),
 		}), false, false)
+	return nil
 }
 
 // callVoiceTool runs the department VOC tools; ok is false for any other name.
@@ -288,8 +296,8 @@ func (s *Server) callVoiceTool(ctx context.Context, p *auth.Principal, name stri
 		if err != nil {
 			return nil, true, err
 		}
-		workspaces, err := s.Voices.Workspaces(ctx, p, false)
-		return map[string]any{"categories": categories, "workspaces": workspaces, "causeEvidence": voice.CauseEvidenceLevels}, true, err
+		catalog, err := s.Voices.FieldCatalog(ctx, p)
+		return map[string]any{"categories": categories, "fields": catalog.Fields, "workspaces": catalog.Workspaces, "causeEvidence": voice.CauseEvidenceLevels}, true, err
 	}
 	return nil, false, nil
 }

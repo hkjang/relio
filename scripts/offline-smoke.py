@@ -83,6 +83,49 @@ def expect_client_error(call, path, method="GET", body=None, headers=None, conta
     raise AssertionError(f"{method} {path} unexpectedly succeeded")
 
 
+def assert_mcp_schema(schema, value, path="arguments"):
+    """Check the emitted schema subset before HTTP, like a strict gateway.
+
+    The prior suite sent tools/call directly, bypassing nested JSON Schema
+    validation entirely; a server-only success did not prove client usability.
+    This dependency-free check keeps the offline test image self-contained.
+    """
+    if "anyOf" in schema:
+        for choice in schema["anyOf"]:
+            try:
+                assert_mcp_schema(choice, value, path)
+                break
+            except AssertionError:
+                pass
+        else:
+            raise AssertionError(f"{path}: no anyOf variant accepted {value!r}")
+    kind = schema.get("type")
+    checks = {
+        "object": lambda v: isinstance(v, dict),
+        "array": lambda v: isinstance(v, list),
+        "string": lambda v: isinstance(v, str),
+        "number": lambda v: type(v) in (int, float),
+        "integer": lambda v: type(v) is int,
+        "boolean": lambda v: type(v) is bool,
+    }
+    if kind:
+        assert kind in checks and checks[kind](value), f"{path}: expected {kind}"
+    if "enum" in schema:
+        assert value in schema["enum"], f"{path}: invalid enum value {value!r}"
+    if kind == "object":
+        props = schema.get("properties", {})
+        for key in schema.get("required", []):
+            assert key in value, f"{path}.{key}: required"
+        for key, child in value.items():
+            if key in props:
+                assert_mcp_schema(props[key], child, f"{path}.{key}")
+            else:
+                assert schema.get("additionalProperties", True) is not False, f"{path}.{key}: not allowed"
+    if kind == "array":
+        for index, child in enumerate(value):
+            assert_mcp_schema(schema.get("items", {}), child, f"{path}[{index}]")
+
+
 ready = request("/health/ready")
 assert ready["status"] == "ready"
 login = request("/api/v1/auth/login", "POST", {"username": admin, "password": initial_password})
@@ -1012,6 +1055,106 @@ request("/api/v1/admin/settings/system/locale", "PUT", {"value": "en-US", "value
 request("/api/v1/admin/settings/system/locale", "DELETE", None, csrf_header)
 assert "locale" not in {item["key"] for item in request("/api/v1/admin/settings?namespace=system")["items"]}
 
+# Default (workspace-less) VOC fields must be discoverable before a strict
+# gateway will even send tools/call. These are disposable test settings only.
+voice_key = request(
+    "/api/v1/me/keys", "POST",
+    {"name": "Offline VOC MCP", "scopes": ["mcp:use", "customer:read", "customer:write", "voice:read", "voice:write"], "channels": ["MCP"]},
+    csrf_header,
+)
+voice_mcp_headers = {
+    "Authorization": "Bearer " + voice_key["secret"],
+    "Accept": "application/json, text/event-stream", "Content-Type": "application/json", "MCP-Protocol-Version": "2025-11-25",
+}
+
+
+def voice_tool_catalog(headers=voice_mcp_headers):
+    response = request("/mcp", "POST", {"jsonrpc": "2.0", "id": 180, "method": "tools/list"}, headers)
+    assert "error" not in response, response
+    return {item["name"]: item for item in response["result"]["tools"]}
+
+
+def voice_tool_call(name, arguments, *, validate=True, headers=voice_mcp_headers, catalog=None):
+    if validate:
+        advertised = catalog if catalog is not None else voice_tool_catalog(headers)
+        assert_mcp_schema(advertised[name]["inputSchema"], arguments)
+    return request("/mcp", "POST", {
+        "jsonrpc": "2.0", "id": 181, "method": "tools/call", "params": {"name": name, "arguments": arguments},
+    }, headers)["result"]
+
+
+before_fields = voice_tool_catalog()
+assert not request("/api/v1/voices/workspaces")["items"]
+global_definitions = [
+    {"key": "service_type", "label": "서비스 구분", "type": "Select", "phase": "INTAKE", "required": True, "options": ["PHONE"]},
+    {"key": "dev_method", "label": "개발방식", "type": "Select", "phase": "INTAKE", "options": ["POPUP_MOD"]},
+    {"key": "error_code", "label": "오류코드", "type": "Text", "phase": "INTAKE"},
+    {"key": "resolver", "label": "해결 주체", "type": "Select", "phase": "RESOLUTION", "options": ["GLOBAL_OPS"]},
+]
+global_field_ids = {}
+for definition in global_definitions:
+    created = request("/api/v1/admin/custom-fields", "POST", {"entityType": "VOICE", **definition}, csrf_header)
+    global_field_ids[definition["key"]] = created["id"]
+global_tools = voice_tool_catalog()
+global_intake_schema = global_tools["file_customer_voice"]["inputSchema"]["properties"]["fields"]
+assert set(global_intake_schema["properties"]) == {"service_type", "dev_method", "error_code"}, global_intake_schema
+assert global_intake_schema["additionalProperties"] is False
+assert "service_type" not in before_fields["file_customer_voice"]["inputSchema"]["properties"]["fields"]["properties"]
+assert set(global_tools["resolve_customer_voice"]["inputSchema"]["properties"]["fields"]["properties"]) == {"resolver"}
+discovered = voice_tool_call("get_voice_categories", {})["structuredContent"]
+assert {field["key"] for field in discovered["fields"]} == set(global_field_ids) and not discovered["workspaces"], discovered
+default_customer = request("/api/v1/customers", "POST", {"name": "MCP 기본 민원 스키마 검증"}, csrf_header)
+global_values = {"service_type": "PHONE", "dev_method": "POPUP_MOD", "error_code": "R3001"}
+global_args = {"customerId": default_customer["id"], "voiceType": "INQUIRY", "title": "MCP R3001", "fields": global_values}
+# This reproduces the deadlock: REST requires service_type, and now the MCP
+# input schema actually permits the very same key and approved value.
+rest_case = request("/api/v1/voices", "POST", {
+    "customerId": default_customer["id"], "voiceType": "INQUIRY", "title": "REST R3001", "customFields": global_values,
+}, csrf_header)
+filed = voice_tool_call("file_customer_voice", global_args, catalog=global_tools)
+assert filed["isError"] is False, filed
+global_case = filed["structuredContent"]
+stored = request(f"/api/v1/voices/{global_case['id']}")["voice"]
+assert stored["customFields"] == rest_case["customFields"] == global_values, stored
+missing = voice_tool_call("file_customer_voice", {k: v for k, v in global_args.items() if k != "fields"})
+assert missing["isError"] and "서비스 구분" in missing["content"][0]["text"], missing
+for bad_fields in (
+    {**global_values, "service_type": "INVALID"},
+    {**global_values, "unknown_key": "x"},
+    {"serviceType": "PHONE"},
+    {global_field_ids["service_type"]: "PHONE"},
+):
+    try:
+        assert_mcp_schema(global_intake_schema, bad_fields)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError(f"gateway must reject invalid fields: {bad_fields}")
+    rejected = voice_tool_call("file_customer_voice", {**global_args, "fields": bad_fields}, validate=False)
+    assert rejected["isError"], rejected
+resolved = voice_tool_call("resolve_customer_voice", {
+    "id": global_case["id"], "resolution": "승인한 해결 내용", "causeEvidence": "CONFIRMED", "fields": {"resolver": "GLOBAL_OPS"},
+})
+assert resolved["isError"] is False and resolved["structuredContent"]["customFields"]["resolver"] == "GLOBAL_OPS", resolved
+request(f"/api/v1/voices/{global_case['id']}/knowledge", "PUT", {"knowledgeStatus": "APPROVED"}, csrf_header)
+found = voice_tool_call("search_voice_knowledge", {"query": "R3001", "fields": {"error_code": "R3001"}})
+assert found["isError"] is False and [item["id"] for item in found["structuredContent"]["items"]] == [global_case["id"]], found
+# Configuration changes must be visible on the next tools/list, without a
+# server restart. Inactive definitions must disappear as well.
+request(f"/api/v1/admin/custom-fields/{global_field_ids['service_type']}", "PUT", {
+    **{k: v for k, v in global_definitions[0].items() if k != "key"}, "options": ["PHONE", "SMS"],
+}, csrf_header)
+refreshed = voice_tool_catalog()
+assert refreshed["file_customer_voice"]["inputSchema"]["properties"]["fields"]["properties"]["service_type"]["enum"] == ["PHONE", "SMS"]
+request(f"/api/v1/admin/custom-fields/{global_field_ids['dev_method']}", "PUT", {
+    **{k: v for k, v in global_definitions[1].items() if k != "key"}, "active": False,
+}, csrf_header)
+assert "dev_method" not in voice_tool_catalog()["file_customer_voice"]["inputSchema"]["properties"]["fields"]["properties"]
+request(f"/api/v1/admin/custom-fields/{global_field_ids['dev_method']}", "PUT", {
+    **{k: v for k, v in global_definitions[1].items() if k != "key"}, "active": True,
+}, csrf_header)
+print("MCP default VOC schemas, canonical keys, REST parity, validation and refresh passed")
+
 # VOC workspaces: a department preset, its SLA-free types and fields, quick
 # member registration, the structured resolution and the knowledge gate.
 department = request("/api/v1/admin/organizations", "POST", {"name": "Offline 회원사 지원부", "code": "OFFLINE_MS", "type": "DEPARTMENT"}, csrf_header)
@@ -1173,19 +1316,28 @@ assert (imported["created"], imported["unchanged"], imported["failed"]) == (1, 1
 # The same workflow through MCP proves strict schemas remain parseable by
 # Qwen/OpenCode-style JSON-RPC clients and that the advertised customerId can
 # be passed directly to intake. The values below are the approved preview.
-voice_key = request(
-    "/api/v1/me/keys", "POST",
-    {"name": "Offline VOC MCP", "scopes": ["mcp:use", "customer:read", "customer:write", "voice:read", "voice:write"], "channels": ["MCP"]},
-    csrf_header,
-)
-voice_mcp_headers = {
-    "Authorization": "Bearer " + voice_key["secret"],
-    "Accept": "application/json, text/event-stream", "Content-Type": "application/json", "MCP-Protocol-Version": "2025-11-25",
-}
 voice_tools = request("/mcp", "POST", {"jsonrpc": "2.0", "id": 80, "method": "tools/list", "params": {}}, voice_mcp_headers)
 voice_tool_map = {tool["name"]: tool for tool in voice_tools["result"]["tools"]}
 assert {"search_workspace_customers", "file_customer_voice", "record_voice_response", "resolve_customer_voice"}.issubset(voice_tool_map)
 assert voice_tool_map["file_customer_voice"]["annotations"]["readOnlyHint"] is False
+assert_mcp_schema(voice_tool_map["file_customer_voice"]["inputSchema"], global_args)
+assert_mcp_schema(voice_tool_map["file_customer_voice"]["inputSchema"], {
+    "customerId": member["id"], "category": "MS_SERVICE_ERROR", "title": "MCP B124", "fields": {"service_type": "IPIN", "error_code": "B124"},
+})
+# Other departments must not learn isolated field definitions or enum values.
+other_key = other_call("/api/v1/me/keys", "POST", {
+    "name": "Offline Other VOC", "scopes": ["mcp:use", "customer:read", "voice:read", "voice:write"], "channels": ["MCP"],
+}, other_headers)
+other_mcp_headers = {**voice_mcp_headers, "Authorization": "Bearer " + other_key["secret"]}
+other_tools = voice_tool_catalog(other_mcp_headers)
+other_service = other_tools["file_customer_voice"]["inputSchema"]["properties"]["fields"]["properties"]["service_type"]
+assert other_service["enum"] == ["PHONE", "SMS"] and "anyOf" not in other_service, other_service
+other_discovery = voice_tool_call("get_voice_categories", {}, headers=other_mcp_headers)["structuredContent"]
+assert member_ws["id"] not in {w["id"] for w in other_discovery["workspaces"]}
+cross_workspace = voice_tool_call("file_customer_voice", {
+    "customerId": member["id"], "category": error_type["id"], "title": "거부되어야 함", "fields": {"service_type": "PHONE"},
+}, headers=other_mcp_headers)
+assert cross_workspace["isError"], cross_workspace
 searched = request("/mcp", "POST", {"jsonrpc": "2.0", "id": 81, "method": "tools/call", "params": {
     "name": "search_workspace_customers", "arguments": {"workspaceId": member_ws["id"], "query": "100000000001"},
 }}, voice_mcp_headers)["result"]

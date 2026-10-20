@@ -253,6 +253,9 @@ func acceptsMCP(r *http.Request) bool {
 		strings.Contains(a, "application/*") || strings.Contains(a, "*/*")
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Tool schemas and results depend on the current user's permissions and
+	// live configuration. Intermediaries must not reuse another/stale catalog.
+	w.Header().Set("Cache-Control", "no-store")
 	start := time.Now()
 	p := auth.FromContext(r.Context())
 	success := false
@@ -494,7 +497,13 @@ func (s *Server) dispatch(r *http.Request, p *auth.Principal, req request, negot
 	case "ping":
 		return map[string]any{}, nil, ""
 	case "tools/list":
-		return map[string]any{"tools": s.tools(r.Context(), p)}, nil, ""
+		items, err := s.tools(r.Context(), p)
+		if err != nil {
+			requestID := httpx.RequestID(r.Context())
+			slog.Error("mcp tool schema load failed", "error", err, "requestId", requestID)
+			return nil, &rpcError{Code: -32603, Message: "민원 필드 정의를 조회하지 못했습니다. 도구 목록을 다시 불러오세요.", Data: map[string]any{"requestId": requestID}}, ""
+		}
+		return map[string]any{"tools": items}, nil, ""
 	case "tools/call":
 		var call toolCall
 		if err := json.Unmarshal(req.Params, &call); err != nil {
@@ -586,7 +595,7 @@ func (s *Server) toolAllowlist(ctx context.Context) (map[string]bool, bool) {
 	return result, true
 }
 
-func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
+func (s *Server) tools(ctx context.Context, p *auth.Principal) ([]tool, error) {
 	out := []tool{}
 	allowlist, restricted := s.toolAllowlist(ctx)
 	add := func(permission, name, title, description string, input map[string]any, readOnly, dangerous bool) {
@@ -682,8 +691,10 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 	add("voice:read", "get_top_churn_risks", "이탈 위험 고객 순위", "담당 범위에서 이탈 위험이 높은 고객을 근거와 함께 조회합니다.", schema(nil, map[string]any{"limit": integer("최대 결과 수")}), true, false)
 	add("voice:read voice:write", "record_voice_response", "처리 기록 추가", "요청의 처리 이력에 한 줄을 추가합니다(기존 기록은 수정되지 않음). eventType으로 구분합니다: CUSTOMER_CONTACT=고객 응대(응답 기한 충족), COMMENT=내부 메모(에이전트 회고 요약 포함), ESCALATED=상위 보고."+confirmFirst, schema([]string{"id", "note"}, map[string]any{"id": str("고객 요청 ID"), "note": str("기록할 내용"), "eventType": map[string]any{"type": "string", "enum": voice.CommentEventTypes, "description": "기록 구분 · 기본 CUSTOMER_CONTACT"}}), false, false)
 	add("voice:read voice:write", "progress_customer_voice", "고객 요청 상태 변경", "요청 상태를 진행, 해결 등으로 변경합니다. 해결로 변경할 때는 해결 내용이 반드시 필요합니다.", schema([]string{"id", "status", "version"}, map[string]any{"id": str("고객 요청 ID"), "status": str("IN_REVIEW, IN_PROGRESS, PENDING_CUSTOMER, RESOLVED, CLOSED, REJECTED"), "version": integer("현재 버전"), "resolution": str("해결 내용 · RESOLVED로 변경할 때 필수"), "rootCause": str("근본 원인"), "preventiveAction": str("재발 방지 조치"), "note": str("변경 사유")}), false, false)
-	add("voice:read", "get_voice_categories", "요청 유형 조회", "접수 가능한 요청 유형과 업무 영역, 영역별 접수·해결 항목과 허용값, SLA 적용 여부를 조회합니다.", schema(nil, map[string]any{}), true, false)
-	s.addVoiceTools(ctx, p, add)
+	add("voice:read", "get_voice_categories", "요청 유형 조회", "접수 가능한 요청 유형, fields(업무 영역 없는 기본 민원의 항목), workspaces[].fields(접근 가능한 업무 영역의 항목), 허용값과 SLA 적용 여부를 조회합니다. 접수·해결 시 해당 항목의 key를 그대로 사용하세요.", schema(nil, map[string]any{}), true, false)
+	if err := s.addVoiceTools(ctx, p, add); err != nil {
+		return nil, err
+	}
 	add("intelligence:read", "get_customer_signals", "고객 Signal 조회", "고객에게서 감지된 변화(접촉 공백, 정체, 만료 임박, 긍정 신호)를 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID · 비우면 담당 범위 전체"), "severity": str("LOW, MEDIUM, HIGH, CRITICAL"), "sentiment": str("POSITIVE, NEGATIVE, NEUTRAL"), "signalType": str("NO_CONTACT, DEAL_STALLED, CRITICAL_VOC, CONTRACT_EXPIRING, DECISION_MAKER_MISSING, ENGAGEMENT_INCREASE, QUOTE_REQUESTED, CLOSE_DATE_PASSED"), "limit": integer("최대 결과 수")}), true, false)
 	add("intelligence:read", "get_customer_risks", "고객 Risk 조회", "0~100 점수로 정량화된 관계, 갱신, VOC, Deal 위험을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID · 비우면 담당 범위 전체"), "riskType": str("RELATIONSHIP_RISK, RENEWAL_RISK, VOC_RISK, DEAL_RISK"), "minScore": integer("최소 위험 점수"), "limit": integer("최대 결과 수")}), true, false)
 	add("intelligence:read", "get_deal_insights", "Deal Insight 조회", "여러 신호를 묶어 사람이 읽을 수 있게 요약한 분석을 조회합니다.", schema(nil, map[string]any{"customerId": str("고객 ID"), "opportunityId": str("영업기회 ID"), "limit": integer("최대 결과 수")}), true, false)
@@ -713,20 +724,23 @@ func (s *Server) tools(ctx context.Context, p *auth.Principal) []tool {
 		add("approval:approve", "approve_request", "승인", "고위험 권한으로 승인 요청을 승인합니다.", schema([]string{"id", "version"}, map[string]any{"id": str("승인 요청 ID"), "version": integer("현재 버전"), "comment": str("검토 의견")}), false, true)
 		add("approval:approve", "reject_request", "반려", "고위험 권한으로 승인 요청을 반려합니다.", schema([]string{"id", "version", "comment"}, map[string]any{"id": str("승인 요청 ID"), "version": integer("현재 버전"), "comment": str("반려 사유")}), false, true)
 	}
-	return out
+	return out, nil
 }
 
 // ToolCatalog returns the exact tool set available under the current user's
 // permissions and the administrator allowlist. A key's own scopes are applied
 // by the UI (and again by authentication when tools/list is called).
-func (s *Server) ToolCatalog(ctx context.Context, p *auth.Principal) []ToolCatalogItem {
-	items := s.tools(ctx, p)
+func (s *Server) ToolCatalog(ctx context.Context, p *auth.Principal) ([]ToolCatalogItem, error) {
+	items, err := s.tools(ctx, p)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]ToolCatalogItem, 0, len(items))
 	for _, item := range items {
 		readOnly, _ := item.Annotations["readOnlyHint"].(bool)
 		out = append(out, ToolCatalogItem{Name: item.Name, Title: item.Title, RequiredScopes: item.RequiredScopes, ReadOnly: readOnly})
 	}
-	return out
+	return out, nil
 }
 
 func decodeArgs(args map[string]any, target any) error {
@@ -779,8 +793,12 @@ func toolFailureFor(err error, requestID string) map[string]any {
 	}
 }
 func (s *Server) callTool(ctx context.Context, p *auth.Principal, call toolCall, r *http.Request) (any, error) {
+	items, err := s.tools(ctx, p)
+	if err != nil {
+		return nil, err
+	}
 	var definition *tool
-	for _, available := range s.tools(ctx, p) {
+	for _, available := range items {
 		if available.Name == call.Name {
 			definition = &available
 			break
